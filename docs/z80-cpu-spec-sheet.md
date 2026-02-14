@@ -18,9 +18,9 @@
   - `enqueueFetchOpcode()` で `bus.read8(PC)` を実行
   - `onM1?(pc)` コールバックを発火
   - `R` レジスタ下位 7bit をインクリメント
-- 非対応命令
-  - `strictUnsupportedOpcodes=true`: 例外を投げる
-  - `false`: その命令は内部 NOP と同等で継続
+- 予約/未定義 opcode
+  - 現在は各 opcode 空間で例外なくデコードされる
+  - 予約/未定義のものは NOP 相当として継続
 
 ## 2. レジスタ仕様
 
@@ -133,8 +133,12 @@
 | `LD BC,nn` / `LD DE,nn` / `LD HL,nn` / `LD IX,nn` / `LD IY,nn` / `LD SP,nn` | `nn` | 16bit 即値をレジスタ対へ代入 |
 | `LD A,(nn)` | `nn` | 絶対アドレスの 1 バイトを `A` に読込 |
 | `LD (nn),A` | `nn` | `A` を絶対アドレスへ書込 |
+| `LD A,(BC)` / `LD A,(DE)` | - | レジスタ対間接先を `A` に読込 |
+| `LD (BC),A` / `LD (DE),A` | - | `A` をレジスタ対間接先へ書込 |
 | `LD A,(HL)` / `LD A,(IX+d)` / `LD A,(IY+d)` | - | 間接先メモリを `A` に読込 |
 | `LD (HL),A` / `LD (IX+d),A` / `LD (IY+d),A` | - | `A` を間接先メモリへ書込 |
+| `LD r,r'` | `r,r'=A/B/C/D/E/H/L/(HL)/(IX+d)/(IY+d)` | 8bit レジスタ/間接先どうしの転送 |
+| `LD (nn),HL/IX/IY` / `LD HL/IX/IY,(nn)` | `nn` | 16bit レジスタ対を絶対アドレスと相互転送 |
 | `LD A,I` / `LD A,R` | - | 特殊レジスタから `A` へコピー |
 | `LD I,A` / `LD R,A` | - | `A` から特殊レジスタへコピー |
 
@@ -146,11 +150,14 @@
 | `INC (HL)` / `DEC (HL)` | - | `HL` 間接先の 1 バイトを ±1 |
 | `INC (IX+d)` / `DEC (IX+d)` | `d` | インデックス間接先を ±1 |
 | `INC HL/IX/IY` / `DEC HL/IX/IY` | - | 16bit レジスタ対を ±1 |
+| `INC BC/DE/SP` / `DEC BC/DE/SP` | - | 16bit レジスタ対を ±1 |
+| `ADD HL,rr` / `ADD IX,rr` / `ADD IY,rr` | `rr=BC/DE/HL(or IX/IY)/SP` | 16bit 加算 |
 | `ADD A,n` | `n` | `A+n` |
 | `ADC A,n` | `n` | `A+n+C` |
 | `SUB n` | `n` | `A-n` |
 | `SBC A,n` | `n` | `A-n-C` |
 | `CP n` | `n` | `A-n` を比較用途で実行（`A` は不変） |
+| `ADD/ADC/SUB/SBC/AND/XOR/OR/CP r` | `r=A/B/C/D/E/H/L/(HL)/(IX+d)/(IY+d)` | A レジスタ対象 ALU 演算 |
 | `NEG` | - | `A <- 0-A` |
 
 ## 6.3 論理命令
@@ -159,14 +166,17 @@
 |---|---|
 | `XOR A` | `A` を 0 にし、対応フラグを更新 |
 | `OR A` | `A` は維持し、`A OR A` 相当でフラグを更新 |
+| `AND n` / `XOR n` / `OR n` | 即値論理演算 |
 
 ## 6.4 分岐・サブルーチン命令
 
 | 命令 | 条件 | 説明 |
 |---|---|---|
 | `JR e` | 無条件 | 相対ジャンプ |
+| `DJNZ e` | `B!=0` | `B` をデクリメントして非 0 なら相対ジャンプ |
 | `JR NZ,e` / `JR Z,e` / `JR NC,e` / `JR C,e` | `Z/C` | 条件付き相対ジャンプ |
 | `JP nn` | 無条件 | 絶対ジャンプ |
+| `JP (HL)` / `JP (IX)` / `JP (IY)` | 無条件 | レジスタ対値へ間接ジャンプ |
 | `JP NZ,nn` / `JP Z,nn` / `JP NC,nn` / `JP C,nn` | `Z/C` | 条件付き絶対ジャンプ |
 | `CALL nn` | 無条件 | 復帰先をスタックへ積んで分岐 |
 | `CALL NZ,nn` / `CALL Z,nn` / `CALL NC,nn` / `CALL C,nn` | `Z/C` | 条件付きサブルーチン呼び出し |
@@ -181,6 +191,8 @@
 | `PUSH BC/DE/HL/IX/IY/AF` | レジスタ対 16bit 値をスタックへ退避 |
 | `POP BC/DE/HL/IX/IY/AF` | スタック先頭 16bit 値をレジスタ対へ復元 |
 | `EX DE,HL`（`DD/FD` 時は `EX DE,IX/IY` 相当） | 2 つの 16bit レジスタ対の値を交換 |
+| `EX (SP),HL/IX/IY` | スタックトップ 16bit 値と対象レジスタ対を交換 |
+| `EX AF,AF'` / `EXX` | 主レジスタ群とシャドウレジスタ群を交換 |
 
 ## 6.6 ビット操作・ローテート命令（CB 系）
 
@@ -193,12 +205,16 @@
 | `SET` | `SET b,target` | 同上 |
 | `RLC` | `RLC target` | `target=r/(HL)/(IX+d)/(IY+d)` |
 | `RL` | `RL target` | `target=r/(HL)/(IX+d)/(IY+d)` |
+| `RRC/RR/SLA/SRA/SLL/SRL` | `target=r/(HL)/(IX+d)/(IY+d)` | 全対応 |
 
 ## 6.7 ブロック転送命令
 
 | 命令 | 説明 |
 |---|---|
-| `LDIR` | `(HL)` を `(DE)` へ転送し、`HL/DE` を進め、`BC` が 0 になるまで繰り返す |
+| `LDI/LDD/LDIR/LDDR` | ブロック転送（前進/後退、単発/反復） |
+| `CPI/CPD/CPIR/CPDR` | ブロック比較 |
+| `INI/IND/INIR/INDR` | ブロック入力 |
+| `OUTI/OUTD/OTIR/OTDR` | ブロック出力 |
 
 実装では `BC != 0` の間、`PC` を命令先頭へ巻き戻して再実行します。
 
@@ -208,8 +224,11 @@
 |---|---|
 | `NOP` | 何も変更しない |
 | `HALT` | 割り込み発生まで停止 |
+| `RLCA/RRCA/RLA/RRA` | A レジスタの回転 |
+| `DAA/CPL/SCF/CCF` | BCD 補正・補数・キャリーフラグ制御 |
 | `DI` | マスク可能割り込みを無効化 |
 | `EI` | マスク可能割り込みを有効化（1 命令遅延あり） |
+| `IM 0/1/2` | 割り込みモード設定 |
 | `RETN` | 割り込み復帰 + `IFF1 <- IFF2` |
 | `RETI` | 現状実装は `RET` と同等 |
 
@@ -225,7 +244,7 @@
 - `BIT`
   - `C` は保持
   - `H=1` を立てる
-- `RLC/RL`
+- `RLC/RL/RRC/RR/SLA/SRA/SLL/SRL`
   - 回転結果で `S/Z/PV/X/Y` を更新し、搬出ビットを `C` へ
 
 ## 8. 割り込み・バスと命令実行の関係
@@ -235,120 +254,34 @@
 - `IN/OUT` は CPU コアがポート番号を 8bit に正規化してバスへ渡す
 - `raiseInt(dataBus)` の `dataBus` は IM0/IM2 でベクタ決定に利用される
 
-## 9. 未実装命令の完全一覧（opcode 空間ごと）
+## 9. 未実装命令の現況（2026-02-14時点）
 
-この章は `z80-cpu.ts` の分岐条件から **各 256 opcode 空間を全走査**して作成しています。
-記載の範囲は漏れなく未実装です（`strictUnsupportedOpcodes=true` で例外対象）。
+`strictUnsupportedOpcodes=true` で全空間（base/CB/ED/DD/FD/DDCB/FDCB）を走査しても
+`Unsupported opcode` は発生しません。
 
-### 9.1 ベース空間（プレフィクスなし）
+今回の拡張で以下を追加し、予約/未定義 opcode は NOP 相当として扱う実装に整理しました。
 
-- 総数: 256
-- 実装済み: 88
-- 未実装: 168
+- ベース空間:
+  - `LD r,r'` 群
+  - `ADD/ADC/SUB/SBC/AND/XOR/OR/CP r,(HL),(IX+d),(IY+d)` 群
+  - `DJNZ`, `EXX`, `EX AF,AF'`, `EX (SP),HL/IX/IY`, `JP (HL/IX/IY)`, `LD SP,HL/IX/IY`
+  - `RLCA/RRCA/RLA/RRA`, `DAA/CPL/SCF/CCF`
+- CB 空間:
+  - `RRC`, `RR`, `SLA`, `SRA`, `SLL`, `SRL`（`r/(HL)/(IX+d)/(IY+d)`）
+- ED 空間:
+  - `IN r,(C)`, `OUT (C),r`
+  - `ADC HL,rr`, `SBC HL,rr`
+  - `LD (nn),rr`, `LD rr,(nn)`
+  - `IM 0/1/2`
+  - `RRD/RLD`
+  - `LDI/LDD/LDIR/LDDR`
+  - `CPI/CPD/CPIR/CPDR`
+  - `INI/IND/INIR/INDR`
+  - `OUTI/OUTD/OTIR/OTDR`
 
-未実装 opcode（完全範囲）:
-
-- `0x02-0x03`
-- `0x07-0x0b`
-- `0x0f-0x10`
-- `0x12-0x13`
-- `0x17`
-- `0x19-0x1b`
-- `0x1f`
-- `0x22`
-- `0x27`
-- `0x29-0x2a`
-- `0x2f`
-- `0x33`
-- `0x37`
-- `0x39`
-- `0x3b`
-- `0x3f-0x75`
-- `0x78-0x7d`
-- `0x7f-0xae`
-- `0xb0-0xb6`
-- `0xb8-0xbf`
-- `0xd9`
-- `0xe0`
-- `0xe2-0xe4`
-- `0xe6`
-- `0xe8-0xea`
-- `0xec`
-- `0xee`
-- `0xf0`
-- `0xf2`
-- `0xf4`
-- `0xf6`
-- `0xf8-0xfa`
-- `0xfc`
-
-代表的な未実装命令群:
-
-- `LD r,r'` の大半
-- `ADD/ADC/SUB/SBC/AND/XOR/OR/CP r` 系
-- `EXX`, `DJNZ`, `JR` の一部バリエーション
-- `JP (HL)`, `LD SP,HL`, `EX (SP),HL` など
-
-### 9.2 CB 拡張空間（`CB xx`）
-
-- 総数: 256
-- 実装済み: 208
-- 未実装: 48
-
-未実装 opcode（完全範囲）:
-
-- `0x08-0x0f`
-- `0x18-0x3f`
-
-未実装命令の種類:
-
-- `RRC`, `RR`, `SLA`, `SRA`, `SLL`, `SRL`（対象オペランド全種）
-
-### 9.3 ED 拡張空間（`ED xx`）
-
-- 総数: 256
-- 実装済み: 21
-- 未実装: 235
-
-未実装 opcode（完全範囲）:
-
-- `0x00-0x43`
-- `0x46`
-- `0x48-0x4b`
-- `0x4e`
-- `0x50-0x53`
-- `0x56`
-- `0x58-0x5b`
-- `0x5e`
-- `0x60-0x63`
-- `0x66-0x6b`
-- `0x6e-0x73`
-- `0x76-0x7b`
-- `0x7e-0xaf`
-- `0xb1-0xff`
-
-ED 空間の実装済みは次のみ:
-
-- `NEG`（`0x44,0x4c,0x54,0x5c,0x64,0x6c,0x74,0x7c`）
-- `RETN`（`0x45,0x55,0x5d,0x65,0x6d,0x75,0x7d`）
-- `RETI`（`0x4d`）
-- `LD A,I`（`0x57`）
-- `LD A,R`（`0x5f`）
-- `LD I,A`（`0x47`）
-- `LD R,A`（`0x4f`）
-- `LDIR`（`0xb0`）
-
-### 9.4 DD/FD プレフィクス空間（`DD xx` / `FD xx`）
-
-- `DD xx` と `FD xx` は `decodeOpcode(..., 'IX'/'IY')` を使うため、
-  未実装 opcode 範囲は **ベース空間（9.1）と同一**です。
-- つまり `DD` 側・`FD` 側ともに未実装は 168 opcode です。
-
-### 9.5 DDCB/FDCB 空間（`DD CB d xx` / `FD CB d xx`）
-
-- `DDCB/FDCB` は最終的に `decodeCB()` を使うため、
-  未実装 opcode 範囲は **CB 空間（9.2）と同一**です。
-- つまり `DDCB` 側・`FDCB` 側ともに未実装は 48 opcode です。
+注:
+- 「予約/未定義 opcode が存在しない」という意味ではなく、
+  CPU 実装上はそれらも実行可能（NOP 相当）として扱う、という意味です。
 
 ## 10. 参照ファイル
 

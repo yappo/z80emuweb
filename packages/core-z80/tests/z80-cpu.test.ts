@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { FLAG_C } from '../src/flags';
-import type { Bus } from '../src/types';
-import { Z80Cpu } from '../src/z80-cpu';
+import { FLAG_C } from '../src/flags.ts';
+import type { Bus } from '../src/types.ts';
+import { Z80Cpu } from '../src/z80-cpu.ts';
 
 class MemoryBus implements Bus {
   readonly memory = new Uint8Array(0x10000);
 
   readonly outLog: Array<{ port: number; value: number }> = [];
+
+  readonly inValues = new Map<number, number>();
 
   read8(addr: number): number {
     return this.memory[addr & 0xffff] ?? 0;
@@ -17,8 +19,8 @@ class MemoryBus implements Bus {
     this.memory[addr & 0xffff] = value & 0xff;
   }
 
-  in8(_port: number): number {
-    return 0;
+  in8(port: number): number {
+    return this.inValues.get(port & 0xff) ?? 0;
   }
 
   out8(port: number, value: number): void {
@@ -28,6 +30,13 @@ class MemoryBus implements Bus {
 
 function run(cpu: Z80Cpu, tstates: number): void {
   cpu.stepTState(tstates);
+}
+
+function expectNoUnsupportedForProgram(program: number[]): void {
+  const bus = new MemoryBus();
+  bus.memory.set(program.map((x) => x & 0xff));
+  const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+  expect(() => run(cpu, 160)).not.toThrow();
 }
 
 describe('Z80Cpu', () => {
@@ -62,6 +71,56 @@ describe('Z80Cpu', () => {
     expect(cpu.getState().registers.a).toBe(0x7f);
   });
 
+  it('supports LD r,r and pointer variants', () => {
+    const bus = new MemoryBus();
+    bus.memory.set([
+      0x06, 0x12, // LD B,12h
+      0x48, // LD C,B
+      0x21, 0x00, 0x20, // LD HL,2000h
+      0x70, // LD (HL),B
+      0x5e, // LD E,(HL)
+      0x76 // HALT
+    ]);
+
+    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+    run(cpu, 300);
+
+    const state = cpu.getState();
+    expect(state.registers.c).toBe(0x12);
+    expect(bus.memory[0x2000]).toBe(0x12);
+    expect(state.registers.e).toBe(0x12);
+  });
+
+  it('supports DD/FD LD r,r variants including IXH/IXL and (IX+d)/(IY+d)', () => {
+    const bus = new MemoryBus();
+    bus.memory.set([
+      0xdd, 0x21, 0x00, 0x40, // LD IX,4000h
+      0xdd, 0x66, 0x01, // LD H,(IX+1) -> IXH
+      0xdd, 0x68, // LD L,B -> IXL <- B
+      0xfd, 0x21, 0x00, 0x50, // LD IY,5000h
+      0xfd, 0x70, 0xfe, // LD (IY-2),B
+      0xfd, 0x4e, 0xfe, // LD C,(IY-2)
+      0x76 // HALT
+    ]);
+    bus.memory[0x4001] = 0xab;
+
+    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+    cpu.loadState({
+      ...cpu.getState(),
+      registers: {
+        ...cpu.getState().registers,
+        b: 0x34
+      }
+    });
+    run(cpu, 800);
+
+    const state = cpu.getState();
+    expect((state.registers.ix >>> 8) & 0xff).toBe(0xab);
+    expect(state.registers.ix & 0xff).toBe(0x34);
+    expect(bus.memory[0x4ffe]).toBe(0x34);
+    expect(state.registers.c).toBe(0x34);
+  });
+
   it('supports CB rotate operations', () => {
     const bus = new MemoryBus();
     bus.memory.set([
@@ -75,6 +134,184 @@ describe('Z80Cpu', () => {
 
     expect(cpu.getState().registers.b).toBe(0x03);
     expect((cpu.getState().registers.f & FLAG_C) !== 0).toBe(true);
+  });
+
+  it('supports base ALU register and (HL) variants', () => {
+    const bus = new MemoryBus();
+    bus.memory.set([
+      0x3e, 0x10, // LD A,10h
+      0x06, 0x22, // LD B,22h
+      0x80, // ADD A,B => 32h
+      0x21, 0x00, 0x20, // LD HL,2000h
+      0x86, // ADD A,(HL) => 37h
+      0xe6, 0x0f, // AND 0Fh => 07h
+      0xee, 0x07, // XOR 07h => 00h
+      0xf6, 0x80, // OR 80h => 80h
+      0xfe, 0x80, // CP 80h
+      0x76
+    ]);
+    bus.memory[0x2000] = 0x05;
+
+    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+    run(cpu, 900);
+    const state = cpu.getState();
+
+    expect(state.registers.a).toBe(0x80);
+    expect((state.registers.f & FLAG_C) === 0).toBe(true);
+  });
+
+  it('supports base exchange, pair arithmetic, rotate/flag opcodes', () => {
+    const bus = new MemoryBus();
+    bus.memory.set([
+      0x06, 0x02, // LD B,02h
+      0x10, 0x02, // DJNZ +2 (taken)
+      0x00, // NOP (skipped)
+      0x00, // NOP (target)
+      0x21, 0x34, 0x12, // LD HL,1234h
+      0x11, 0x78, 0x56, // LD DE,5678h
+      0xeb, // EX DE,HL
+      0x31, 0x00, 0x40, // LD SP,4000h
+      0xe3, // EX (SP),HL
+      0x3e, 0x99, // LD A,99h
+      0x07, // RLCA
+      0x27, // DAA
+      0x2f, // CPL
+      0x37, // SCF
+      0x3f, // CCF
+      0x76
+    ]);
+    bus.memory[0x4000] = 0xaa;
+    bus.memory[0x4001] = 0xbb;
+
+    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+    run(cpu, 1500);
+    const state = cpu.getState();
+
+    expect(state.registers.h).toBe(0xbb);
+    expect(state.registers.l).toBe(0xaa);
+    expect(bus.memory[0x4000]).toBe(0x78);
+    expect(bus.memory[0x4001]).toBe(0x56);
+  });
+
+  it('supports EXX and EX AF,AF shadow register exchange', () => {
+    const bus = new MemoryBus();
+    bus.memory.set([
+      0x06, 0x11, // LD B,11h
+      0x16, 0x22, // LD D,22h
+      0x26, 0x33, // LD H,33h
+      0x3e, 0x44, // LD A,44h
+      0x08, // EX AF,AF'
+      0xd9, // EXX
+      0x06, 0xaa, // LD B,AAh
+      0x16, 0xbb, // LD D,BBh
+      0x26, 0xcc, // LD H,CCh
+      0x3e, 0xdd, // LD A,DDh
+      0xd9, // EXX
+      0x08, // EX AF,AF'
+      0x76
+    ]);
+
+    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+    run(cpu, 1200);
+    const state = cpu.getState();
+
+    expect(state.registers.b).toBe(0x11);
+    expect(state.registers.d).toBe(0x22);
+    expect(state.registers.h).toBe(0x33);
+    expect(state.registers.a).toBe(0x44);
+  });
+
+  it('supports CB remaining rotate/shift group', () => {
+    const bus = new MemoryBus();
+    bus.memory.set([
+      0x06, 0x81, // LD B,81h
+      0x0e, 0x03, // LD C,03h
+      0xcb, 0x08, // RRC B => C0h
+      0xcb, 0x19, // RR C
+      0xcb, 0x20, // SLA B
+      0xcb, 0x29, // SRA C
+      0xcb, 0x30, // SLL B
+      0xcb, 0x39, // SRL C
+      0x76
+    ]);
+
+    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+    run(cpu, 1000);
+    const state = cpu.getState();
+    expect(state.registers.b).toBe(0x01);
+    expect(state.registers.c).toBe(0x60);
+  });
+
+  it('supports ED pair arithmetic/load and IM selection', () => {
+    const bus = new MemoryBus();
+    bus.memory.set([
+      0x21, 0x34, 0x12, // LD HL,1234h
+      0x01, 0x02, 0x00, // LD BC,0002h
+      0xed, 0x4a, // ADC HL,BC => 1236h
+      0xed, 0x42, // SBC HL,BC => 1234h
+      0xed, 0x43, 0x00, 0x30, // LD (3000h),BC
+      0x11, 0x00, 0x00, // LD DE,0000h
+      0xed, 0x5b, 0x00, 0x30, // LD DE,(3000h)
+      0xed, 0x5e, // IM 2
+      0x76
+    ]);
+
+    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+    run(cpu, 1400);
+    const state = cpu.getState();
+
+    expect(state.registers.h).toBe(0x12);
+    expect(state.registers.l).toBe(0x34);
+    expect(state.registers.d).toBe(0x00);
+    expect(state.registers.e).toBe(0x02);
+    expect(state.im).toBe(2);
+  });
+
+  it('supports ED IN/OUT with (C) and block IN/OUT/CP operations', () => {
+    const bus = new MemoryBus();
+    bus.inValues.set(0x10, 0x5a);
+    bus.memory.set([
+      0x0e, 0x10, // LD C,10h
+      0xed, 0x78, // IN A,(C)
+      0xed, 0x79, // OUT (C),A
+      0x21, 0x00, 0x20, // LD HL,2000h
+      0x06, 0x01, // LD B,01h
+      0xed, 0xa2, // INI
+      0x21, 0x00, 0x20, // LD HL,2000h
+      0x06, 0x01, // LD B,01h
+      0xed, 0xa3, // OUTI
+      0x3e, 0x5a, // LD A,5Ah
+      0x21, 0x00, 0x20, // LD HL,2000h
+      0x01, 0x01, 0x00, // LD BC,0001h
+      0xed, 0xa1, // CPI
+      0x76
+    ]);
+
+    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+    run(cpu, 2200);
+    const state = cpu.getState();
+
+    expect(state.registers.a).toBe(0x5a);
+    expect(bus.outLog.some((x) => x.port === 0x10 && x.value === 0x5a)).toBe(true);
+    expect(bus.memory[0x2000]).toBe(0x5a);
+  });
+
+  it('supports ED RRD/RLD', () => {
+    const bus = new MemoryBus();
+    bus.memory.set([
+      0x21, 0x00, 0x20, // LD HL,2000h
+      0x3e, 0x12, // LD A,12h
+      0xed, 0x67, // RRD
+      0xed, 0x6f, // RLD
+      0x76
+    ]);
+    bus.memory[0x2000] = 0x34;
+
+    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+    run(cpu, 1000);
+    const state = cpu.getState();
+    expect(state.registers.a).toBe(0x12);
+    expect(bus.memory[0x2000]).toBe(0x34);
   });
 
   it('supports ED LDIR block copy', () => {
@@ -113,5 +350,37 @@ describe('Z80Cpu', () => {
 
     expect(cpu.getState().registers.pc).toBeGreaterThanOrEqual(0x0038);
     expect(cpu.getState().halted).toBe(true);
+  });
+
+  it('has no unsupported opcode in base space', () => {
+    for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+      expectNoUnsupportedForProgram([opcode, 0x00, 0x00, 0x00, 0x00]);
+    }
+  });
+
+  it('has no unsupported opcode in CB space', () => {
+    for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+      expectNoUnsupportedForProgram([0xcb, opcode, 0x00, 0x00, 0x00]);
+    }
+  });
+
+  it('has no unsupported opcode in ED space', () => {
+    for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+      expectNoUnsupportedForProgram([0xed, opcode, 0x00, 0x00, 0x00, 0x00]);
+    }
+  });
+
+  it('has no unsupported opcode in DD/FD prefixed spaces', () => {
+    for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+      expectNoUnsupportedForProgram([0xdd, opcode, 0x01, 0x00, 0x00, 0x00]);
+      expectNoUnsupportedForProgram([0xfd, opcode, 0x01, 0x00, 0x00, 0x00]);
+    }
+  });
+
+  it('has no unsupported opcode in DDCB/FDCB spaces', () => {
+    for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+      expectNoUnsupportedForProgram([0xdd, 0xcb, 0x01, opcode, 0x00, 0x00]);
+      expectNoUnsupportedForProgram([0xfd, 0xcb, 0x01, opcode, 0x00, 0x00]);
+    }
   });
 });

@@ -27,9 +27,21 @@ export interface CpuRegisters {
   r: number;
 }
 
+export interface CpuShadowRegisters {
+  a: number;
+  f: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  h: number;
+  l: number;
+}
+
 // 保存/復元可能な CPU 実行状態スナップショット。
 export interface CpuState {
   registers: CpuRegisters;
+  shadowRegisters?: CpuShadowRegisters;
   iff1: boolean;
   iff2: boolean;
   im: InterruptMode;

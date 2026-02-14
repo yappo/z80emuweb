@@ -9,10 +9,12 @@ import {
   FLAG_Z,
   parity8
 } from './flags';
-import type { Bus, Cpu, CpuRegisters, CpuState, InterruptMode } from './types';
+import type { Bus, Cpu, CpuRegisters, CpuShadowRegisters, CpuState, InterruptMode } from './types';
 
 type IndexMode = 'HL' | 'IX' | 'IY';
 type TStateOp = () => void;
+type RotateOp = 'RLC' | 'RL' | 'RRC' | 'RR' | 'SLA' | 'SRA' | 'SLL' | 'SRL';
+type Alu8Op = 'ADD' | 'ADC' | 'SUB' | 'SBC' | 'AND' | 'XOR' | 'OR' | 'CP';
 
 export interface Z80CpuOptions {
   strictUnsupportedOpcodes?: boolean;
@@ -84,6 +86,17 @@ export class Z80Cpu implements Cpu {
     r: 0
   };
 
+  private readonly shadowRegs: CpuShadowRegisters = {
+    a: 0,
+    f: 0,
+    b: 0,
+    c: 0,
+    d: 0,
+    e: 0,
+    h: 0,
+    l: 0
+  };
+
   private iff1 = false;
 
   private iff2 = false;
@@ -121,6 +134,14 @@ export class Z80Cpu implements Cpu {
     this.regs.pc = 0;
     this.regs.i = 0;
     this.regs.r = 0;
+    this.shadowRegs.a = 0;
+    this.shadowRegs.f = 0;
+    this.shadowRegs.b = 0;
+    this.shadowRegs.c = 0;
+    this.shadowRegs.d = 0;
+    this.shadowRegs.e = 0;
+    this.shadowRegs.h = 0;
+    this.shadowRegs.l = 0;
     this.iff1 = false;
     this.iff2 = false;
     this.im = 1;
@@ -158,6 +179,7 @@ export class Z80Cpu implements Cpu {
   getState(): CpuState {
     return {
       registers: { ...this.regs },
+      shadowRegisters: { ...this.shadowRegs },
       iff1: this.iff1,
       iff2: this.iff2,
       im: this.im,
@@ -185,6 +207,14 @@ export class Z80Cpu implements Cpu {
     this.regs.pc = state.registers.pc & 0xffff;
     this.regs.i = state.registers.i & 0xff;
     this.regs.r = state.registers.r & 0xff;
+    this.shadowRegs.a = (state.shadowRegisters?.a ?? 0) & 0xff;
+    this.shadowRegs.f = (state.shadowRegisters?.f ?? 0) & 0xff;
+    this.shadowRegs.b = (state.shadowRegisters?.b ?? 0) & 0xff;
+    this.shadowRegs.c = (state.shadowRegisters?.c ?? 0) & 0xff;
+    this.shadowRegs.d = (state.shadowRegisters?.d ?? 0) & 0xff;
+    this.shadowRegs.e = (state.shadowRegisters?.e ?? 0) & 0xff;
+    this.shadowRegs.h = (state.shadowRegisters?.h ?? 0) & 0xff;
+    this.shadowRegs.l = (state.shadowRegisters?.l ?? 0) & 0xff;
     this.iff1 = state.iff1;
     this.iff2 = state.iff2;
     this.im = state.im;
@@ -402,6 +432,19 @@ export class Z80Cpu implements Cpu {
       return;
     }
 
+    // 01dddsssb は「8bit レジスタ/間接メモリ間の転送」命令群。
+    // 0x76 (HALT) は switch 側で先に個別処理する。
+    if ((opcode & 0xc0) === 0x40 && opcode !== 0x76) {
+      this.decodeLdRegReg(opcode, indexMode);
+      return;
+    }
+
+    // 10xxxyyyb は「A に対する 8bit ALU 演算（r/(HL)/(IX+d)/(IY+d)）」命令群。
+    if ((opcode & 0xc0) === 0x80) {
+      this.decodeAluReg(opcode, indexMode);
+      return;
+    }
+
     // ここから先は実装済み opcode を個別に分岐する。
     // コメントは「命令ニーモニック / 引数 / 実装上の要点」を記載する。
     switch (opcode) {
@@ -446,17 +489,164 @@ export class Z80Cpu implements Cpu {
         // LD BC,nn: 16bit 即値 nn を B/C レジスタ対へ代入する。
         this.decodeLdPairImmediate('BC');
         return;
+      case 0x02:
+        // LD (BC),A
+        this.enqueueWriteMem(() => this.getPair('BC'), () => this.regs.a);
+        return;
+      case 0x03:
+        // INC BC
+        this.decodeIncPair('BC');
+        return;
+      case 0x07:
+        // RLCA
+        this.enqueueInternal(() => {
+          const carry = (this.regs.a >>> 7) & 1;
+          this.regs.a = clamp8((this.regs.a << 1) | carry);
+          this.regs.f = (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV)) | (this.regs.a & (FLAG_X | FLAG_Y)) | (carry ? FLAG_C : 0);
+        });
+        return;
+      case 0x08:
+        // EX AF,AF'
+        this.enqueueInternal(() => {
+          const a = this.regs.a;
+          const f = this.regs.f;
+          this.regs.a = this.shadowRegs.a;
+          this.regs.f = this.shadowRegs.f;
+          this.shadowRegs.a = a;
+          this.shadowRegs.f = f;
+        });
+        return;
+      case 0x09:
+        // ADD HL,BC / ADD IX,BC / ADD IY,BC
+        this.decodeAddHlPair(indexMode, 'BC');
+        return;
+      case 0x0a:
+        // LD A,(BC)
+        this.enqueueReadMem(() => this.getPair('BC'), (value) => {
+          this.regs.a = value;
+        });
+        return;
+      case 0x0b:
+        // DEC BC
+        this.decodeDecPair('BC');
+        return;
+      case 0x0f:
+        // RRCA
+        this.enqueueInternal(() => {
+          const carry = this.regs.a & 1;
+          this.regs.a = clamp8((this.regs.a >>> 1) | (carry << 7));
+          this.regs.f = (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV)) | (this.regs.a & (FLAG_X | FLAG_Y)) | (carry ? FLAG_C : 0);
+        });
+        return;
+      case 0x10:
+        // DJNZ e
+        this.decodeDjnz();
+        return;
       case 0x11:
         // LD DE,nn: 16bit 即値 nn を D/E レジスタ対へ代入する。
         this.decodeLdPairImmediate('DE');
+        return;
+      case 0x12:
+        // LD (DE),A
+        this.enqueueWriteMem(() => this.getPair('DE'), () => this.regs.a);
+        return;
+      case 0x13:
+        // INC DE
+        this.decodeIncPair('DE');
+        return;
+      case 0x17:
+        // RLA
+        this.enqueueInternal(() => {
+          const carryIn = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
+          const carryOut = (this.regs.a >>> 7) & 1;
+          this.regs.a = clamp8((this.regs.a << 1) | carryIn);
+          this.regs.f = (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV)) | (this.regs.a & (FLAG_X | FLAG_Y)) | (carryOut ? FLAG_C : 0);
+        });
+        return;
+      case 0x19:
+        // ADD HL,DE / ADD IX,DE / ADD IY,DE
+        this.decodeAddHlPair(indexMode, 'DE');
+        return;
+      case 0x1a:
+        // LD A,(DE)
+        this.enqueueReadMem(() => this.getPair('DE'), (value) => {
+          this.regs.a = value;
+        });
+        return;
+      case 0x1b:
+        // DEC DE
+        this.decodeDecPair('DE');
+        return;
+      case 0x1f:
+        // RRA
+        this.enqueueInternal(() => {
+          const carryIn = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
+          const carryOut = this.regs.a & 1;
+          this.regs.a = clamp8((this.regs.a >>> 1) | (carryIn << 7));
+          this.regs.f = (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV)) | (this.regs.a & (FLAG_X | FLAG_Y)) | (carryOut ? FLAG_C : 0);
+        });
         return;
       case 0x21:
         // LD HL,nn / LD IX,nn / LD IY,nn: 16bit 即値 nn をインデックス系レジスタ対へ代入する。
         this.decodeLdPairImmediate(indexMode === 'HL' ? 'HL' : indexMode);
         return;
+      case 0x22:
+        // LD (nn),HL / LD (nn),IX / LD (nn),IY
+        this.decodeLdAbsoluteFromPair(indexMode === 'HL' ? 'HL' : indexMode);
+        return;
       case 0x31:
         // LD SP,nn: 16bit 即値 nn をスタックポインタへ代入する。
         this.decodeLdPairImmediate('SP');
+        return;
+      case 0x27:
+        // DAA
+        this.enqueueInternal(() => {
+          this.regs.a = this.applyDaa(this.regs.a);
+        });
+        return;
+      case 0x29:
+        // ADD HL,HL / ADD IX,IX / ADD IY,IY
+        this.decodeAddHlPair(indexMode, indexMode === 'HL' ? 'HL' : indexMode);
+        return;
+      case 0x2a:
+        // LD HL,(nn) / LD IX,(nn) / LD IY,(nn)
+        this.decodeLdPairFromAbsolute(indexMode === 'HL' ? 'HL' : indexMode);
+        return;
+      case 0x2f:
+        // CPL
+        this.enqueueInternal(() => {
+          this.regs.a = clamp8(~this.regs.a);
+          this.regs.f = (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV | FLAG_C)) | FLAG_H | FLAG_N | (this.regs.a & (FLAG_X | FLAG_Y));
+        });
+        return;
+      case 0x33:
+        // INC SP
+        this.decodeIncPair('SP');
+        return;
+      case 0x37:
+        // SCF
+        this.enqueueInternal(() => {
+          this.regs.f = (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV)) | (this.regs.a & (FLAG_X | FLAG_Y)) | FLAG_C;
+        });
+        return;
+      case 0x39:
+        // ADD HL,SP / ADD IX,SP / ADD IY,SP
+        this.decodeAddHlPair(indexMode, 'SP');
+        return;
+      case 0x3b:
+        // DEC SP
+        this.decodeDecPair('SP');
+        return;
+      case 0x3f:
+        // CCF
+        this.enqueueInternal(() => {
+          const carry = (this.regs.f & FLAG_C) !== 0;
+          this.regs.f =
+            (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV)) |
+            (this.regs.a & (FLAG_X | FLAG_Y)) |
+            (carry ? FLAG_H : 0) |
+            (carry ? 0 : FLAG_C);
+        });
         return;
       case 0x23:
         // INC HL / INC IX / INC IY: 16bit レジスタ対を 1 増やす。
@@ -511,6 +701,10 @@ export class Z80Cpu implements Cpu {
           const value = this.regs.a;
           this.regs.f = this.getSzxyParityFlags(value);
         });
+        return;
+      case 0xe3:
+        // EX (SP),HL / EX (SP),IX / EX (SP),IY
+        this.decodeExSpWithPair(indexMode === 'HL' ? 'HL' : indexMode);
         return;
       case 0xc6:
         // ADD A,n: A に 8bit 即値 n を加算し、結果を A に格納する。
@@ -582,6 +776,22 @@ export class Z80Cpu implements Cpu {
         // JP C,nn: キャリーフラグが 1 の場合だけ nn へ絶対ジャンプする。
         this.decodeJp((this.regs.f & FLAG_C) !== 0);
         return;
+      case 0xe2:
+        // JP PO,nn
+        this.decodeJp((this.regs.f & FLAG_PV) === 0);
+        return;
+      case 0xea:
+        // JP PE,nn
+        this.decodeJp((this.regs.f & FLAG_PV) !== 0);
+        return;
+      case 0xf2:
+        // JP P,nn
+        this.decodeJp((this.regs.f & FLAG_S) === 0);
+        return;
+      case 0xfa:
+        // JP M,nn
+        this.decodeJp((this.regs.f & FLAG_S) !== 0);
+        return;
       case 0xcd:
         // CALL nn: 復帰先アドレスをスタックへ退避し、サブルーチン先 nn へ分岐する。
         this.decodeCall(true);
@@ -601,6 +811,22 @@ export class Z80Cpu implements Cpu {
       case 0xdc:
         // CALL C,nn: キャリーフラグが 1 の場合だけサブルーチン呼び出しを行う。
         this.decodeCall((this.regs.f & FLAG_C) !== 0);
+        return;
+      case 0xe4:
+        // CALL PO,nn
+        this.decodeCall((this.regs.f & FLAG_PV) === 0);
+        return;
+      case 0xec:
+        // CALL PE,nn
+        this.decodeCall((this.regs.f & FLAG_PV) !== 0);
+        return;
+      case 0xf4:
+        // CALL P,nn
+        this.decodeCall((this.regs.f & FLAG_S) === 0);
+        return;
+      case 0xfc:
+        // CALL M,nn
+        this.decodeCall((this.regs.f & FLAG_S) !== 0);
         return;
       case 0xc9:
         // RET: スタックから 16bit の復帰先アドレスを取り出し、PC に戻す。
@@ -623,6 +849,45 @@ export class Z80Cpu implements Cpu {
       case 0xd8:
         // RET C: キャリーフラグが 1 の場合だけ復帰処理を行う。
         this.decodeRet((this.regs.f & FLAG_C) !== 0);
+        return;
+      case 0xe0:
+        // RET PO
+        this.decodeRet((this.regs.f & FLAG_PV) === 0);
+        return;
+      case 0xe8:
+        // RET PE
+        this.decodeRet((this.regs.f & FLAG_PV) !== 0);
+        return;
+      case 0xf0:
+        // RET P
+        this.decodeRet((this.regs.f & FLAG_S) === 0);
+        return;
+      case 0xf8:
+        // RET M
+        this.decodeRet((this.regs.f & FLAG_S) !== 0);
+        return;
+      case 0xd9:
+        // EXX
+        this.enqueueInternal(() => {
+          const b = this.regs.b;
+          const c = this.regs.c;
+          const d = this.regs.d;
+          const e = this.regs.e;
+          const h = this.regs.h;
+          const l = this.regs.l;
+          this.regs.b = this.shadowRegs.b;
+          this.regs.c = this.shadowRegs.c;
+          this.regs.d = this.shadowRegs.d;
+          this.regs.e = this.shadowRegs.e;
+          this.regs.h = this.shadowRegs.h;
+          this.regs.l = this.shadowRegs.l;
+          this.shadowRegs.b = b;
+          this.shadowRegs.c = c;
+          this.shadowRegs.d = d;
+          this.shadowRegs.e = e;
+          this.shadowRegs.h = h;
+          this.shadowRegs.l = l;
+        });
         return;
       case 0xc5:
         // PUSH BC: B/C レジスタ対の 16bit 値をスタックへ退避する。
@@ -696,8 +961,39 @@ export class Z80Cpu implements Cpu {
           this.setPair(indexMode === 'HL' ? 'HL' : indexMode, de);
         });
         return;
+      case 0xe6:
+        // AND n
+        this.enqueueReadPc((value) => {
+          this.applyAlu8ToA('AND', value);
+        });
+        return;
+      case 0xe9:
+        // JP (HL) / JP (IX) / JP (IY)
+        this.enqueueInternal(() => {
+          this.regs.pc = this.getPair(indexMode === 'HL' ? 'HL' : indexMode);
+        });
+        return;
+      case 0xee:
+        // XOR n
+        this.enqueueReadPc((value) => {
+          this.applyAlu8ToA('XOR', value);
+        });
+        return;
+      case 0xf6:
+        // OR n
+        this.enqueueReadPc((value) => {
+          this.applyAlu8ToA('OR', value);
+        });
+        return;
+      case 0xf9:
+        // LD SP,HL / LD SP,IX / LD SP,IY
+        this.enqueueInternal(() => {
+          this.regs.sp = this.getPair(indexMode === 'HL' ? 'HL' : indexMode);
+        });
+        return;
       default:
-        this.handleUnsupported(opcode, indexMode === 'HL' ? undefined : indexMode);
+        // 未定義/予約 opcode は NOP 相当として扱う。
+        this.enqueueInternal();
     }
   }
 
@@ -714,6 +1010,168 @@ export class Z80Cpu implements Cpu {
     });
   }
 
+  private decodeLdRegReg(opcode: number, indexMode: IndexMode): void {
+    // 「LD r,r' / LD r,(HL/IX+d/IY+d) / LD (HL/IX+d/IY+d),r」の共通処理。
+    const dstCode = (opcode >>> 3) & 0x07;
+    const srcCode = opcode & 0x07;
+
+    let displacement = 0;
+    if (indexMode !== 'HL' && (dstCode === 6 || srcCode === 6)) {
+      this.enqueueReadPc((value) => {
+        displacement = signExtend8(value);
+      });
+    }
+
+    const ptrAddr = () => {
+      if (indexMode === 'HL') {
+        return this.getPair('HL');
+      }
+      return clamp16(this.getPair(indexMode) + displacement);
+    };
+
+    if (dstCode === 6) {
+      if (srcCode === 6) {
+        return;
+      }
+      this.enqueueWriteMem(ptrAddr, () => this.getRegByCode(srcCode, indexMode));
+      return;
+    }
+
+    if (srcCode === 6) {
+      this.enqueueReadMem(ptrAddr, (value) => {
+        this.setRegByCode(dstCode, value, indexMode);
+      });
+      return;
+    }
+
+    this.enqueueInternal(() => {
+      this.setRegByCode(dstCode, this.getRegByCode(srcCode, indexMode), indexMode);
+    });
+  }
+
+  private decodeAluReg(opcode: number, indexMode: IndexMode): void {
+    const opGroup = (opcode >>> 3) & 0x07;
+    const srcCode = opcode & 0x07;
+    const opByGroup: Alu8Op[] = ['ADD', 'ADC', 'SUB', 'SBC', 'AND', 'XOR', 'OR', 'CP'];
+    const op = opByGroup[opGroup] ?? 'ADD';
+
+    if (srcCode === 6) {
+      if (indexMode === 'HL') {
+        this.enqueueReadMem(() => this.getPair('HL'), (value) => {
+          this.applyAlu8ToA(op, value);
+        });
+        return;
+      }
+
+      let displacement = 0;
+      this.enqueueReadPc((value) => {
+        displacement = signExtend8(value);
+      });
+      this.enqueueReadMem(() => clamp16(this.getPair(indexMode) + displacement), (value) => {
+        this.applyAlu8ToA(op, value);
+      });
+      return;
+    }
+
+    this.enqueueInternal(() => {
+      this.applyAlu8ToA(op, this.getRegByCode(srcCode, indexMode));
+    });
+  }
+
+  private decodeIncPair(pair: 'BC' | 'DE' | 'HL' | 'IX' | 'IY' | 'SP'): void {
+    this.enqueueInternal(() => {
+      this.setPair(pair, clamp16(this.getPair(pair) + 1));
+    });
+  }
+
+  private decodeDecPair(pair: 'BC' | 'DE' | 'HL' | 'IX' | 'IY' | 'SP'): void {
+    this.enqueueInternal(() => {
+      this.setPair(pair, clamp16(this.getPair(pair) - 1));
+    });
+  }
+
+  private decodeAddHlPair(indexMode: IndexMode, rhs: 'BC' | 'DE' | 'HL' | 'IX' | 'IY' | 'SP'): void {
+    this.enqueueInternal(() => {
+      const lhsName = indexMode === 'HL' ? 'HL' : indexMode;
+      const lhs = this.getPair(lhsName);
+      const right = this.getPair(rhs);
+      const sum = lhs + right;
+      const result = clamp16(sum);
+      this.setPair(lhsName, result);
+      this.regs.f =
+        (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV)) |
+        (result >>> 8 & (FLAG_X | FLAG_Y)) |
+        ((((lhs & 0x0fff) + (right & 0x0fff)) & 0x1000) !== 0 ? FLAG_H : 0) |
+        (sum > 0xffff ? FLAG_C : 0);
+    });
+  }
+
+  private decodeLdAbsoluteFromPair(source: 'BC' | 'DE' | 'HL' | 'IX' | 'IY' | 'SP' | 'AF'): void {
+    let lowAddr = 0;
+    let highAddr = 0;
+    this.enqueueReadPc((value) => {
+      lowAddr = value;
+    });
+    this.enqueueReadPc((value) => {
+      highAddr = value;
+    });
+    this.enqueueWriteMem(() => (highAddr << 8) | lowAddr, () => this.getPair(source) & 0xff);
+    this.enqueueWriteMem(() => clamp16(((highAddr << 8) | lowAddr) + 1), () => (this.getPair(source) >>> 8) & 0xff);
+  }
+
+  private decodeLdPairFromAbsolute(target: 'BC' | 'DE' | 'HL' | 'IX' | 'IY' | 'SP' | 'AF'): void {
+    let lowAddr = 0;
+    let highAddr = 0;
+    let low = 0;
+    let high = 0;
+    this.enqueueReadPc((value) => {
+      lowAddr = value;
+    });
+    this.enqueueReadPc((value) => {
+      highAddr = value;
+    });
+    this.enqueueReadMem(() => (highAddr << 8) | lowAddr, (value) => {
+      low = value;
+    });
+    this.enqueueReadMem(() => clamp16(((highAddr << 8) | lowAddr) + 1), (value) => {
+      high = value;
+    });
+    this.enqueueInternal(() => {
+      this.setPair(target, (high << 8) | low);
+    });
+  }
+
+  private decodeExSpWithPair(target: 'HL' | 'IX' | 'IY'): void {
+    let low = 0;
+    let high = 0;
+    let current = 0;
+    this.enqueueReadMem(() => this.regs.sp, (value) => {
+      low = value;
+    });
+    this.enqueueReadMem(() => clamp16(this.regs.sp + 1), (value) => {
+      high = value;
+    });
+    this.enqueueInternal(() => {
+      current = this.getPair(target);
+      this.setPair(target, (high << 8) | low);
+    });
+    this.enqueueWriteMem(() => this.regs.sp, () => current & 0xff);
+    this.enqueueWriteMem(() => clamp16(this.regs.sp + 1), () => (current >>> 8) & 0xff);
+  }
+
+  private decodeDjnz(): void {
+    this.enqueueReadPc((rawOffset) => {
+      this.regs.b = clamp8(this.regs.b - 1);
+      if (this.regs.b === 0) {
+        return;
+      }
+      this.enqueueIdle(5);
+      this.enqueueInternal(() => {
+        this.regs.pc = clamp16(this.regs.pc + signExtend8(rawOffset));
+      });
+    });
+  }
+
   private decodeIncReg(opcode: number, indexMode: IndexMode): void {
     // 「8bit 値を 1 増やす命令」の共通処理。キャリーフラグは保持する。
     const regCode = (opcode >>> 3) & 0x07;
@@ -726,13 +1184,7 @@ export class Z80Cpu implements Cpu {
       const before = this.getRegByCode(regCode, indexMode);
       const after = clamp8(before + 1);
       this.setRegByCode(regCode, after, indexMode);
-      this.regs.f =
-        (this.regs.f & FLAG_C) |
-        (after & (FLAG_X | FLAG_Y)) |
-        (after === 0 ? FLAG_Z : 0) |
-        (after & 0x80 ? FLAG_S : 0) |
-        (before === 0x7f ? FLAG_PV : 0) |
-        ((before & 0x0f) === 0x0f ? FLAG_H : 0);
+      this.updateFlagsForIncDec(before, after, false);
     });
   }
 
@@ -748,14 +1200,7 @@ export class Z80Cpu implements Cpu {
       const before = this.getRegByCode(regCode, indexMode);
       const after = clamp8(before - 1);
       this.setRegByCode(regCode, after, indexMode);
-      this.regs.f =
-        (this.regs.f & FLAG_C) |
-        FLAG_N |
-        (after & (FLAG_X | FLAG_Y)) |
-        (after === 0 ? FLAG_Z : 0) |
-        (after & 0x80 ? FLAG_S : 0) |
-        (before === 0x80 ? FLAG_PV : 0) |
-        ((before & 0x0f) === 0x00 ? FLAG_H : 0);
+      this.updateFlagsForIncDec(before, after, true);
     });
   }
 
@@ -885,13 +1330,7 @@ export class Z80Cpu implements Cpu {
     this.enqueueInternal(() => {
       const before = value;
       value = clamp8(value + 1);
-      this.regs.f =
-        (this.regs.f & FLAG_C) |
-        (value & (FLAG_X | FLAG_Y)) |
-        (value === 0 ? FLAG_Z : 0) |
-        (value & FLAG_S) |
-        (before === 0x7f ? FLAG_PV : 0) |
-        ((before & 0x0f) === 0x0f ? FLAG_H : 0);
+      this.updateFlagsForIncDec(before, value, false);
     });
 
     this.enqueueWriteMem(addr, () => value);
@@ -922,14 +1361,7 @@ export class Z80Cpu implements Cpu {
     this.enqueueInternal(() => {
       const before = value;
       value = clamp8(value - 1);
-      this.regs.f =
-        (this.regs.f & FLAG_C) |
-        FLAG_N |
-        (value & (FLAG_X | FLAG_Y)) |
-        (value === 0 ? FLAG_Z : 0) |
-        (value & FLAG_S) |
-        (before === 0x80 ? FLAG_PV : 0) |
-        ((before & 0x0f) === 0x00 ? FLAG_H : 0);
+      this.updateFlagsForIncDec(before, value, true);
     });
 
     this.enqueueWriteMem(addr, () => value);
@@ -1096,14 +1528,45 @@ export class Z80Cpu implements Cpu {
       this.decodeRotateTarget(readTarget, writeTarget, 'RL');
       return;
     }
+    if ((opcode & 0xf8) === 0x08) {
+      // RRC target
+      this.decodeRotateTarget(readTarget, writeTarget, 'RRC');
+      return;
+    }
+    if ((opcode & 0xf8) === 0x18) {
+      // RR target
+      this.decodeRotateTarget(readTarget, writeTarget, 'RR');
+      return;
+    }
+    if ((opcode & 0xf8) === 0x20) {
+      // SLA target
+      this.decodeRotateTarget(readTarget, writeTarget, 'SLA');
+      return;
+    }
+    if ((opcode & 0xf8) === 0x28) {
+      // SRA target
+      this.decodeRotateTarget(readTarget, writeTarget, 'SRA');
+      return;
+    }
+    if ((opcode & 0xf8) === 0x30) {
+      // SLL target
+      this.decodeRotateTarget(readTarget, writeTarget, 'SLL');
+      return;
+    }
+    if ((opcode & 0xf8) === 0x38) {
+      // SRL target
+      this.decodeRotateTarget(readTarget, writeTarget, 'SRL');
+      return;
+    }
 
-    this.handleUnsupported(opcode, 'CB');
+    // CB 空間は全デコード済みの想定だが、保険として NOP 相当で継続。
+    this.enqueueInternal();
   }
 
   private decodeRotateTarget(
     readTarget: (target: (value: number) => void) => void,
     writeTarget: (value: () => number) => void,
-    op: 'RLC' | 'RL'
+    op: RotateOp
   ): void {
     // CB 系ローテート命令の共通演算部。
     let readValue = 0;
@@ -1113,68 +1576,76 @@ export class Z80Cpu implements Cpu {
     });
 
     this.enqueueInternal(() => {
-      if (op === 'RLC') {
-        const carry = (readValue >>> 7) & 1;
-        result = clamp8((readValue << 1) | carry);
-        this.regs.f = this.getSzxyParityFlags(result) | (carry ? FLAG_C : 0);
-        return;
-      }
-
-      const carryIn = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
-      const carryOut = (readValue >>> 7) & 1;
-      result = clamp8((readValue << 1) | carryIn);
-      this.regs.f = this.getSzxyParityFlags(result) | (carryOut ? FLAG_C : 0);
+      result = this.rotate8(readValue, op);
     });
 
     writeTarget(() => result);
   }
 
   private decodeED(opcode: number): void {
-    // ED 拡張命令群の分岐。本実装にない opcode は未対応として扱う。
+    const isNegAlias = opcode === 0x44 || opcode === 0x4c || opcode === 0x54 || opcode === 0x5c || opcode === 0x64 || opcode === 0x6c || opcode === 0x74 || opcode === 0x7c;
+    if (isNegAlias) {
+      this.enqueueInternal(() => {
+        const value = this.regs.a;
+        const result = clamp8(0 - value);
+        this.regs.a = result;
+        this.regs.f =
+          FLAG_N |
+          (result & (FLAG_S | FLAG_X | FLAG_Y)) |
+          (result === 0 ? FLAG_Z : 0) |
+          (value !== 0 ? FLAG_C : 0) |
+          (value === 0x80 ? FLAG_PV : 0) |
+          (value !== 0 ? FLAG_H : 0);
+      });
+      return;
+    }
+
+    const isRetnAlias = opcode === 0x45 || opcode === 0x55 || opcode === 0x5d || opcode === 0x65 || opcode === 0x6d || opcode === 0x75 || opcode === 0x7d;
+    if (isRetnAlias) {
+      this.enqueuePopWord((word) => {
+        this.regs.pc = word;
+        this.iff1 = this.iff2;
+      });
+      return;
+    }
+
+    if ((opcode & 0xc7) === 0x40) {
+      this.decodeEdInFromC(opcode);
+      return;
+    }
+
+    if ((opcode & 0xc7) === 0x41) {
+      this.decodeEdOutToC(opcode);
+      return;
+    }
+
+    if ((opcode & 0xcf) === 0x42) {
+      this.decodeEdSbcHlPair(opcode);
+      return;
+    }
+
+    if ((opcode & 0xcf) === 0x4a) {
+      this.decodeEdAdcHlPair(opcode);
+      return;
+    }
+
+    if ((opcode & 0xcf) === 0x43) {
+      this.decodeEdLdMemNnPair(opcode);
+      return;
+    }
+
+    if ((opcode & 0xcf) === 0x4b) {
+      this.decodeEdLdPairMemNn(opcode);
+      return;
+    }
+
     switch (opcode) {
-      case 0x44:
-      case 0x4c:
-      case 0x54:
-      case 0x5c:
-      case 0x64:
-      case 0x6c:
-      case 0x74:
-      case 0x7c:
-        // NEG: A の符号を反転する形で 0 - A を計算し、結果を A に入れる。
-        this.enqueueInternal(() => {
-          const value = this.regs.a;
-          const result = clamp8(0 - value);
-          this.regs.a = result;
-          this.regs.f =
-            FLAG_N |
-            (result & (FLAG_S | FLAG_X | FLAG_Y)) |
-            (result === 0 ? FLAG_Z : 0) |
-            (value !== 0 ? FLAG_C : 0) |
-            (value === 0x80 ? FLAG_PV : 0) |
-            (value !== 0 ? FLAG_H : 0);
-        });
-        return;
-      case 0x45:
-      case 0x55:
-      case 0x5d:
-      case 0x65:
-      case 0x6d:
-      case 0x75:
-      case 0x7d:
-        // RETN: スタックから復帰先を取り出して PC に戻し、IFF2 の値を IFF1 へ反映する。
-        this.enqueuePopWord((word) => {
-          this.regs.pc = word;
-          this.iff1 = this.iff2;
-        });
-        return;
       case 0x4d:
-        // RETI: 割り込み復帰命令。現状実装では RET と同じく PC 復帰のみ行う。
         this.enqueuePopWord((word) => {
           this.regs.pc = word;
         });
         return;
       case 0x57:
-        // LD A,I: 割り込みベクタ上位レジスタ I を A へコピーする。
         this.enqueueInternal(() => {
           this.regs.a = this.regs.i;
           this.regs.f =
@@ -1184,7 +1655,6 @@ export class Z80Cpu implements Cpu {
         });
         return;
       case 0x5f:
-        // LD A,R: リフレッシュレジスタ R を A へコピーする。
         this.enqueueInternal(() => {
           this.regs.a = this.regs.r;
           this.regs.f =
@@ -1194,48 +1664,329 @@ export class Z80Cpu implements Cpu {
         });
         return;
       case 0x47:
-        // LD I,A: A の値を割り込みベクタ上位レジスタ I へコピーする。
         this.enqueueInternal(() => {
           this.regs.i = this.regs.a;
         });
         return;
       case 0x4f:
-        // LD R,A: A の値をリフレッシュレジスタ R へコピーする。
         this.enqueueInternal(() => {
           this.regs.r = this.regs.a;
         });
         return;
+      case 0x46:
+      case 0x4e:
+      case 0x66:
+      case 0x6e:
+        this.enqueueInternal(() => {
+          this.im = 0;
+        });
+        return;
+      case 0x56:
+      case 0x76:
+        this.enqueueInternal(() => {
+          this.im = 1;
+        });
+        return;
+      case 0x5e:
+      case 0x7e:
+        this.enqueueInternal(() => {
+          this.im = 2;
+        });
+        return;
+      case 0x67:
+        this.decodeRrd();
+        return;
+      case 0x6f:
+        this.decodeRld();
+        return;
+      case 0xa0:
+        this.decodeBlockTransfer(false, false);
+        return;
+      case 0xa8:
+        this.decodeBlockTransfer(false, true);
+        return;
       case 0xb0:
-        // LDIR: HL から DE へ 1 バイト転送し、BC が 0 になるまで同命令を繰り返す。
-        this.decodeLdir();
+        this.decodeBlockTransfer(true, false);
+        return;
+      case 0xb8:
+        this.decodeBlockTransfer(true, true);
+        return;
+      case 0xa1:
+        this.decodeBlockCompare(false, false);
+        return;
+      case 0xa9:
+        this.decodeBlockCompare(false, true);
+        return;
+      case 0xb1:
+        this.decodeBlockCompare(true, false);
+        return;
+      case 0xb9:
+        this.decodeBlockCompare(true, true);
+        return;
+      case 0xa2:
+        this.decodeBlockIn(false, false);
+        return;
+      case 0xaa:
+        this.decodeBlockIn(false, true);
+        return;
+      case 0xb2:
+        this.decodeBlockIn(true, false);
+        return;
+      case 0xba:
+        this.decodeBlockIn(true, true);
+        return;
+      case 0xa3:
+        this.decodeBlockOut(false, false);
+        return;
+      case 0xab:
+        this.decodeBlockOut(false, true);
+        return;
+      case 0xb3:
+        this.decodeBlockOut(true, false);
+        return;
+      case 0xbb:
+        this.decodeBlockOut(true, true);
         return;
       default:
-        this.handleUnsupported(opcode, 'ED');
+        // ED の未定義/予約 opcode は NOP 相当として扱う。
+        this.enqueueInternal();
     }
   }
 
-  private decodeLdir(): void {
-    // LDIR の「1 回転送 + HL/DE/BC 更新 + 継続判定」を行う。
+  private decodeEdInFromC(opcode: number): void {
+    const regCode = (opcode >>> 3) & 0x07;
+    let value = 0;
+    this.enqueueReadIo(() => this.regs.c, (v) => {
+      value = v;
+    });
+    this.enqueueInternal(() => {
+      if (regCode !== 6) {
+        this.setRegByCode(regCode, value, 'HL');
+      }
+      this.regs.f = (this.regs.f & FLAG_C) | this.getSzxyParityFlags(value);
+    });
+  }
+
+  private decodeEdOutToC(opcode: number): void {
+    const regCode = (opcode >>> 3) & 0x07;
+    this.enqueueWriteIo(() => this.regs.c, () => {
+      if (regCode === 6) {
+        return 0;
+      }
+      return this.getRegByCode(regCode, 'HL');
+    });
+  }
+
+  private decodeEdSbcHlPair(opcode: number): void {
+    this.enqueueInternal(() => {
+      const left = this.getPair('HL');
+      const right = this.getPair(this.getPairByEdOpcode(opcode));
+      const carry = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
+      const result = clamp16(left - right - carry);
+      this.setPair('HL', result);
+      this.regs.f =
+        FLAG_N |
+        ((result & 0x8000) !== 0 ? FLAG_S : 0) |
+        (result === 0 ? FLAG_Z : 0) |
+        ((result >>> 8) & (FLAG_X | FLAG_Y)) |
+        (((left ^ right ^ result) & 0x1000) !== 0 ? FLAG_H : 0) |
+        ((((left ^ right) & (left ^ result)) & 0x8000) !== 0 ? FLAG_PV : 0) |
+        (left < (right + carry) ? FLAG_C : 0);
+    });
+  }
+
+  private decodeEdAdcHlPair(opcode: number): void {
+    this.enqueueInternal(() => {
+      const left = this.getPair('HL');
+      const right = this.getPair(this.getPairByEdOpcode(opcode));
+      const carry = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
+      const sum = left + right + carry;
+      const result = clamp16(sum);
+      this.setPair('HL', result);
+      this.regs.f =
+        ((result & 0x8000) !== 0 ? FLAG_S : 0) |
+        (result === 0 ? FLAG_Z : 0) |
+        ((result >>> 8) & (FLAG_X | FLAG_Y)) |
+        ((((left & 0x0fff) + (right & 0x0fff) + carry) & 0x1000) !== 0 ? FLAG_H : 0) |
+        ((((~(left ^ right)) & (left ^ result)) & 0x8000) !== 0 ? FLAG_PV : 0) |
+        (sum > 0xffff ? FLAG_C : 0);
+    });
+  }
+
+  private decodeEdLdMemNnPair(opcode: number): void {
+    this.decodeLdAbsoluteFromPair(this.getPairByEdOpcode(opcode));
+  }
+
+  private decodeEdLdPairMemNn(opcode: number): void {
+    this.decodeLdPairFromAbsolute(this.getPairByEdOpcode(opcode));
+  }
+
+  private decodeRrd(): void {
+    let mem = 0;
+    this.enqueueReadMem(() => this.getPair('HL'), (value) => {
+      mem = value;
+    });
+    this.enqueueInternal(() => {
+      const aLow = this.regs.a & 0x0f;
+      this.regs.a = (this.regs.a & 0xf0) | (mem & 0x0f);
+      mem = ((aLow << 4) | (mem >>> 4)) & 0xff;
+      this.regs.f = (this.regs.f & FLAG_C) | this.getSzxyParityFlags(this.regs.a);
+    });
+    this.enqueueWriteMem(() => this.getPair('HL'), () => mem);
+  }
+
+  private decodeRld(): void {
+    let mem = 0;
+    this.enqueueReadMem(() => this.getPair('HL'), (value) => {
+      mem = value;
+    });
+    this.enqueueInternal(() => {
+      const aLow = this.regs.a & 0x0f;
+      this.regs.a = (this.regs.a & 0xf0) | (mem >>> 4);
+      mem = ((mem << 4) | aLow) & 0xff;
+      this.regs.f = (this.regs.f & FLAG_C) | this.getSzxyParityFlags(this.regs.a);
+    });
+    this.enqueueWriteMem(() => this.getPair('HL'), () => mem);
+  }
+
+  private decodeBlockTransfer(repeat: boolean, decrement: boolean): void {
     let value = 0;
     this.enqueueReadMem(() => this.getPair('HL'), (v) => {
       value = v;
     });
     this.enqueueWriteMem(() => this.getPair('DE'), () => value);
     this.enqueueInternal(() => {
-      this.setPair('HL', clamp16(this.getPair('HL') + 1));
-      this.setPair('DE', clamp16(this.getPair('DE') + 1));
+      const step = decrement ? -1 : 1;
+      this.setPair('HL', clamp16(this.getPair('HL') + step));
+      this.setPair('DE', clamp16(this.getPair('DE') + step));
       const bc = clamp16(this.getPair('BC') - 1);
       this.setPair('BC', bc);
-      const baseFlags = this.regs.f & FLAG_C;
-      this.regs.f = baseFlags | (bc !== 0 ? FLAG_PV : 0);
-      // BC が 0 でない間は PC を命令先頭へ戻し、次サイクルで同じ命令を再実行する。
-      if (bc !== 0) {
+      this.regs.f = (this.regs.f & FLAG_C) | (bc !== 0 ? FLAG_PV : 0);
+      if (repeat && bc !== 0) {
         this.enqueueIdle(5);
         this.enqueueInternal(() => {
           this.regs.pc = clamp16(this.regs.pc - 2);
         });
       }
     });
+  }
+
+  private decodeBlockCompare(repeat: boolean, decrement: boolean): void {
+    let value = 0;
+    this.enqueueReadMem(() => this.getPair('HL'), (v) => {
+      value = v;
+    });
+    this.enqueueInternal(() => {
+      const result = clamp8(this.regs.a - value);
+      const step = decrement ? -1 : 1;
+      this.setPair('HL', clamp16(this.getPair('HL') + step));
+      const bc = clamp16(this.getPair('BC') - 1);
+      this.setPair('BC', bc);
+      this.regs.f =
+        (this.regs.f & FLAG_C) |
+        FLAG_N |
+        (result & FLAG_S) |
+        (result === 0 ? FLAG_Z : 0) |
+        (halfCarrySub8(this.regs.a, value, 0) ? FLAG_H : 0) |
+        (bc !== 0 ? FLAG_PV : 0) |
+        (result & (FLAG_X | FLAG_Y));
+      if (repeat && bc !== 0 && result !== 0) {
+        this.enqueueIdle(5);
+        this.enqueueInternal(() => {
+          this.regs.pc = clamp16(this.regs.pc - 2);
+        });
+      }
+    });
+  }
+
+  private decodeBlockIn(repeat: boolean, decrement: boolean): void {
+    let value = 0;
+    this.enqueueReadIo(() => this.regs.c, (v) => {
+      value = v;
+    });
+    this.enqueueWriteMem(() => this.getPair('HL'), () => value);
+    this.enqueueInternal(() => {
+      const step = decrement ? -1 : 1;
+      this.setPair('HL', clamp16(this.getPair('HL') + step));
+      this.regs.b = clamp8(this.regs.b - 1);
+      this.regs.f = (this.regs.b === 0 ? FLAG_Z : 0) | FLAG_N;
+      if (repeat && this.regs.b !== 0) {
+        this.enqueueIdle(5);
+        this.enqueueInternal(() => {
+          this.regs.pc = clamp16(this.regs.pc - 2);
+        });
+      }
+    });
+  }
+
+  private decodeBlockOut(repeat: boolean, decrement: boolean): void {
+    let value = 0;
+    this.enqueueReadMem(() => this.getPair('HL'), (v) => {
+      value = v;
+    });
+    this.enqueueWriteIo(() => this.regs.c, () => value);
+    this.enqueueInternal(() => {
+      const step = decrement ? -1 : 1;
+      this.setPair('HL', clamp16(this.getPair('HL') + step));
+      this.regs.b = clamp8(this.regs.b - 1);
+      this.regs.f = (this.regs.b === 0 ? FLAG_Z : 0) | FLAG_N;
+      if (repeat && this.regs.b !== 0) {
+        this.enqueueIdle(5);
+        this.enqueueInternal(() => {
+          this.regs.pc = clamp16(this.regs.pc - 2);
+        });
+      }
+    });
+  }
+
+  private getPairByEdOpcode(opcode: number): 'BC' | 'DE' | 'HL' | 'SP' {
+    const key = (opcode >>> 4) & 0x03;
+    if (key === 0) {
+      return 'BC';
+    }
+    if (key === 1) {
+      return 'DE';
+    }
+    if (key === 2) {
+      return 'HL';
+    }
+    return 'SP';
+  }
+
+  private applyDaa(value: number): number {
+    const current = value & 0xff;
+    const carryIn = (this.regs.f & FLAG_C) !== 0;
+    const halfIn = (this.regs.f & FLAG_H) !== 0;
+    const isSub = (this.regs.f & FLAG_N) !== 0;
+
+    let correction = 0;
+    let carryOut = carryIn;
+    if (!isSub) {
+      if (halfIn || (current & 0x0f) > 9) {
+        correction |= 0x06;
+      }
+      if (carryIn || current > 0x99) {
+        correction |= 0x60;
+        carryOut = true;
+      }
+    } else {
+      if (halfIn) {
+        correction |= 0x06;
+      }
+      if (carryIn) {
+        correction |= 0x60;
+      }
+    }
+
+    const result = clamp8(current + (isSub ? -correction : correction));
+    this.regs.f =
+      (isSub ? FLAG_N : 0) |
+      (result & (FLAG_S | FLAG_X | FLAG_Y)) |
+      (result === 0 ? FLAG_Z : 0) |
+      (parity8(result) ? FLAG_PV : 0) |
+      ((((current ^ result ^ correction) & 0x10) !== 0) ? FLAG_H : 0) |
+      (carryOut ? FLAG_C : 0);
+    return result;
   }
 
   private getCbAddress(indexMode: IndexMode, displacement: number): number {
@@ -1246,48 +1997,143 @@ export class Z80Cpu implements Cpu {
   }
 
   private addToA(value: number, carryIn: boolean): void {
-    const carry = carryIn ? 1 : 0;
-    const left = this.regs.a;
-    const right = clamp8(value);
-    const result = clamp8(left + right + carry);
-
-    this.regs.a = result;
-    this.regs.f =
-      (result & (FLAG_S | FLAG_X | FLAG_Y)) |
-      (result === 0 ? FLAG_Z : 0) |
-      (halfCarryAdd8(left, right, carry) ? FLAG_H : 0) |
-      (overflowAdd8(left, right + carry, result) ? FLAG_PV : 0) |
-      (((left + right + carry) & 0x100) !== 0 ? FLAG_C : 0);
+    this.applyAlu8ToA(carryIn ? 'ADC' : 'ADD', value);
   }
 
   private subFromA(value: number, carryIn: boolean): void {
-    const carry = carryIn ? 1 : 0;
-    const left = this.regs.a;
-    const right = clamp8(value);
-    const result = clamp8(left - right - carry);
-
-    this.regs.a = result;
-    this.regs.f =
-      FLAG_N |
-      (result & (FLAG_S | FLAG_X | FLAG_Y)) |
-      (result === 0 ? FLAG_Z : 0) |
-      (halfCarrySub8(left, right, carry) ? FLAG_H : 0) |
-      (overflowSub8(left, right + carry, result) ? FLAG_PV : 0) |
-      (left < (right + carry) ? FLAG_C : 0);
+    this.applyAlu8ToA(carryIn ? 'SBC' : 'SUB', value);
   }
 
   private compareWithA(value: number): void {
+    this.applyAlu8ToA('CP', value);
+  }
+
+  private updateFlagsForIncDec(before: number, after: number, isDec: boolean): void {
+    const base = this.regs.f & FLAG_C;
+    this.regs.f =
+      base |
+      (isDec ? FLAG_N : 0) |
+      (after & (FLAG_X | FLAG_Y)) |
+      (after === 0 ? FLAG_Z : 0) |
+      (after & FLAG_S) |
+      (!isDec && before === 0x7f ? FLAG_PV : 0) |
+      (isDec && before === 0x80 ? FLAG_PV : 0) |
+      (!isDec && (before & 0x0f) === 0x0f ? FLAG_H : 0) |
+      (isDec && (before & 0x0f) === 0x00 ? FLAG_H : 0);
+  }
+
+  private rotate8(value: number, op: RotateOp): number {
+    const clamped = clamp8(value);
+    let result = clamped;
+    let carry = 0;
+    const carryIn = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
+
+    switch (op) {
+      case 'RLC':
+        carry = (clamped >>> 7) & 1;
+        result = clamp8((clamped << 1) | carry);
+        break;
+      case 'RL':
+        carry = (clamped >>> 7) & 1;
+        result = clamp8((clamped << 1) | carryIn);
+        break;
+      case 'RRC':
+        carry = clamped & 1;
+        result = clamp8((clamped >>> 1) | (carry << 7));
+        break;
+      case 'RR':
+        carry = clamped & 1;
+        result = clamp8((clamped >>> 1) | (carryIn << 7));
+        break;
+      case 'SLA':
+        carry = (clamped >>> 7) & 1;
+        result = clamp8(clamped << 1);
+        break;
+      case 'SRA':
+        carry = clamped & 1;
+        result = clamp8((clamped >>> 1) | (clamped & 0x80));
+        break;
+      case 'SLL':
+        carry = (clamped >>> 7) & 1;
+        result = clamp8((clamped << 1) | 0x01);
+        break;
+      case 'SRL':
+        carry = clamped & 1;
+        result = clamp8(clamped >>> 1);
+        break;
+      default:
+        result = clamped;
+    }
+
+    this.regs.f = this.getSzxyParityFlags(result) | (carry ? FLAG_C : 0);
+    return result;
+  }
+
+  private applyAlu8ToA(op: Alu8Op, value: number): void {
     const left = this.regs.a;
     const right = clamp8(value);
-    const result = clamp8(left - right);
-    this.regs.f =
-      FLAG_N |
-      (result & FLAG_S) |
-      (result === 0 ? FLAG_Z : 0) |
-      (halfCarrySub8(left, right, 0) ? FLAG_H : 0) |
-      (overflowSub8(left, right, result) ? FLAG_PV : 0) |
-      (left < right ? FLAG_C : 0) |
-      (right & (FLAG_X | FLAG_Y));
+
+    switch (op) {
+      case 'ADD':
+      case 'ADC': {
+        const carry = op === 'ADC' && (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
+        const result = clamp8(left + right + carry);
+        this.regs.a = result;
+        this.regs.f =
+          (result & (FLAG_S | FLAG_X | FLAG_Y)) |
+          (result === 0 ? FLAG_Z : 0) |
+          (halfCarryAdd8(left, right, carry) ? FLAG_H : 0) |
+          (overflowAdd8(left, right + carry, result) ? FLAG_PV : 0) |
+          (((left + right + carry) & 0x100) !== 0 ? FLAG_C : 0);
+        return;
+      }
+      case 'SUB':
+      case 'SBC': {
+        const carry = op === 'SBC' && (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
+        const result = clamp8(left - right - carry);
+        this.regs.a = result;
+        this.regs.f =
+          FLAG_N |
+          (result & (FLAG_S | FLAG_X | FLAG_Y)) |
+          (result === 0 ? FLAG_Z : 0) |
+          (halfCarrySub8(left, right, carry) ? FLAG_H : 0) |
+          (overflowSub8(left, right + carry, result) ? FLAG_PV : 0) |
+          (left < (right + carry) ? FLAG_C : 0);
+        return;
+      }
+      case 'AND': {
+        const result = left & right;
+        this.regs.a = result;
+        this.regs.f = this.getSzxyParityFlags(result) | FLAG_H;
+        return;
+      }
+      case 'XOR': {
+        const result = left ^ right;
+        this.regs.a = result;
+        this.regs.f = this.getSzxyParityFlags(result);
+        return;
+      }
+      case 'OR': {
+        const result = left | right;
+        this.regs.a = result;
+        this.regs.f = this.getSzxyParityFlags(result);
+        return;
+      }
+      case 'CP': {
+        const result = clamp8(left - right);
+        this.regs.f =
+          FLAG_N |
+          (result & FLAG_S) |
+          (result === 0 ? FLAG_Z : 0) |
+          (halfCarrySub8(left, right, 0) ? FLAG_H : 0) |
+          (overflowSub8(left, right, result) ? FLAG_PV : 0) |
+          (left < right ? FLAG_C : 0) |
+          (right & (FLAG_X | FLAG_Y));
+        return;
+      }
+      default:
+        return;
+    }
   }
 
   private getPair(name: 'AF' | 'BC' | 'DE' | 'HL' | 'IX' | 'IY' | 'SP'): number {
