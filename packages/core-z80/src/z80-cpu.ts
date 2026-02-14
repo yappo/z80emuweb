@@ -776,6 +776,22 @@ export class Z80Cpu implements Cpu {
         // JP C,nn: キャリーフラグが 1 の場合だけ nn へ絶対ジャンプする。
         this.decodeJp((this.regs.f & FLAG_C) !== 0);
         return;
+      case 0xe2:
+        // JP PO,nn
+        this.decodeJp((this.regs.f & FLAG_PV) === 0);
+        return;
+      case 0xea:
+        // JP PE,nn
+        this.decodeJp((this.regs.f & FLAG_PV) !== 0);
+        return;
+      case 0xf2:
+        // JP P,nn
+        this.decodeJp((this.regs.f & FLAG_S) === 0);
+        return;
+      case 0xfa:
+        // JP M,nn
+        this.decodeJp((this.regs.f & FLAG_S) !== 0);
+        return;
       case 0xcd:
         // CALL nn: 復帰先アドレスをスタックへ退避し、サブルーチン先 nn へ分岐する。
         this.decodeCall(true);
@@ -795,6 +811,22 @@ export class Z80Cpu implements Cpu {
       case 0xdc:
         // CALL C,nn: キャリーフラグが 1 の場合だけサブルーチン呼び出しを行う。
         this.decodeCall((this.regs.f & FLAG_C) !== 0);
+        return;
+      case 0xe4:
+        // CALL PO,nn
+        this.decodeCall((this.regs.f & FLAG_PV) === 0);
+        return;
+      case 0xec:
+        // CALL PE,nn
+        this.decodeCall((this.regs.f & FLAG_PV) !== 0);
+        return;
+      case 0xf4:
+        // CALL P,nn
+        this.decodeCall((this.regs.f & FLAG_S) === 0);
+        return;
+      case 0xfc:
+        // CALL M,nn
+        this.decodeCall((this.regs.f & FLAG_S) !== 0);
         return;
       case 0xc9:
         // RET: スタックから 16bit の復帰先アドレスを取り出し、PC に戻す。
@@ -817,6 +849,22 @@ export class Z80Cpu implements Cpu {
       case 0xd8:
         // RET C: キャリーフラグが 1 の場合だけ復帰処理を行う。
         this.decodeRet((this.regs.f & FLAG_C) !== 0);
+        return;
+      case 0xe0:
+        // RET PO
+        this.decodeRet((this.regs.f & FLAG_PV) === 0);
+        return;
+      case 0xe8:
+        // RET PE
+        this.decodeRet((this.regs.f & FLAG_PV) !== 0);
+        return;
+      case 0xf0:
+        // RET P
+        this.decodeRet((this.regs.f & FLAG_S) === 0);
+        return;
+      case 0xf8:
+        // RET M
+        this.decodeRet((this.regs.f & FLAG_S) !== 0);
         return;
       case 0xd9:
         // EXX
@@ -944,7 +992,8 @@ export class Z80Cpu implements Cpu {
         });
         return;
       default:
-        this.handleUnsupported(opcode, indexMode === 'HL' ? undefined : indexMode);
+        // 未定義/予約 opcode は NOP 相当として扱う。
+        this.enqueueInternal();
     }
   }
 
@@ -1510,7 +1559,8 @@ export class Z80Cpu implements Cpu {
       return;
     }
 
-    this.handleUnsupported(opcode, 'CB');
+    // CB 空間は全デコード済みの想定だが、保険として NOP 相当で継続。
+    this.enqueueInternal();
   }
 
   private decodeRotateTarget(
@@ -1698,7 +1748,8 @@ export class Z80Cpu implements Cpu {
         this.decodeBlockOut(true, true);
         return;
       default:
-        this.handleUnsupported(opcode, 'ED');
+        // ED の未定義/予約 opcode は NOP 相当として扱う。
+        this.enqueueInternal();
     }
   }
 

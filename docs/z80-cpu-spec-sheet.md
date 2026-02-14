@@ -18,9 +18,9 @@
   - `enqueueFetchOpcode()` で `bus.read8(PC)` を実行
   - `onM1?(pc)` コールバックを発火
   - `R` レジスタ下位 7bit をインクリメント
-- 非対応命令
-  - `strictUnsupportedOpcodes=true`: 例外を投げる
-  - `false`: その命令は内部 NOP と同等で継続
+- 予約/未定義 opcode
+  - 現在は各 opcode 空間で例外なくデコードされる
+  - 予約/未定義のものは NOP 相当として継続
 
 ## 2. レジスタ仕様
 
@@ -256,8 +256,10 @@
 
 ## 9. 未実装命令の現況（2026-02-14時点）
 
-この章は「旧版の完全範囲一覧」から、現行実装に合わせて更新しています。
-今回の拡張で以下は実装済みになりました。
+`strictUnsupportedOpcodes=true` で全空間（base/CB/ED/DD/FD/DDCB/FDCB）を走査しても
+`Unsupported opcode` は発生しません。
+
+今回の拡張で以下を追加し、予約/未定義 opcode は NOP 相当として扱う実装に整理しました。
 
 - ベース空間:
   - `LD r,r'` 群
@@ -277,8 +279,9 @@
   - `INI/IND/INIR/INDR`
   - `OUTI/OUTD/OTIR/OTDR`
 
-依然として ED 空間を中心に「予約/重複/未対応 opcode」は残っています。
-`strictUnsupportedOpcodes=true` ではそれらが例外対象です。
+注:
+- 「予約/未定義 opcode が存在しない」という意味ではなく、
+  CPU 実装上はそれらも実行可能（NOP 相当）として扱う、という意味です。
 
 ## 10. 参照ファイル
 

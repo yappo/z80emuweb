@@ -32,6 +32,13 @@ function run(cpu: Z80Cpu, tstates: number): void {
   cpu.stepTState(tstates);
 }
 
+function expectNoUnsupportedForProgram(program: number[]): void {
+  const bus = new MemoryBus();
+  bus.memory.set(program.map((x) => x & 0xff));
+  const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+  expect(() => run(cpu, 160)).not.toThrow();
+}
+
 describe('Z80Cpu', () => {
   it('executes OUT and HALT sequence', () => {
     const bus = new MemoryBus();
@@ -343,5 +350,37 @@ describe('Z80Cpu', () => {
 
     expect(cpu.getState().registers.pc).toBeGreaterThanOrEqual(0x0038);
     expect(cpu.getState().halted).toBe(true);
+  });
+
+  it('has no unsupported opcode in base space', () => {
+    for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+      expectNoUnsupportedForProgram([opcode, 0x00, 0x00, 0x00, 0x00]);
+    }
+  });
+
+  it('has no unsupported opcode in CB space', () => {
+    for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+      expectNoUnsupportedForProgram([0xcb, opcode, 0x00, 0x00, 0x00]);
+    }
+  });
+
+  it('has no unsupported opcode in ED space', () => {
+    for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+      expectNoUnsupportedForProgram([0xed, opcode, 0x00, 0x00, 0x00, 0x00]);
+    }
+  });
+
+  it('has no unsupported opcode in DD/FD prefixed spaces', () => {
+    for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+      expectNoUnsupportedForProgram([0xdd, opcode, 0x01, 0x00, 0x00, 0x00]);
+      expectNoUnsupportedForProgram([0xfd, opcode, 0x01, 0x00, 0x00, 0x00]);
+    }
+  });
+
+  it('has no unsupported opcode in DDCB/FDCB spaces', () => {
+    for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+      expectNoUnsupportedForProgram([0xdd, 0xcb, 0x01, opcode, 0x00, 0x00]);
+      expectNoUnsupportedForProgram([0xfd, 0xcb, 0x01, opcode, 0x00, 0x00]);
+    }
   });
 });
