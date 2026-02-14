@@ -453,7 +453,13 @@ export class PcG815BasicRuntime {
         }
         return {};
       case 'PRINT':
-        this.pushText(`${evaluatePrintItems(statement.items, this.getEvalContext())}\r\n`);
+        {
+          const payload = evaluatePrintItems(statement.items, this.getEvalContext());
+          this.pushText(payload.text);
+          if (!payload.suppressNewline) {
+            this.pushText('\r\n');
+          }
+        }
         return {};
       case 'LET': {
         const value = this.evaluateNumeric(statement.expression);

@@ -81,7 +81,10 @@ export interface RunStatement {
 
 export interface PrintStatement {
   kind: 'PRINT';
-  items: ExpressionNode[];
+  items: Array<{
+    expression: ExpressionNode;
+    separator?: 'comma' | 'semicolon';
+  }>;
 }
 
 export interface LetStatement {

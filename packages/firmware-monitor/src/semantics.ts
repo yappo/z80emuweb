@@ -1,4 +1,4 @@
-import type { ExpressionNode } from './ast';
+import type { ExpressionNode, PrintStatement } from './ast';
 import { BasicRuntimeError } from './errors';
 import type { BasicMachineAdapter } from './types';
 
@@ -103,12 +103,48 @@ export function evaluateNumericExpression(node: ExpressionNode, contextInput: Ev
   return clampInt(value);
 }
 
-// PRINT は各項目を空白区切りで連結する。
-export function evaluatePrintItems(items: ExpressionNode[], contextInput: EvalContextInput): string {
-  return items
-    .map((item) => {
-      const value = evaluateExpression(item, contextInput);
-      return typeof value === 'string' ? value : String(value);
-    })
-    .join(' ');
+const PRINT_TAB_WIDTH = 8;
+
+function evaluatePrintValue(node: ExpressionNode, contextInput: EvalContextInput): string {
+  const value = evaluateExpression(node, contextInput);
+  return typeof value === 'string' ? value : String(value);
+}
+
+export function evaluatePrintItems(
+  items: PrintStatement['items'],
+  contextInput: EvalContextInput
+): { text: string; suppressNewline: boolean } {
+  if (items.length === 0) {
+    return { text: '', suppressNewline: false };
+  }
+
+  let text = '';
+  let column = 0;
+  let suppressNewline = false;
+
+  for (const item of items) {
+    const part = evaluatePrintValue(item.expression, contextInput);
+    text += part;
+    column += part.length;
+
+    if (item.separator === 'comma') {
+      let spaces = PRINT_TAB_WIDTH - (column % PRINT_TAB_WIDTH);
+      if (spaces === 0) {
+        spaces = PRINT_TAB_WIDTH;
+      }
+      text += ' '.repeat(spaces);
+      column += spaces;
+      suppressNewline = true;
+      continue;
+    }
+
+    if (item.separator === 'semicolon') {
+      suppressNewline = true;
+      continue;
+    }
+
+    suppressNewline = false;
+  }
+
+  return { text, suppressNewline };
 }

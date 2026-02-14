@@ -35,7 +35,7 @@
       "commands": ["PRINT"],
       "lines": ["LET A=2+3*4", "PRINT A,1+1"],
       "expect": {
-        "outputContains": ["14 2"]
+        "outputContains": ["14      2"]
       }
     },
     {
@@ -149,7 +149,7 @@
       "commands": ["DATA", "READ", "RESTORE"],
       "lines": ["10 DATA 5,6", "20 READ A,B", "30 PRINT A,B", "40 RESTORE", "50 READ C", "60 PRINT C", "RUN"],
       "expect": {
-        "outputContains": ["5 6", "5"]
+        "outputContains": ["5       6", "5"]
       }
     },
     {

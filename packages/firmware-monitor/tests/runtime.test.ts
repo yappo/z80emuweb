@@ -50,7 +50,24 @@ describe('PcG815BasicRuntime', () => {
     const output = executeLines(runtime, ['LET A=2+3*4', 'PRINT A,1+1']);
 
     expect(output).toContain('OK');
-    expect(output).toContain('14 2');
+    expect(output).toContain('14      2');
+  });
+
+  it('supports PRINT semicolon suppression and comma tab zones', () => {
+    const runtime = new PcG815BasicRuntime();
+
+    const output = executeLines(runtime, ['10 PRINT "A";', '20 PRINT "B"', 'RUN', 'PRINT "A","B"']);
+
+    expect(output).toContain('AB\r\n');
+    expect(output).toContain('A       B');
+  });
+
+  it('supports empty PRINT as newline', () => {
+    const runtime = new PcG815BasicRuntime();
+
+    const output = executeLines(runtime, ['PRINT']);
+
+    expect(output).toContain('\r\n');
   });
 
   it('supports IF comparison in RUN program', () => {
@@ -97,7 +114,7 @@ describe('PcG815BasicRuntime', () => {
   it('prints syntax errors with numeric code suffix', () => {
     const runtime = new PcG815BasicRuntime();
 
-    const output = executeLines(runtime, ['PRINT']);
+    const output = executeLines(runtime, ['LET A=INP(1,2)']);
     expect(output).toContain('ERR SYNTAX (E01)');
   });
 
@@ -180,7 +197,7 @@ describe('PcG815BasicRuntime', () => {
       'RUN'
     ]);
 
-    expect(output).toContain('5 6');
+    expect(output).toContain('5       6');
     expect(output).toContain('5');
   });
 

@@ -30,8 +30,13 @@ describe('parser and semantics', () => {
     expect(() => parseStatement('IF A THEN X')).toThrowError(/BAD IF/);
   });
 
-  it('rejects empty PRINT payload', () => {
-    expect(() => parseStatement('PRINT')).toThrowError(/SYNTAX/);
+  it('parses empty PRINT as newline-only statement', () => {
+    const statement = parseStatement('PRINT');
+    expect(statement.kind).toBe('PRINT');
+    if (statement.kind !== 'PRINT') {
+      return;
+    }
+    expect(statement.items).toEqual([]);
   });
 
   it('parses FOR/NEXT syntax with optional STEP', () => {

@@ -25,7 +25,7 @@
       "id": "print-rejects-empty-expression",
       "profile": "public-observed-v1",
       "commands": ["PRINT"],
-      "lines": ["PRINT"],
+      "lines": ["PRINT ;"],
       "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     },
     {
