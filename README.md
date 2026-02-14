@@ -17,6 +17,7 @@ npm run dev
 - `packages/firmware-monitor`: モニタ + 小規模BASICランタイム
 - `docs/hardware-spec.md`: ハード仕様前提とマッピング
 - `docs/z80-cpu-spec-sheet.md`: Z80 CPU 命令・レジスタ・割り込み・I/O 仕様（実装ベース）
+- `docs/basic-language-spec.md`: 現行 BASIC 言語仕様と未実装コマンド一覧
 
 ## ハードウェアマップ方針
 
