@@ -1,0 +1,129 @@
+{
+  "cases": [
+    {
+      "id": "new-clears-program",
+      "profile": "public-observed-v1",
+      "commands": ["NEW", "LIST"],
+      "lines": ["10 LET A=9", "NEW", "LIST", "PRINT A"],
+      "expect": {
+        "outputContains": ["OK", "0"],
+        "outputNotContains": ["10 LET A=9"]
+      }
+    },
+    {
+      "id": "list-prints-lines",
+      "profile": "public-observed-v1",
+      "commands": ["LIST"],
+      "lines": ["10 PRINT 1", "LIST"],
+      "expect": {
+        "outputContains": ["10 PRINT 1"]
+      }
+    },
+    {
+      "id": "run-simple-program",
+      "profile": "public-observed-v1",
+      "commands": ["RUN", "LET", "PRINT"],
+      "lines": ["10 LET A=41", "20 PRINT A+1", "RUN"],
+      "expect": {
+        "outputContains": ["42", "OK"],
+        "variables": {"A": 41}
+      }
+    },
+    {
+      "id": "print-expression",
+      "profile": "public-observed-v1",
+      "commands": ["PRINT"],
+      "lines": ["LET A=2+3*4", "PRINT A,1+1"],
+      "expect": {
+        "outputContains": ["14 2"]
+      }
+    },
+    {
+      "id": "let-assignment",
+      "profile": "public-observed-v1",
+      "commands": ["LET"],
+      "lines": ["LET Z9=(2+3)*4", "PRINT Z9"],
+      "expect": {
+        "outputContains": ["20"],
+        "variables": {"Z9": 20}
+      }
+    },
+    {
+      "id": "input-immediate",
+      "profile": "public-observed-v1",
+      "commands": ["INPUT", "PRINT"],
+      "lines": ["INPUT A", "99", "PRINT A"],
+      "expect": {
+        "outputContains": ["? ", "99"],
+        "variables": {"A": 99}
+      }
+    },
+    {
+      "id": "goto-jump",
+      "profile": "public-observed-v1",
+      "commands": ["GOTO"],
+      "lines": ["10 GOTO 30", "20 PRINT 0", "30 PRINT 1", "RUN"],
+      "expect": {
+        "outputContains": ["1"],
+        "outputNotContains": ["0\r\n"]
+      }
+    },
+    {
+      "id": "gosub-return",
+      "profile": "public-observed-v1",
+      "commands": ["GOSUB", "RETURN"],
+      "lines": ["10 GOSUB 100", "20 PRINT 9", "30 END", "100 PRINT 3", "110 RETURN", "RUN"],
+      "expect": {
+        "outputContains": ["3", "9"]
+      }
+    },
+    {
+      "id": "if-then-jump",
+      "profile": "public-observed-v1",
+      "commands": ["IF"],
+      "lines": ["10 LET A=1", "20 IF A=1 THEN 40", "30 PRINT 0", "40 PRINT 7", "RUN"],
+      "expect": {
+        "outputContains": ["7"],
+        "outputNotContains": ["0\r\n"]
+      }
+    },
+    {
+      "id": "end-stops-program",
+      "profile": "public-observed-v1",
+      "commands": ["END"],
+      "lines": ["10 PRINT 1", "20 END", "30 PRINT 2", "RUN"],
+      "expect": {
+        "outputContains": ["1"],
+        "outputNotContains": ["2\r\n"]
+      }
+    },
+    {
+      "id": "stop-stops-program",
+      "profile": "public-observed-v1",
+      "commands": ["STOP"],
+      "lines": ["10 PRINT 1", "20 STOP", "30 PRINT 2", "RUN"],
+      "expect": {
+        "outputContains": ["1"],
+        "outputNotContains": ["2\r\n"]
+      }
+    },
+    {
+      "id": "cls-clears-display",
+      "profile": "public-observed-v1",
+      "commands": ["CLS"],
+      "lines": ["PRINT \"ABC\"", "CLS", "PRINT \"X\""],
+      "expect": {
+        "outputContains": ["ABC", "X", "OK"]
+      }
+    },
+    {
+      "id": "rem-ignored",
+      "profile": "public-observed-v1",
+      "commands": ["REM"],
+      "lines": ["10 REM THIS IS COMMENT", "20 PRINT 5", "RUN"],
+      "expect": {
+        "outputContains": ["5"]
+      }
+    }
+  ]
+}

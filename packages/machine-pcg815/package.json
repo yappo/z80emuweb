@@ -1,0 +1,16 @@
+{
+  "name": "@z80emu/machine-pcg815",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "dependencies": {
+    "@z80emu/core-z80": "file:../core-z80",
+    "@z80emu/firmware-monitor": "file:../firmware-monitor"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

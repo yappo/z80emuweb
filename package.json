@@ -1,0 +1,27 @@
+{
+  "name": "z80emu-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PC-G815 compatible Z80 emulator for modern web browsers",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:compat": "npm run test:compat -w @z80emu/firmware-monitor",
+    "test:e2e": "npm run test:e2e -w @z80emu/web",
+    "dev": "npm run dev -w @z80emu/web --",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@vitest/coverage-v8": "^3.0.8",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  }
+}

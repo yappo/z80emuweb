@@ -1,0 +1,21 @@
+{
+  "name": "@z80emu/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@z80emu/machine-pcg815": "file:../../packages/machine-pcg815"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.0",
+    "vite": "^6.2.1"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run --config vitest.config.ts",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

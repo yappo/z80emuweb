@@ -1,0 +1,13 @@
+node_modules
+dist
+coverage
+.vite
+playwright-report
+test-results
+.DS_Store
+packages/*/src/**/*.js
+packages/*/src/**/*.js.map
+packages/*/src/**/*.d.ts
+packages/*/tests/**/*.js
+packages/*/tests/**/*.js.map
+packages/*/tests/**/*.d.ts

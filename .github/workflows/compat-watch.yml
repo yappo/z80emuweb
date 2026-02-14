@@ -1,0 +1,91 @@
+name: Compatibility Watch
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm install
+
+      - name: Run compatibility corpus
+        id: compat
+        continue-on-error: true
+        run: npm run test:compat
+
+      - name: Create/ensure counterexample label
+        if: steps.compat.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'counterexample'
+              });
+            } catch (error) {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'counterexample',
+                color: 'd73a4a',
+                description: 'Observed compatibility regression against corpus'
+              });
+            }
+
+      - name: Open counterexample issue on regression
+        if: steps.compat.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = `counterexample: compatibility regression (${new Date().toISOString().slice(0, 10)})`;
+            const body = [
+              'Compatibility corpus failed in scheduled watch.',
+              '',
+              `Run: ${runUrl}`,
+              '',
+              'Please triage and update manifest/corpus/runtime before closing.'
+            ].join('\n');
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'counterexample'
+            });
+
+            const alreadyOpen = existing.data.some((issue) => issue.title === title);
+            if (!alreadyOpen) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['counterexample']
+              });
+            }
+
+      - name: Fail workflow if compatibility failed
+        if: steps.compat.outcome == 'failure'
+        run: |
+          echo "Compatibility corpus regression detected"
+          exit 1

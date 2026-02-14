@@ -1,0 +1,459 @@
+{
+  "version": 1,
+  "profile": "public-observed-v1",
+  "policyRef": "docs/basic-observation-policy.md",
+  "commands": [
+    {
+      "id": "NEW",
+      "keyword": "NEW",
+      "category": "program",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "new-clears-program"
+      ],
+      "negativeCaseIds": [
+        "new-rejects-arguments"
+      ],
+      "notes": "プログラムと変数を初期化する。"
+    },
+    {
+      "id": "LIST",
+      "keyword": "LIST",
+      "category": "program",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "list-prints-lines"
+      ],
+      "negativeCaseIds": [
+        "list-rejects-arguments"
+      ],
+      "notes": "保存済みの行番号付きプログラムを表示する。"
+    },
+    {
+      "id": "RUN",
+      "keyword": "RUN",
+      "category": "program",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "run-simple-program"
+      ],
+      "negativeCaseIds": [
+        "run-detects-runaway"
+      ],
+      "notes": "保存済みプログラムを実行する。"
+    },
+    {
+      "id": "PRINT",
+      "keyword": "PRINT",
+      "category": "io",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "pokecom-basic-samples"
+      ],
+      "positiveCaseIds": [
+        "print-expression"
+      ],
+      "negativeCaseIds": [
+        "print-rejects-empty-expression"
+      ],
+      "notes": "文字列リテラルまたは数式リストを出力する。"
+    },
+    {
+      "id": "LET",
+      "keyword": "LET",
+      "category": "expression",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "let-assignment"
+      ],
+      "negativeCaseIds": [
+        "let-rejects-invalid-var"
+      ],
+      "notes": "数値変数へ代入する。"
+    },
+    {
+      "id": "INPUT",
+      "keyword": "INPUT",
+      "category": "io",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "input-immediate"
+      ],
+      "negativeCaseIds": [
+        "input-rejected-in-run"
+      ],
+      "notes": "即時モードで数値入力を受け付ける。"
+    },
+    {
+      "id": "GOTO",
+      "keyword": "GOTO",
+      "category": "control",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "goto-jump"
+      ],
+      "negativeCaseIds": [
+        "goto-missing-line"
+      ],
+      "notes": "RUN中に指定行へ無条件分岐する。"
+    },
+    {
+      "id": "GOSUB",
+      "keyword": "GOSUB",
+      "category": "control",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "gosub-return"
+      ],
+      "negativeCaseIds": [
+        "gosub-missing-line"
+      ],
+      "notes": "RETURNスタックを使ってサブルーチン呼び出しを行う。"
+    },
+    {
+      "id": "RETURN",
+      "keyword": "RETURN",
+      "category": "control",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "gosub-return"
+      ],
+      "negativeCaseIds": [
+        "return-without-gosub"
+      ],
+      "notes": "RUN中のサブルーチンから復帰する。"
+    },
+    {
+      "id": "IF",
+      "keyword": "IF",
+      "category": "control",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "if-then-jump"
+      ],
+      "negativeCaseIds": [
+        "if-rejects-malformed"
+      ],
+      "notes": "IF <expr> THEN <line> の条件分岐。"
+    },
+    {
+      "id": "END",
+      "keyword": "END",
+      "category": "control",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "end-stops-program"
+      ],
+      "negativeCaseIds": [
+        "end-rejects-arguments"
+      ],
+      "notes": "プログラム実行を終了する。"
+    },
+    {
+      "id": "STOP",
+      "keyword": "STOP",
+      "category": "control",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "stop-stops-program"
+      ],
+      "negativeCaseIds": [
+        "stop-rejects-arguments"
+      ],
+      "notes": "プログラム実行を停止する。"
+    },
+    {
+      "id": "CLS",
+      "keyword": "CLS",
+      "category": "display",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "pokecom-basic-samples",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "cls-clears-display"
+      ],
+      "negativeCaseIds": [
+        "cls-rejects-arguments"
+      ],
+      "notes": "マシンアダプタ経由でLCDテキスト層をクリアする。"
+    },
+    {
+      "id": "REM",
+      "keyword": "REM",
+      "category": "program",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "ver0-doc-index",
+        "ver0-js"
+      ],
+      "positiveCaseIds": [
+        "rem-ignored"
+      ],
+      "negativeCaseIds": [
+        "unknown-command"
+      ],
+      "notes": "実行時に無視されるコメント文。"
+    },
+    {
+      "id": "FOR",
+      "keyword": "FOR",
+      "category": "control",
+      "status": "TBD",
+      "confidence": "HYPOTHESIS",
+      "implemented": false,
+      "evidence": [
+        "ver0-doc-index"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "厳密互換拡張向けの実装予定。"
+    },
+    {
+      "id": "NEXT",
+      "keyword": "NEXT",
+      "category": "control",
+      "status": "TBD",
+      "confidence": "HYPOTHESIS",
+      "implemented": false,
+      "evidence": [
+        "ver0-doc-index"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "厳密互換拡張向けの実装予定。"
+    },
+    {
+      "id": "DIM",
+      "keyword": "DIM",
+      "category": "data",
+      "status": "TBD",
+      "confidence": "HYPOTHESIS",
+      "implemented": false,
+      "evidence": [
+        "ver0-doc-index"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "配列サポートは未実装。"
+    },
+    {
+      "id": "DATA",
+      "keyword": "DATA",
+      "category": "data",
+      "status": "TBD",
+      "confidence": "HYPOTHESIS",
+      "implemented": false,
+      "evidence": [
+        "ver0-doc-index"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "DATA/READストリームは未実装。"
+    },
+    {
+      "id": "READ",
+      "keyword": "READ",
+      "category": "data",
+      "status": "TBD",
+      "confidence": "HYPOTHESIS",
+      "implemented": false,
+      "evidence": [
+        "ver0-doc-index"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "DATAストリーム読み出しは未実装。"
+    },
+    {
+      "id": "RESTORE",
+      "keyword": "RESTORE",
+      "category": "data",
+      "status": "TBD",
+      "confidence": "HYPOTHESIS",
+      "implemented": false,
+      "evidence": [
+        "ver0-doc-index"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "DATAポインタ復帰は未実装。"
+    },
+    {
+      "id": "PEEK",
+      "keyword": "PEEK",
+      "category": "machine",
+      "status": "TBD",
+      "confidence": "DERIVED",
+      "implemented": false,
+      "evidence": [
+        "pokecom-basic-samples",
+        "akiyan-g850-tech"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "メモリ参照関数として実装予定。"
+    },
+    {
+      "id": "POKE",
+      "keyword": "POKE",
+      "category": "machine",
+      "status": "TBD",
+      "confidence": "DERIVED",
+      "implemented": false,
+      "evidence": [
+        "pokecom-basic-samples",
+        "akiyan-g850-tech"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "メモリ書き込み命令として実装予定。"
+    },
+    {
+      "id": "INP",
+      "keyword": "INP",
+      "category": "machine",
+      "status": "TBD",
+      "confidence": "DERIVED",
+      "implemented": false,
+      "evidence": [
+        "akiyan-g850-tech",
+        "ver0-doc-index"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "I/Oポート読み取り関数として実装予定。"
+    },
+    {
+      "id": "OUT",
+      "keyword": "OUT",
+      "category": "machine",
+      "status": "TBD",
+      "confidence": "DERIVED",
+      "implemented": false,
+      "evidence": [
+        "pokecom-basic-samples",
+        "akiyan-g850-tech"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "I/Oポート書き込み命令として実装予定。"
+    },
+    {
+      "id": "BEEP",
+      "keyword": "BEEP",
+      "category": "audio",
+      "status": "TBD",
+      "confidence": "HYPOTHESIS",
+      "implemented": false,
+      "evidence": [
+        "ashitani-g850-general"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "音源経路は現スコープ外。"
+    },
+    {
+      "id": "WAIT",
+      "keyword": "WAIT",
+      "category": "machine",
+      "status": "TBD",
+      "confidence": "HYPOTHESIS",
+      "implemented": false,
+      "evidence": [
+        "ver0-doc-index"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "待機タイミング意味論は未実装。"
+    },
+    {
+      "id": "LOCATE",
+      "keyword": "LOCATE",
+      "category": "display",
+      "status": "TBD",
+      "confidence": "HYPOTHESIS",
+      "implemented": false,
+      "evidence": [
+        "ver0-doc-index"
+      ],
+      "positiveCaseIds": [],
+      "negativeCaseIds": [],
+      "notes": "カーソル位置指定命令として実装予定。"
+    }
+  ]
+}

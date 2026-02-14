@@ -1,0 +1,102 @@
+{
+  "cases": [
+    {
+      "id": "new-rejects-arguments",
+      "profile": "public-observed-v1",
+      "commands": ["NEW"],
+      "lines": ["NEW 1"],
+      "expect": {"errorContains": ["SYNTAX"]}
+    },
+    {
+      "id": "list-rejects-arguments",
+      "profile": "public-observed-v1",
+      "commands": ["LIST"],
+      "lines": ["LIST 1"],
+      "expect": {"errorContains": ["SYNTAX"]}
+    },
+    {
+      "id": "run-detects-runaway",
+      "profile": "public-observed-v1",
+      "commands": ["RUN"],
+      "lines": ["10 GOTO 10", "RUN"],
+      "expect": {"errorContains": ["RUNAWAY"]}
+    },
+    {
+      "id": "print-rejects-empty-expression",
+      "profile": "public-observed-v1",
+      "commands": ["PRINT"],
+      "lines": ["PRINT"],
+      "expect": {"errorContains": ["SYNTAX"]}
+    },
+    {
+      "id": "let-rejects-invalid-var",
+      "profile": "public-observed-v1",
+      "commands": ["LET"],
+      "lines": ["LET 1A=10"],
+      "expect": {"errorContains": ["BAD LET"]}
+    },
+    {
+      "id": "input-rejected-in-run",
+      "profile": "public-observed-v1",
+      "commands": ["INPUT"],
+      "lines": ["10 INPUT A", "RUN"],
+      "expect": {"errorContains": ["INPUT IN RUN"]}
+    },
+    {
+      "id": "goto-missing-line",
+      "profile": "public-observed-v1",
+      "commands": ["GOTO"],
+      "lines": ["10 GOTO 999", "RUN"],
+      "expect": {"errorContains": ["NO LINE 999"]}
+    },
+    {
+      "id": "gosub-missing-line",
+      "profile": "public-observed-v1",
+      "commands": ["GOSUB"],
+      "lines": ["10 GOSUB 999", "RUN"],
+      "expect": {"errorContains": ["NO LINE 999"]}
+    },
+    {
+      "id": "return-without-gosub",
+      "profile": "public-observed-v1",
+      "commands": ["RETURN"],
+      "lines": ["10 RETURN", "RUN"],
+      "expect": {"errorContains": ["RETURN W/O GOSUB"]}
+    },
+    {
+      "id": "if-rejects-malformed",
+      "profile": "public-observed-v1",
+      "commands": ["IF"],
+      "lines": ["10 IF A THEN X", "RUN"],
+      "expect": {"errorContains": ["BAD IF"]}
+    },
+    {
+      "id": "end-rejects-arguments",
+      "profile": "public-observed-v1",
+      "commands": ["END"],
+      "lines": ["END 1"],
+      "expect": {"errorContains": ["SYNTAX"]}
+    },
+    {
+      "id": "stop-rejects-arguments",
+      "profile": "public-observed-v1",
+      "commands": ["STOP"],
+      "lines": ["STOP 1"],
+      "expect": {"errorContains": ["SYNTAX"]}
+    },
+    {
+      "id": "cls-rejects-arguments",
+      "profile": "public-observed-v1",
+      "commands": ["CLS"],
+      "lines": ["CLS 1"],
+      "expect": {"errorContains": ["SYNTAX"]}
+    },
+    {
+      "id": "unknown-command",
+      "profile": "public-observed-v1",
+      "commands": ["REM"],
+      "lines": ["FOOBAR"],
+      "expect": {"errorContains": ["SYNTAX"]}
+    }
+  ]
+}

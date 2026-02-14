@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PC-G815 Compatible Z80 Emulator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <h1>PC-G815 Compatible Z80 Emulator</h1>
+        <p>T-state stepped core, matrix keyboard mapping, and Canvas2D LCD renderer.</p>
+      </header>
+
+      <main class="panel-grid">
+        <section class="device-panel">
+          <div class="device-body">
+            <div class="device-top">
+              <span class="brand">SHARP STYLE</span>
+              <span id="boot-status" class="boot-status" role="status" aria-live="polite">BOOTING</span>
+              <span id="speed-indicator">0.00x</span>
+            </div>
+            <div class="lcd-bezel">
+              <canvas id="lcd" width="480" height="128" aria-label="PC-G815 LCD"></canvas>
+            </div>
+            <div class="controls" role="group" aria-label="Emulator controls">
+              <button id="run-toggle" type="button">Stop</button>
+              <button id="step" type="button">Step</button>
+              <button id="reset" type="button">Reset</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="status-panel">
+          <h2>Status</h2>
+          <pre id="debug-view" class="debug-view" hidden></pre>
+          <h3>Input Log</h3>
+          <pre id="log-view" class="log-view"></pre>
+          <h3>Key Matrix Map</h3>
+          <div id="keymap-list" class="keymap-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
