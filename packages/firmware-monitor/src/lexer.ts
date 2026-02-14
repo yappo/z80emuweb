@@ -39,6 +39,7 @@ export type TokenType =
   | 'keyword'
   | 'operator'
   | 'comma'
+  | 'semicolon'
   | 'lparen'
   | 'rparen'
   | 'eof';
@@ -128,6 +129,12 @@ export function tokenizeLine(input: string): Token[] {
 
     if (ch === ',') {
       tokens.push({ type: 'comma', value: ch });
+      index += 1;
+      continue;
+    }
+
+    if (ch === ';') {
+      tokens.push({ type: 'semicolon', value: ch });
       index += 1;
       continue;
     }

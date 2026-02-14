@@ -159,10 +159,36 @@ class Parser {
   }
 
   private parsePrint(): PrintStatement {
-    if (this.peek().type === 'eof') {
-      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    const items: PrintStatement['items'] = [];
+
+    while (this.peek().type !== 'eof') {
+      const expression = this.parseExpression();
+      const item: PrintStatement['items'][number] = { expression };
+      items.push(item);
+
+      if (this.peek().type === 'comma') {
+        this.next();
+        item.separator = 'comma';
+        if (this.peek().type === 'eof') {
+          break;
+        }
+        continue;
+      }
+
+      if (this.peek().type === 'semicolon') {
+        this.next();
+        item.separator = 'semicolon';
+        if (this.peek().type === 'eof') {
+          break;
+        }
+        continue;
+      }
+
+      if (this.peek().type !== 'eof') {
+        throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+      }
     }
-    const items = this.parseCommaSeparated(() => this.parseExpression());
+
     this.expectEof();
     return { kind: 'PRINT', items };
   }
