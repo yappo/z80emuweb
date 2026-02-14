@@ -221,8 +221,8 @@ test('sample game button loads maze code and starts running', async ({ page }) =
 
   await page.getByRole('button', { name: 'Sample Game' }).click();
   await expect(page.locator('#basic-run-status')).toContainText(/Sample game loaded/i, { timeout: 5_000 });
-  await expect(page.locator('#basic-editor')).toHaveValue(/MAZE 4X4/);
-  await expect(page.locator('#basic-editor')).toHaveValue(/KEY\+GOAL/);
+  await expect(page.locator('#basic-editor')).toHaveValue(/MASE 4X4 GAME !/);
+  await expect(page.locator('#basic-editor')).toHaveValue(/OUT 90,80/);
   await expect(page.locator('#basic-editor')).toHaveValue(/OUT 16,7/);
   await expect(page.locator('#basic-editor')).toHaveValue(/OUT 16,6/);
   await expect(page.locator('#basic-editor')).toHaveValue(/CLEAR!/);
