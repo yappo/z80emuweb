@@ -1,27 +1,27 @@
 # PC-G815 BASIC 実装仕様（現行実装）
 
-この文書は、現在の `packages/firmware-monitor/src` 実装を基準にした BASIC 言語仕様です。
+この文書は、現在の `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src` 実装を基準にした BASIC 言語仕様です。
 
 - 対象ランタイム: `PcG815BasicRuntime`
-- 方針: 実装されている挙動を先に明文化し、PC-G815 BASIC 由来の未実装項目を同一文書で管理する
-- 参照データ: `docs/basic-command-manifest.json`
+- 方針: 実装されている挙動を先に明文化し、互換上の近似点も同一文書で管理する
+- 参照データ: `/Users/yappo/Projects/z80emu/docs/basic-command-manifest.json`
 
 ## 1. 実行モデル
 
 ### 1.1 モード
 
 - 即時モード（immediate）
-  - 行頭に行番号がない入力を、その場で実行する
+  - 行頭に行番号がない入力を、その場で実行
 - プログラムモード（program / RUN中）
-  - 行番号付きで保存したプログラム行を `RUN` で順次実行する
+  - 行番号付きで保存したプログラム行を `RUN` で順次実行
 
-### 1.2 行入力の基本ルール
+### 1.2 行入力ルール
 
 - 行番号付き入力: `^<lineNumber>\s*(<statement>)$`
-  - `<statement>` が空なら、その行番号を削除
-  - 空でなければパースに成功したときだけ保存
+  - `<statement>` が空ならその行を削除
+  - 空でなければ構文解析に成功した時だけ保存
 - 行番号なし入力
-  - その場でパース・実行
+  - 即時実行
 - 改行確定
   - `CR` / `LF` で 1 行確定
 - バックスペース
@@ -30,11 +30,11 @@
 ### 1.3 RUN 実行制約
 
 - プログラム行は行番号昇順で実行
-- `GOTO/GOSUB/IF THEN` は行番号→実行インデックス表で解決
+- `GOTO/GOSUB/IF THEN` は行番号→実行インデックスで解決
 - `maxSteps` 既定値は `10_000`
   - 超過時は `RUNAWAY` エラー
 
-## 2. 字句と文法
+## 2. 字句と式
 
 ### 2.1 トークン
 
@@ -44,12 +44,7 @@
 - 演算子: `+ - * / = <> < <= > >=`
 - 記号: `, ( )`
 
-### 2.2 識別子
-
-- 内部では大文字に正規化
-- 変数は数値変数のみ（文字列変数・配列は未実装）
-
-### 2.3 式
+### 2.2 式
 
 - 優先順位
   - 比較演算
@@ -62,129 +57,107 @@
   - 偽: `0`
 - 数値演算
   - すべて整数化（`Math.trunc`）
-  - 0除算は `0` を返す
+  - 0除算は `0`
 
-## 3. 実装済みコマンド（14件）
+### 2.3 配列と関数式
 
-実装済み一覧: `NEW, LIST, RUN, PRINT, LET, INPUT, GOTO, GOSUB, RETURN, IF, END, STOP, CLS, REM`
+- `DIM` で配列宣言（下限 `0`、上限は指定値）
+- 配列参照: `A(1)` / `A(1,2)`
+- 式中関数
+  - `INP(port)`
+  - `PEEK(address[,bank])`（`bank` は受理するが現状は無視）
 
-| コマンド | 構文 | 実行モード | 概要 |
-|---|---|---|---|
-| `NEW` | `NEW` | 即時のみ | 保存プログラムと変数をクリアし `OK` を返す |
-| `LIST` | `LIST` | 即時のみ | 保存済み行を行番号昇順で表示 |
-| `RUN` | `RUN` | 即時のみ | 保存プログラムを実行 |
-| `PRINT` | `PRINT <expr>[, <expr> ...]` | 即時/プログラム | 式列を評価して空白区切りで出力 |
-| `LET` | `LET <var>=<expr>` | 即時/プログラム | 数値変数へ代入 |
-| `LET` 省略形 | `<var>=<expr>` | 即時/プログラム | `LET` と同じ |
-| `INPUT` | `INPUT <var>` | 即時のみ | `? ` を表示して 1 行入力を数値代入 |
-| `GOTO` | `GOTO <line>` | プログラムのみ | 指定行へ無条件分岐 |
-| `GOSUB` | `GOSUB <line>` | プログラムのみ | 復帰先を積んで指定行へ分岐 |
-| `RETURN` | `RETURN` | プログラムのみ | `GOSUB` の復帰先へ戻る |
-| `IF` | `IF <expr> THEN <line>` | プログラムのみ | 条件が非0なら指定行へ分岐 |
-| `END` | `END` | プログラムのみ | RUNを終了 |
-| `STOP` | `STOP` | プログラムのみ | RUNを終了 |
-| `CLS` | `CLS` | 即時/プログラム | マシンアダプタ経由で表示クリア |
-| `REM` | `REM <text>` | 即時/プログラム | コメントとして無視 |
+## 3. 実装済みコマンド（27件）
 
-## 4. 実装上の重要仕様
+実装済み一覧:
 
-### 4.1 `PRINT`
+`NEW, LIST, RUN, PRINT, LET, INPUT, GOTO, GOSUB, RETURN, IF, END, STOP, CLS, REM, FOR, NEXT, DIM, DATA, READ, RESTORE, PEEK, POKE, INP, OUT, BEEP, WAIT, LOCATE`
 
-- カンマ区切りの各式を評価し、結果を空白 1 個で連結して出力
-- 文字列式と数値式を混在可能
+## 4. 命令仕様（主要）
 
-### 4.2 `INPUT`
+### 4.1 制御
 
-- RUN中の `INPUT` は非対応（`INPUT IN RUN`）
-- 入力行は `parseInt` で整数化
-  - 数値でない場合は `0`
+- `FOR v=s TO e [STEP d]`
+  - `STEP` 省略時 `1`
+  - `STEP 0` は `1` として扱う
+- `NEXT [v]`
+  - 対応する `FOR` が無い場合は `SYNTAX`
+- `IF <expr> THEN <line>`
+  - 条件が非0なら分岐
 
-### 4.3 `IF`
+### 4.2 データ
 
-- 構文は `IF <expr> THEN <line>` のみ
-- THEN の後ろは行番号のみ受理
+- `DIM A(n[,m...])`
+  - 要素数は各次元で `指定値+1`
+- `DATA expr[,expr...]`
+  - 実行時は no-op、`RUN` 前処理でデータプール化
+- `READ target[,target...]`
+  - データプールから順次読み出し
+  - 枯渇時は `SYNTAX`
+- `RESTORE [line]`
+  - 無引数: 先頭へ戻す
+  - 引数あり: 指定行以降の最初の `DATA` 位置へ
 
-### 4.4 変数
+### 4.3 マシンI/O
 
-- 未定義変数参照は `0`
-- 変数スコープはランタイム全体（グローバル）
+- `OUT port,value`
+  - `machineAdapter.out8` を使用
+- `INP(port)`
+  - `machineAdapter.in8` を使用、未接続時 `0xFF`
+- `POKE address,value`
+  - `machineAdapter.poke8` を使用
+- `PEEK(address[,bank])`
+  - `machineAdapter.peek8` を使用、未接続時 `0xFF`
+
+### 4.4 画面・待機・音
+
+- `LOCATE x[,y[,z]]`
+  - `x,y` でカーソル移動（`machineAdapter.setTextCursor`）
+  - `z` は受理するが現状は近似実装として無視
+- `WAIT [n]`
+  - `WAIT n`: `n/64` 秒待機（`n<=0` は即時）
+  - `WAIT` 無引数: 1 秒待機（キー待ち代替）
+- `BEEP [j[,k[,n]]]`
+  - 音は出さない（サウンドデバイス未実装）
+  - 待機秒数は `0.125*(n+1)*j` を計算し、`1..3` 秒に clamp して待機
+  - `k` は受理のみ（現状は待機計算に未使用）
 
 ## 5. エラー表示
 
-### 5.1 表示文言フォーマット
+### 5.1 表示形式
 
-- 表示形式は `ERR <message> (<numericCode>)`
-- 例:
-  - `ERR SYNTAX (E01)`
-  - `ERR NO LINE 999 (E06)`
+- `ERR <message> (<numericCode>)`
 
-### 5.2 実運用コード（ACTIVE）
+### 5.2 ACTIVE コード
 
-| numericCode | message | runtimeCode |
-|---|---|---|
-| `E01` | `SYNTAX` | `SYNTAX` |
-| `E02` | `BAD LINE` | `BAD_LINE` |
-| `E03` | `BAD VAR` | `BAD_VAR` |
-| `E04` | `BAD LET` | `BAD_LET` |
-| `E05` | `BAD IF` | `BAD_IF` |
-| `E06` | `NO LINE` / `NO LINE <line>` | `NO_LINE` |
-| `E07` | `RUNAWAY` | `RUNAWAY` |
-| `E08` | `INPUT IN RUN` | `INPUT_IN_RUN` |
-| `E09` | `RETURN W/O GOSUB` | `RETURN_WO_GOSUB` |
-| `E10` | `BAD STMT` | `BAD_STMT` |
-| `E99` | `UNKNOWN` | フォールバック |
+- `E01 SYNTAX`
+- `E02 BAD LINE`
+- `E03 BAD VAR`
+- `E04 BAD LET`
+- `E05 BAD IF`
+- `E06 NO LINE`
+- `E07 RUNAWAY`
+- `E08 INPUT IN RUN`
+- `E09 RETURN W/O GOSUB`
+- `E10 BAD STMT`
+- `E99 UNKNOWN`
 
-### 5.3 予約コード（RESERVED）
+### 5.3 RESERVED コード
 
-未実装命令向けの予約コード（現時点では出力しない）:
+実装済みとなったため、`E41..E53` は予約コードとして維持しつつ、現在は通常動作でこれらを出力しません。
 
-- `E41 FOR`
-- `E42 NEXT`
-- `E43 DIM`
-- `E44 DATA`
-- `E45 READ`
-- `E46 RESTORE`
-- `E47 PEEK`
-- `E48 POKE`
-- `E49 INP`
-- `E50 OUT`
-- `E51 BEEP`
-- `E52 WAIT`
-- `E53 LOCATE`
+## 6. 既知の近似仕様
 
-## 6. PC-G815 BASIC 由来の未実装一覧（同一管理）
+- `WAIT` 無引数は実機のキー待ちではなく 1 秒待機
+- `LOCATE` 第3引数 `z` は受理のみ
+- `PEEK` 第2引数 `bank` は受理のみ
+- `BEEP` は無音待機のみ
 
-以下は `docs/basic-command-manifest.json` で `implemented=false` の項目です。
+## 7. 参照ファイル
 
-| コマンド | カテゴリ | 現状 |
-|---|---|---|
-| `FOR` | control | 未実装 |
-| `NEXT` | control | 未実装 |
-| `DIM` | data | 未実装 |
-| `DATA` | data | 未実装 |
-| `READ` | data | 未実装 |
-| `RESTORE` | data | 未実装 |
-| `PEEK` | machine | 未実装 |
-| `POKE` | machine | 未実装 |
-| `INP` | machine | 未実装 |
-| `OUT` | machine | 未実装 |
-| `BEEP` | audio | 未実装 |
-| `WAIT` | machine | 未実装 |
-| `LOCATE` | display | 未実装 |
-
-## 7. 未実装に伴う言語制限
-
-- ループ制御（`FOR/NEXT`）は使えない
-- 配列・データ文（`DIM/DATA/READ/RESTORE`）は使えない
-- 低レベル機械操作（`PEEK/POKE/INP/OUT/WAIT`）は使えない
-- 音関連（`BEEP`）は使えない
-- カーソル位置制御（`LOCATE`）は使えない
-
-## 8. 参照ファイル
-
-- `packages/firmware-monitor/src/command-registry.ts`
-- `packages/firmware-monitor/src/parser.ts`
-- `packages/firmware-monitor/src/lexer.ts`
-- `packages/firmware-monitor/src/runtime.ts`
-- `packages/firmware-monitor/src/semantics.ts`
-- `docs/basic-command-manifest.json`
+- `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src/ast.ts`
+- `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src/parser.ts`
+- `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src/semantics.ts`
+- `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src/runtime.ts`
+- `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src/types.ts`
+- `/Users/yappo/Projects/z80emu/docs/basic-command-manifest.json`

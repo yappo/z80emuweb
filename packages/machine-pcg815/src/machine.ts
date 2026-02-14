@@ -834,10 +834,23 @@ export class PCG815Machine implements MachinePCG815, Bus {
         this.mainRam[offset] = line & 0x1f;
         this.dirtyFrame = true;
       },
+      setTextCursor: (col: number, row: number) => {
+        const safeCol = Math.max(0, Math.min(LCD_COLS - 1, col | 0));
+        const safeRow = Math.max(0, Math.min(LCD_ROWS - 1, row | 0));
+        this.lcdCursor = safeRow * LCD_COLS + safeCol;
+      },
       getDisplayStartLine: () => this.getDisplayStartLine(),
       readKeyMatrix: (row: number) => this.keyboardRows[row & 0x07] ?? 0xff,
       in8: (port: number) => this.in8(port),
-      out8: (port: number, value: number) => this.out8(port, value)
+      out8: (port: number, value: number) => this.out8(port, value),
+      peek8: (address: number) => this.read8(address),
+      poke8: (address: number, value: number) => this.write8(address, value),
+      sleepMs: (ms: number) => {
+        const deadline = Date.now() + Math.max(0, Math.trunc(ms));
+        while (Date.now() < deadline) {
+          // 同期待機で BEEP/WAIT の体感を再現する。
+        }
+      }
     };
   }
 }

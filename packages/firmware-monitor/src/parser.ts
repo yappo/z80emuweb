@@ -1,32 +1,47 @@
 import type {
+  ArrayElementReference,
+  ArrayElementTarget,
+  AssignmentTarget,
+  BeepStatement,
   BinaryExpression,
   ClsStatement,
+  DataStatement,
+  DimStatement,
   EmptyStatement,
   EndStatement,
   ExpressionNode,
+  ForStatement,
   GosubStatement,
   GotoStatement,
   IfStatement,
+  InpCallExpression,
   InputStatement,
   LetStatement,
   ListStatement,
+  LocateStatement,
   NewStatement,
+  NextStatement,
+  OutStatement,
+  PeekCallExpression,
+  PokeStatement,
   PrintStatement,
+  ReadStatement,
   RemStatement,
+  RestoreStatement,
   ReturnStatement,
   RunStatement,
+  ScalarTarget,
   StatementNode,
-  StopStatement
+  StopStatement,
+  WaitStatement
 } from './ast';
 import { BasicRuntimeError } from './errors';
 import { isIdentifier, normalizeIdentifier, tokenizeLine, type Token } from './lexer';
 
-// トークン文字列を整数へ変換する補助。
 function toInt(text: string): number {
   return Number.parseInt(text, 10);
 }
 
-// 1 行分の BASIC 文パーサ。
 class Parser {
   private readonly tokens: Token[];
 
@@ -41,7 +56,6 @@ class Parser {
       return { kind: 'EMPTY' } satisfies EmptyStatement;
     }
 
-    // キーワード先頭の構文を優先して分岐する。
     const first = this.peek();
     if (first.type === 'keyword') {
       switch (first.value) {
@@ -96,17 +110,49 @@ class Parser {
           const text = this.collectRemainder();
           return { kind: 'REM', text } satisfies RemStatement;
         }
+        case 'FOR':
+          this.next();
+          return this.parseFor();
+        case 'NEXT':
+          this.next();
+          return this.parseNext();
+        case 'DIM':
+          this.next();
+          return this.parseDim();
+        case 'DATA':
+          this.next();
+          return this.parseData();
+        case 'READ':
+          this.next();
+          return this.parseRead();
+        case 'RESTORE':
+          this.next();
+          return this.parseRestore();
+        case 'POKE':
+          this.next();
+          return this.parsePoke();
+        case 'OUT':
+          this.next();
+          return this.parseOut();
+        case 'BEEP':
+          this.next();
+          return this.parseBeep();
+        case 'WAIT':
+          this.next();
+          return this.parseWait();
+        case 'LOCATE':
+          this.next();
+          return this.parseLocate();
         default:
           throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
       }
     }
 
     if (first.type === 'identifier') {
-      const second = this.tokens[this.index + 1];
-      if (second?.type === 'operator' && second.value === '=') {
-        return this.parseLet();
+      if (!this.isLetShorthandStart()) {
+        throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
       }
-      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+      return this.parseLet();
     }
 
     throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
@@ -116,34 +162,13 @@ class Parser {
     if (this.peek().type === 'eof') {
       throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
     }
-
-    const items: ExpressionNode[] = [];
-    while (this.peek().type !== 'eof') {
-      items.push(this.parseExpression());
-      if (this.peek().type === 'comma') {
-        this.next();
-        continue;
-      }
-      break;
-    }
-
+    const items = this.parseCommaSeparated(() => this.parseExpression());
     this.expectEof();
-
-    if (items.length === 0) {
-      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
-    }
-
-    return {
-      kind: 'PRINT',
-      items
-    };
+    return { kind: 'PRINT', items };
   }
 
   private parseLet(): LetStatement {
-    const varToken = this.next();
-    if (varToken.type !== 'identifier' || !isIdentifier(varToken.value)) {
-      throw new BasicRuntimeError('BAD_LET', 'BAD LET');
-    }
+    const target = this.parseAssignmentTarget();
 
     const op = this.next();
     if (op.type !== 'operator' || op.value !== '=') {
@@ -155,7 +180,7 @@ class Parser {
 
     return {
       kind: 'LET',
-      variable: normalizeIdentifier(varToken.value),
+      target,
       expression
     };
   }
@@ -178,12 +203,8 @@ class Parser {
     if (token.type !== 'number') {
       throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
     }
-
     this.expectEof();
-    return {
-      kind: 'GOTO',
-      targetLine: toInt(token.value)
-    };
+    return { kind: 'GOTO', targetLine: toInt(token.value) };
   }
 
   private parseGosub(): GosubStatement {
@@ -191,16 +212,11 @@ class Parser {
     if (token.type !== 'number') {
       throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
     }
-
     this.expectEof();
-    return {
-      kind: 'GOSUB',
-      targetLine: toInt(token.value)
-    };
+    return { kind: 'GOSUB', targetLine: toInt(token.value) };
   }
 
   private parseIf(): IfStatement {
-    // IF 式部は THEN までを別トークン列として再パースする。
     const condition = this.parseExpressionUntilThen();
 
     const thenToken = this.next();
@@ -214,11 +230,189 @@ class Parser {
     }
 
     this.expectEof();
+    return { kind: 'IF', condition, targetLine: toInt(target.value) };
+  }
+
+  private parseFor(): ForStatement {
+    const variableToken = this.next();
+    if (variableToken.type !== 'identifier' || !isIdentifier(variableToken.value)) {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+
+    const assign = this.next();
+    if (assign.type !== 'operator' || assign.value !== '=') {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+
+    const start = this.parseExpression();
+    const toKeyword = this.next();
+    if (toKeyword.type !== 'keyword' || toKeyword.value !== 'TO') {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+
+    const end = this.parseExpression();
+    let step: ExpressionNode | undefined;
+
+    if (this.peek().type === 'keyword' && this.peek().value === 'STEP') {
+      this.next();
+      step = this.parseExpression();
+    }
+
+    this.expectEof();
     return {
-      kind: 'IF',
-      condition,
-      targetLine: toInt(target.value)
+      kind: 'FOR',
+      variable: normalizeIdentifier(variableToken.value),
+      start,
+      end,
+      step
     };
+  }
+
+  private parseNext(): NextStatement {
+    if (this.peek().type === 'eof') {
+      return { kind: 'NEXT' };
+    }
+
+    const variable = this.next();
+    if (variable.type !== 'identifier' || !isIdentifier(variable.value)) {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+    this.expectEof();
+    return { kind: 'NEXT', variable: normalizeIdentifier(variable.value) };
+  }
+
+  private parseDim(): DimStatement {
+    const declarations = this.parseCommaSeparated(() => {
+      const token = this.next();
+      if (token.type !== 'identifier' || !isIdentifier(token.value)) {
+        throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+      }
+      const dimensions = this.parseRequiredArgumentList();
+      return {
+        name: normalizeIdentifier(token.value),
+        dimensions
+      };
+    });
+    this.expectEof();
+    return { kind: 'DIM', declarations };
+  }
+
+  private parseData(): DataStatement {
+    const items = this.parseCommaSeparated(() => this.parseExpression());
+    this.expectEof();
+    return { kind: 'DATA', items };
+  }
+
+  private parseRead(): ReadStatement {
+    const targets = this.parseCommaSeparated(() => this.parseAssignmentTarget());
+    this.expectEof();
+    return { kind: 'READ', targets };
+  }
+
+  private parseRestore(): RestoreStatement {
+    if (this.peek().type === 'eof') {
+      return { kind: 'RESTORE' };
+    }
+
+    const target = this.next();
+    if (target.type !== 'number') {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+    this.expectEof();
+    return { kind: 'RESTORE', line: toInt(target.value) };
+  }
+
+  private parsePoke(): PokeStatement {
+    const address = this.parseExpression();
+    this.expectComma();
+    const value = this.parseExpression();
+    this.expectEof();
+    return { kind: 'POKE', address, value };
+  }
+
+  private parseOut(): OutStatement {
+    const port = this.parseExpression();
+    this.expectComma();
+    const value = this.parseExpression();
+    this.expectEof();
+    return { kind: 'OUT', port, value };
+  }
+
+  private parseBeep(): BeepStatement {
+    if (this.peek().type === 'eof') {
+      return { kind: 'BEEP' };
+    }
+
+    const args = this.parseCommaSeparated(() => this.parseExpression());
+    if (args.length > 3) {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+    this.expectEof();
+    return {
+      kind: 'BEEP',
+      j: args[0],
+      k: args[1],
+      n: args[2]
+    };
+  }
+
+  private parseWait(): WaitStatement {
+    if (this.peek().type === 'eof') {
+      return { kind: 'WAIT' };
+    }
+
+    const duration = this.parseExpression();
+    this.expectEof();
+    return { kind: 'WAIT', duration };
+  }
+
+  private parseLocate(): LocateStatement {
+    const args = this.parseCommaSeparated(() => this.parseExpression());
+    if (args.length < 1 || args.length > 3) {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+    this.expectEof();
+    return {
+      kind: 'LOCATE',
+      x: args[0] as ExpressionNode,
+      y: args[1],
+      z: args[2]
+    };
+  }
+
+  private parseAssignmentTarget(): AssignmentTarget {
+    const varToken = this.next();
+    if (varToken.type !== 'identifier' || !isIdentifier(varToken.value)) {
+      throw new BasicRuntimeError('BAD_LET', 'BAD LET');
+    }
+
+    const name = normalizeIdentifier(varToken.value);
+    if (this.peek().type !== 'lparen') {
+      return { kind: 'scalar-target', name } satisfies ScalarTarget;
+    }
+
+    const indices = this.parseRequiredArgumentList();
+    return { kind: 'array-element-target', name, indices } satisfies ArrayElementTarget;
+  }
+
+  private parseRequiredArgumentList(): ExpressionNode[] {
+    this.expectLparen();
+    if (this.peek().type === 'rparen') {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+
+    const args: ExpressionNode[] = [];
+    while (true) {
+      args.push(this.parseExpression());
+      if (this.peek().type === 'comma') {
+        this.next();
+        continue;
+      }
+      break;
+    }
+
+    this.expectRparen();
+    return args;
   }
 
   private parseExpressionUntilThen(): ExpressionNode {
@@ -231,6 +425,7 @@ class Parser {
       if (!token) {
         break;
       }
+
       if (token.type === 'lparen') {
         depth += 1;
       } else if (token.type === 'rparen') {
@@ -244,7 +439,6 @@ class Parser {
       if (token.type === 'eof') {
         break;
       }
-
       cursor += 1;
     }
 
@@ -269,7 +463,6 @@ class Parser {
     return this.parseComparison();
   }
 
-  // 比較 > 加減算 > 乗除算 > 単項 > primary の優先順位で再帰下降する。
   private parseComparison(): ExpressionNode {
     let node = this.parseAddSub();
 
@@ -350,36 +543,103 @@ class Parser {
     const token = this.next();
 
     if (token.type === 'number') {
-      return {
-        kind: 'number-literal',
-        value: toInt(token.value)
-      };
+      return { kind: 'number-literal', value: toInt(token.value) };
     }
 
     if (token.type === 'string') {
-      return {
-        kind: 'string-literal',
-        value: token.value
-      };
+      return { kind: 'string-literal', value: token.value };
     }
 
     if (token.type === 'identifier') {
+      const name = normalizeIdentifier(token.value);
+      if (this.peek().type !== 'lparen') {
+        return { kind: 'variable-reference', name };
+      }
+
+      const indices = this.parseRequiredArgumentList();
       return {
-        kind: 'variable-reference',
-        name: normalizeIdentifier(token.value)
-      };
+        kind: 'array-element-reference',
+        name,
+        indices
+      } satisfies ArrayElementReference;
+    }
+
+    if (token.type === 'keyword' && (token.value === 'INP' || token.value === 'PEEK')) {
+      const args = this.parseRequiredArgumentList();
+      if (token.value === 'INP') {
+        if (args.length !== 1) {
+          throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+        }
+        return {
+          kind: 'inp-call-expression',
+          port: args[0] as ExpressionNode
+        } satisfies InpCallExpression;
+      }
+
+      if (args.length !== 1 && args.length !== 2) {
+        throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+      }
+      return {
+        kind: 'peek-call-expression',
+        address: args[0] as ExpressionNode,
+        bank: args[1]
+      } satisfies PeekCallExpression;
     }
 
     if (token.type === 'lparen') {
       const expr = this.parseExpression();
-      const close = this.next();
-      if (close.type !== 'rparen') {
-        throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
-      }
+      this.expectRparen();
       return expr;
     }
 
     throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+  }
+
+  private parseCommaSeparated<T>(parseItem: () => T): T[] {
+    const items: T[] = [parseItem()];
+    while (this.peek().type === 'comma') {
+      this.next();
+      items.push(parseItem());
+    }
+    return items;
+  }
+
+  private isLetShorthandStart(): boolean {
+    const second = this.tokens[this.index + 1];
+    if (!second) {
+      return false;
+    }
+
+    if (second.type === 'operator' && second.value === '=') {
+      return true;
+    }
+
+    if (second.type !== 'lparen') {
+      return false;
+    }
+
+    let cursor = this.index + 1;
+    let depth = 0;
+    while (cursor < this.tokens.length) {
+      const token = this.tokens[cursor];
+      if (!token) {
+        return false;
+      }
+      if (token.type === 'lparen') {
+        depth += 1;
+      } else if (token.type === 'rparen') {
+        depth -= 1;
+        if (depth === 0) {
+          const nextToken = this.tokens[cursor + 1];
+          return nextToken?.type === 'operator' && nextToken.value === '=';
+        }
+      } else if (token.type === 'eof') {
+        return false;
+      }
+      cursor += 1;
+    }
+
+    return false;
   }
 
   private collectRemainder(): string {
@@ -396,8 +656,28 @@ class Parser {
   }
 
   private expectEof(): void {
-    const token = this.peek();
-    if (token.type !== 'eof') {
+    if (this.peek().type !== 'eof') {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+  }
+
+  private expectComma(): void {
+    const token = this.next();
+    if (token.type !== 'comma') {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+  }
+
+  private expectLparen(): void {
+    const token = this.next();
+    if (token.type !== 'lparen') {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+  }
+
+  private expectRparen(): void {
+    const token = this.next();
+    if (token.type !== 'rparen') {
       throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
     }
   }
@@ -414,7 +694,6 @@ class Parser {
 }
 
 export function parseStatement(input: string): StatementNode {
-  // 字句解析と構文解析を一体化した公開 API。
   const parser = new Parser(tokenizeLine(input));
   return parser.parseStatement();
 }

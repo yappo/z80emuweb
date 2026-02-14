@@ -112,7 +112,7 @@ describe('PcG815BasicRuntime', () => {
     expect(report.totalCommands).toBeGreaterThan(0);
     expect(report.lockedCommands).toBeGreaterThan(0);
     expect(report.lockedUnimplemented).toEqual([]);
-    expect(report.tbdCommands.length).toBeGreaterThan(0);
+    expect(report.tbdCommands.length).toBe(0);
   });
 
   it('maintains character I/O mode via MonitorRuntime alias', () => {
@@ -134,5 +134,104 @@ describe('PcG815BasicRuntime', () => {
 
     expect(runtime.popOutputChar()).toBe(0xbb);
     expect(runtime.popOutputChar()).toBe(0xb1);
+  });
+
+  it('supports FOR/NEXT loops with positive and negative STEP', () => {
+    const runtime = new PcG815BasicRuntime();
+
+    const output = executeLines(runtime, [
+      '10 FOR I=1 TO 3',
+      '20 PRINT I',
+      '30 NEXT I',
+      '40 FOR J=3 TO 1 STEP -1',
+      '50 PRINT J',
+      '60 NEXT J',
+      'RUN'
+    ]);
+
+    expect(output).toContain('1');
+    expect(output).toContain('2');
+    expect(output).toContain('3');
+  });
+
+  it('supports DIM with array assignment and reference', () => {
+    const runtime = new PcG815BasicRuntime();
+
+    const output = executeLines(runtime, ['DIM A(2)', 'A(1)=7', 'PRINT A(1)']);
+
+    expect(output).toContain('7');
+  });
+
+  it('supports DATA/READ/RESTORE stream', () => {
+    const runtime = new PcG815BasicRuntime();
+
+    const output = executeLines(runtime, [
+      '10 DATA 5,6',
+      '20 READ A,B',
+      '30 PRINT A,B',
+      '40 RESTORE',
+      '50 READ C',
+      '60 PRINT C',
+      'RUN'
+    ]);
+
+    expect(output).toContain('5 6');
+    expect(output).toContain('5');
+  });
+
+  it('supports INP/OUT and PEEK/POKE via machine adapter', () => {
+    const ports = new Map<number, number>();
+    const memory = new Map<number, number>();
+    const runtime = new PcG815BasicRuntime({
+      machineAdapter: {
+        in8: (port) => ports.get(port & 0xff) ?? 0xff,
+        out8: (port, value) => {
+          ports.set(port & 0xff, value & 0xff);
+        },
+        peek8: (address) => memory.get(address & 0xffff) ?? 0xff,
+        poke8: (address, value) => {
+          memory.set(address & 0xffff, value & 0xff);
+        }
+      }
+    });
+
+    const output = executeLines(runtime, ['OUT 16,99', 'PRINT INP(16)', 'POKE 100,42', 'PRINT PEEK(100)']);
+
+    expect(output).toContain('99');
+    expect(output).toContain('42');
+  });
+
+  it('uses sleep adapter for WAIT and BEEP', () => {
+    const sleeps: number[] = [];
+    const runtime = new PcG815BasicRuntime({
+      machineAdapter: {
+        sleepMs: (ms) => {
+          sleeps.push(ms);
+        }
+      }
+    });
+
+    executeLines(runtime, ['WAIT 64', 'WAIT', 'BEEP 8,1,0']);
+
+    expect(sleeps.length).toBe(3);
+    expect(sleeps[0]).toBe(1000);
+    expect(sleeps[1]).toBe(1000);
+    expect(sleeps[2]).toBeGreaterThanOrEqual(1000);
+    expect(sleeps[2]).toBeLessThanOrEqual(3000);
+  });
+
+  it('supports LOCATE via machine adapter cursor API', () => {
+    const positions: Array<[number, number]> = [];
+    const runtime = new PcG815BasicRuntime({
+      machineAdapter: {
+        setTextCursor: (col, row) => {
+          positions.push([col, row]);
+        }
+      }
+    });
+
+    executeLines(runtime, ['LOCATE 5,2,1']);
+
+    expect(positions).toEqual([[5, 2]]);
   });
 });
