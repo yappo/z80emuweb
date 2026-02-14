@@ -62,3 +62,7 @@ npm run test:compat
 1. `main` へ push する
 2. リポジトリ設定で Pages のソースに GitHub Actions を指定する
 3. `Deploy Pages` ワークフローが `apps/web/dist` を静的サイトとして公開する
+
+公開URL:
+
+- <https://yappo.github.io/z80emuweb/>
