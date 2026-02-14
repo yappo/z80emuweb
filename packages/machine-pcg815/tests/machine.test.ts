@@ -275,6 +275,17 @@ describe('PCG815Machine', () => {
     expect(String.fromCharCode(code)).toBe('P');
   });
 
+  it('generates lowercase letters when SHIFT is pressed with A-Z keys', () => {
+    const machine = new PCG815Machine();
+
+    machine.setKeyState('ShiftLeft', true);
+    machine.setKeyState('KeyA', true);
+    machine.setKeyState('KeyA', false);
+    machine.setKeyState('ShiftLeft', false);
+
+    expect(machine.in8(0x12)).toBe('a'.charCodeAt(0));
+  });
+
   it('generates ASCII queue from extended key codes (JIS + numpad)', () => {
     const machine = new PCG815Machine();
 
