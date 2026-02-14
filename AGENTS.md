@@ -6,9 +6,8 @@
    - git commit が必要なタスクの場合は、着手確定後に **1タスク = 1ブランチ = 1PR**（`codex/<topic>`）で進めます（例: `git checkout -b codex/fix-mergepos-missing-d`）。
    - タスクの内容が調査のみでコードやファイルの変更や git commit が不要なタスクだと判断したら、ブランチ作成は不要です
 4. タスクの内容を実装し、実装後のローカル確認は最低限以下を実行します。
-   - `cmake --build build -j`
-   - `ctest --test-dir build --output-on-failure`
-   - 必要に応じて不具合再現/修正確認コマンド（CLI/HTTPなど）を実行して正常に動作することを確認する
+   - test を必ず実施
+   - 必要に応じて不具合再現/修正確認コマンドを実行して正常に動作することを確認する
 5. コミットメッセージは `type: summary` 形式（英語・命令形）を必須とします。`type` は `fix|refactor|test|docs|chore`。例: `fix: validate required -d option in mergepos`
 6. PRは `gh` コマンドで作成し、本文は次のテンプレートを必須とします。
    - `gh pr create --base master --head <branch> --title \"<title>\" --body-file <file>`
