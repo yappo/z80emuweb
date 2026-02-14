@@ -383,6 +383,9 @@ export class PCG815Machine implements MachinePCG815, Bus {
     if (shiftActive && shifted !== undefined) {
       return shifted & 0xff;
     }
+    if (shiftActive && normal >= 0x41 && normal <= 0x5a) {
+      return (normal + 0x20) & 0xff;
+    }
     return normal & 0xff;
   }
 
