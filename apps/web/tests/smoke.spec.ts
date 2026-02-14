@@ -185,3 +185,26 @@ test('strict URL parameter enables strict boot mode diagnostics', async ({ page 
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
   await expect(page.locator('#boot-status')).toContainText(/strict=1/i);
 });
+
+test('kana mode renders half-width katakana on LCD', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('button', { name: /かな OFF/i }).click();
+  await expect(page.getByRole('button', { name: /かな ON/i })).toBeVisible();
+
+  await page.keyboard.press('KeyS');
+  await page.keyboard.press('KeyA');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          const lines = api.__pcg815?.getTextLines() ?? [];
+          return lines.some((line) => [...line].some((ch) => ch.charCodeAt(0) === 0xbb));
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toBe(true);
+});

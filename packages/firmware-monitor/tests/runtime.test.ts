@@ -111,4 +111,14 @@ describe('PcG815BasicRuntime', () => {
     expect(output).toContain('LET A=10');
     expect(output).toContain('10');
   });
+
+  it('echoes half-width kana bytes from keyboard input', () => {
+    const runtime = new MonitorRuntime();
+
+    runtime.receiveChar(0xbb); // ｻ
+    runtime.receiveChar(0xb1); // ｱ
+
+    expect(runtime.popOutputChar()).toBe(0xbb);
+    expect(runtime.popOutputChar()).toBe(0xb1);
+  });
 });

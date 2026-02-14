@@ -308,6 +308,29 @@ describe('PCG815Machine', () => {
     expect(machine.in8(0x12)).toBe(0xac); // ｬ
   });
 
+  it('passes kana bytes through keyboard fifo -> runtime -> lcd path', () => {
+    const machine = new PCG815Machine();
+    machine.setKanaMode(true);
+
+    machine.setKeyState('KeyS', true);
+    machine.setKeyState('KeyS', false);
+    machine.setKeyState('KeyA', true);
+    machine.setKeyState('KeyA', false);
+
+    const keyboardCode = machine.in8(0x12);
+    expect(keyboardCode).toBe(0xbb);
+
+    machine.out8(0x1c, keyboardCode);
+    const runtimeEchoCode = machine.in8(0x1d);
+    expect(runtimeEchoCode).toBe(0xbb);
+
+    machine.out8(0x5a, runtimeEchoCode);
+
+    const lines = machine.getTextLines();
+    const hasSa = lines.some((line) => [...line].some((ch) => ch.charCodeAt(0) === 0xbb));
+    expect(hasSa).toBe(true);
+  });
+
   it('handles sokuon and n conversion in romaji kana mode', () => {
     const machine = new PCG815Machine();
     machine.setKanaMode(true);
