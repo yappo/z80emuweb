@@ -13,6 +13,8 @@ import type { Bus, Cpu, CpuRegisters, CpuState, InterruptMode } from './types';
 
 type IndexMode = 'HL' | 'IX' | 'IY';
 type TStateOp = () => void;
+type RotateOp = 'RLC' | 'RL' | 'RRC' | 'RR' | 'SLA' | 'SRA' | 'SLL' | 'SRL';
+type Alu8Op = 'ADD' | 'ADC' | 'SUB' | 'SBC' | 'AND' | 'XOR' | 'OR' | 'CP';
 
 export interface Z80CpuOptions {
   strictUnsupportedOpcodes?: boolean;
@@ -726,13 +728,7 @@ export class Z80Cpu implements Cpu {
       const before = this.getRegByCode(regCode, indexMode);
       const after = clamp8(before + 1);
       this.setRegByCode(regCode, after, indexMode);
-      this.regs.f =
-        (this.regs.f & FLAG_C) |
-        (after & (FLAG_X | FLAG_Y)) |
-        (after === 0 ? FLAG_Z : 0) |
-        (after & 0x80 ? FLAG_S : 0) |
-        (before === 0x7f ? FLAG_PV : 0) |
-        ((before & 0x0f) === 0x0f ? FLAG_H : 0);
+      this.updateFlagsForIncDec(before, after, false);
     });
   }
 
@@ -748,14 +744,7 @@ export class Z80Cpu implements Cpu {
       const before = this.getRegByCode(regCode, indexMode);
       const after = clamp8(before - 1);
       this.setRegByCode(regCode, after, indexMode);
-      this.regs.f =
-        (this.regs.f & FLAG_C) |
-        FLAG_N |
-        (after & (FLAG_X | FLAG_Y)) |
-        (after === 0 ? FLAG_Z : 0) |
-        (after & 0x80 ? FLAG_S : 0) |
-        (before === 0x80 ? FLAG_PV : 0) |
-        ((before & 0x0f) === 0x00 ? FLAG_H : 0);
+      this.updateFlagsForIncDec(before, after, true);
     });
   }
 
@@ -885,13 +874,7 @@ export class Z80Cpu implements Cpu {
     this.enqueueInternal(() => {
       const before = value;
       value = clamp8(value + 1);
-      this.regs.f =
-        (this.regs.f & FLAG_C) |
-        (value & (FLAG_X | FLAG_Y)) |
-        (value === 0 ? FLAG_Z : 0) |
-        (value & FLAG_S) |
-        (before === 0x7f ? FLAG_PV : 0) |
-        ((before & 0x0f) === 0x0f ? FLAG_H : 0);
+      this.updateFlagsForIncDec(before, value, false);
     });
 
     this.enqueueWriteMem(addr, () => value);
@@ -922,14 +905,7 @@ export class Z80Cpu implements Cpu {
     this.enqueueInternal(() => {
       const before = value;
       value = clamp8(value - 1);
-      this.regs.f =
-        (this.regs.f & FLAG_C) |
-        FLAG_N |
-        (value & (FLAG_X | FLAG_Y)) |
-        (value === 0 ? FLAG_Z : 0) |
-        (value & FLAG_S) |
-        (before === 0x80 ? FLAG_PV : 0) |
-        ((before & 0x0f) === 0x00 ? FLAG_H : 0);
+      this.updateFlagsForIncDec(before, value, true);
     });
 
     this.enqueueWriteMem(addr, () => value);
@@ -1103,7 +1079,7 @@ export class Z80Cpu implements Cpu {
   private decodeRotateTarget(
     readTarget: (target: (value: number) => void) => void,
     writeTarget: (value: () => number) => void,
-    op: 'RLC' | 'RL'
+    op: RotateOp
   ): void {
     // CB 系ローテート命令の共通演算部。
     let readValue = 0;
@@ -1113,17 +1089,7 @@ export class Z80Cpu implements Cpu {
     });
 
     this.enqueueInternal(() => {
-      if (op === 'RLC') {
-        const carry = (readValue >>> 7) & 1;
-        result = clamp8((readValue << 1) | carry);
-        this.regs.f = this.getSzxyParityFlags(result) | (carry ? FLAG_C : 0);
-        return;
-      }
-
-      const carryIn = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
-      const carryOut = (readValue >>> 7) & 1;
-      result = clamp8((readValue << 1) | carryIn);
-      this.regs.f = this.getSzxyParityFlags(result) | (carryOut ? FLAG_C : 0);
+      result = this.rotate8(readValue, op);
     });
 
     writeTarget(() => result);
@@ -1246,48 +1212,143 @@ export class Z80Cpu implements Cpu {
   }
 
   private addToA(value: number, carryIn: boolean): void {
-    const carry = carryIn ? 1 : 0;
-    const left = this.regs.a;
-    const right = clamp8(value);
-    const result = clamp8(left + right + carry);
-
-    this.regs.a = result;
-    this.regs.f =
-      (result & (FLAG_S | FLAG_X | FLAG_Y)) |
-      (result === 0 ? FLAG_Z : 0) |
-      (halfCarryAdd8(left, right, carry) ? FLAG_H : 0) |
-      (overflowAdd8(left, right + carry, result) ? FLAG_PV : 0) |
-      (((left + right + carry) & 0x100) !== 0 ? FLAG_C : 0);
+    this.applyAlu8ToA(carryIn ? 'ADC' : 'ADD', value);
   }
 
   private subFromA(value: number, carryIn: boolean): void {
-    const carry = carryIn ? 1 : 0;
-    const left = this.regs.a;
-    const right = clamp8(value);
-    const result = clamp8(left - right - carry);
-
-    this.regs.a = result;
-    this.regs.f =
-      FLAG_N |
-      (result & (FLAG_S | FLAG_X | FLAG_Y)) |
-      (result === 0 ? FLAG_Z : 0) |
-      (halfCarrySub8(left, right, carry) ? FLAG_H : 0) |
-      (overflowSub8(left, right + carry, result) ? FLAG_PV : 0) |
-      (left < (right + carry) ? FLAG_C : 0);
+    this.applyAlu8ToA(carryIn ? 'SBC' : 'SUB', value);
   }
 
   private compareWithA(value: number): void {
+    this.applyAlu8ToA('CP', value);
+  }
+
+  private updateFlagsForIncDec(before: number, after: number, isDec: boolean): void {
+    const base = this.regs.f & FLAG_C;
+    this.regs.f =
+      base |
+      (isDec ? FLAG_N : 0) |
+      (after & (FLAG_X | FLAG_Y)) |
+      (after === 0 ? FLAG_Z : 0) |
+      (after & FLAG_S) |
+      (!isDec && before === 0x7f ? FLAG_PV : 0) |
+      (isDec && before === 0x80 ? FLAG_PV : 0) |
+      (!isDec && (before & 0x0f) === 0x0f ? FLAG_H : 0) |
+      (isDec && (before & 0x0f) === 0x00 ? FLAG_H : 0);
+  }
+
+  private rotate8(value: number, op: RotateOp): number {
+    const clamped = clamp8(value);
+    let result = clamped;
+    let carry = 0;
+    const carryIn = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
+
+    switch (op) {
+      case 'RLC':
+        carry = (clamped >>> 7) & 1;
+        result = clamp8((clamped << 1) | carry);
+        break;
+      case 'RL':
+        carry = (clamped >>> 7) & 1;
+        result = clamp8((clamped << 1) | carryIn);
+        break;
+      case 'RRC':
+        carry = clamped & 1;
+        result = clamp8((clamped >>> 1) | (carry << 7));
+        break;
+      case 'RR':
+        carry = clamped & 1;
+        result = clamp8((clamped >>> 1) | (carryIn << 7));
+        break;
+      case 'SLA':
+        carry = (clamped >>> 7) & 1;
+        result = clamp8(clamped << 1);
+        break;
+      case 'SRA':
+        carry = clamped & 1;
+        result = clamp8((clamped >>> 1) | (clamped & 0x80));
+        break;
+      case 'SLL':
+        carry = (clamped >>> 7) & 1;
+        result = clamp8((clamped << 1) | 0x01);
+        break;
+      case 'SRL':
+        carry = clamped & 1;
+        result = clamp8(clamped >>> 1);
+        break;
+      default:
+        result = clamped;
+    }
+
+    this.regs.f = this.getSzxyParityFlags(result) | (carry ? FLAG_C : 0);
+    return result;
+  }
+
+  private applyAlu8ToA(op: Alu8Op, value: number): void {
     const left = this.regs.a;
     const right = clamp8(value);
-    const result = clamp8(left - right);
-    this.regs.f =
-      FLAG_N |
-      (result & FLAG_S) |
-      (result === 0 ? FLAG_Z : 0) |
-      (halfCarrySub8(left, right, 0) ? FLAG_H : 0) |
-      (overflowSub8(left, right, result) ? FLAG_PV : 0) |
-      (left < right ? FLAG_C : 0) |
-      (right & (FLAG_X | FLAG_Y));
+
+    switch (op) {
+      case 'ADD':
+      case 'ADC': {
+        const carry = op === 'ADC' && (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
+        const result = clamp8(left + right + carry);
+        this.regs.a = result;
+        this.regs.f =
+          (result & (FLAG_S | FLAG_X | FLAG_Y)) |
+          (result === 0 ? FLAG_Z : 0) |
+          (halfCarryAdd8(left, right, carry) ? FLAG_H : 0) |
+          (overflowAdd8(left, right + carry, result) ? FLAG_PV : 0) |
+          (((left + right + carry) & 0x100) !== 0 ? FLAG_C : 0);
+        return;
+      }
+      case 'SUB':
+      case 'SBC': {
+        const carry = op === 'SBC' && (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
+        const result = clamp8(left - right - carry);
+        this.regs.a = result;
+        this.regs.f =
+          FLAG_N |
+          (result & (FLAG_S | FLAG_X | FLAG_Y)) |
+          (result === 0 ? FLAG_Z : 0) |
+          (halfCarrySub8(left, right, carry) ? FLAG_H : 0) |
+          (overflowSub8(left, right + carry, result) ? FLAG_PV : 0) |
+          (left < (right + carry) ? FLAG_C : 0);
+        return;
+      }
+      case 'AND': {
+        const result = left & right;
+        this.regs.a = result;
+        this.regs.f = this.getSzxyParityFlags(result) | FLAG_H;
+        return;
+      }
+      case 'XOR': {
+        const result = left ^ right;
+        this.regs.a = result;
+        this.regs.f = this.getSzxyParityFlags(result);
+        return;
+      }
+      case 'OR': {
+        const result = left | right;
+        this.regs.a = result;
+        this.regs.f = this.getSzxyParityFlags(result);
+        return;
+      }
+      case 'CP': {
+        const result = clamp8(left - right);
+        this.regs.f =
+          FLAG_N |
+          (result & FLAG_S) |
+          (result === 0 ? FLAG_Z : 0) |
+          (halfCarrySub8(left, right, 0) ? FLAG_H : 0) |
+          (overflowSub8(left, right, result) ? FLAG_PV : 0) |
+          (left < right ? FLAG_C : 0) |
+          (right & (FLAG_X | FLAG_Y));
+        return;
+      }
+      default:
+        return;
+    }
   }
 
   private getPair(name: 'AF' | 'BC' | 'DE' | 'HL' | 'IX' | 'IY' | 'SP'): number {
