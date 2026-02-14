@@ -1,5 +1,6 @@
 import type { HardwareEvidenceId } from './hardware-evidence';
 
+// 仕様根拠の確度と固定度合い。
 export type Confidence = 'CONFIRMED' | 'DERIVED' | 'HYPOTHESIS';
 export type SpecStatus = 'LOCKED' | 'TBD';
 
@@ -81,6 +82,7 @@ export interface HardwareMapValidationResult {
   errors: string[];
 }
 
+// 表示仕様はフォント描画モジュールからも参照される。
 export const PCG815_DISPLAY_SPEC = {
   width: 144,
   height: 32,
@@ -98,6 +100,7 @@ export const PCG815_DISPLAY_SPEC = {
 
 export const PCG815_RAM_BYTES = 0x8000;
 
+// アドレス空間を 0x0000-0xFFFF で連続に定義する。
 export const PCG815_MEMORY_MAP: readonly MemoryRegionSpec[] = [
   {
     id: 'main-ram-window',
@@ -137,6 +140,7 @@ export const PCG815_MEMORY_MAP: readonly MemoryRegionSpec[] = [
   }
 ];
 
+// I/O ポートは推定を含むため evidence を必須にしている。
 export const PCG815_IO_MAP: readonly IoPortSpec[] = [
   {
     id: 'kbd-row-select',
@@ -380,6 +384,7 @@ export const PCG815_IO_MAP: readonly IoPortSpec[] = [
   }
 ];
 
+// 実機 RAM 上のワークエリア候補。
 export const PCG815_WORK_AREA: readonly WorkAreaSpec[] = [
   {
     id: 'display-start-line',
@@ -432,6 +437,7 @@ export function findIoPortSpec(port: number): IoPortSpec | undefined {
 }
 
 export function validateHardwareMap(): HardwareMapValidationResult {
+  // 起動時に自己検証し、定義矛盾を早期検知する。
   const errors: string[] = [];
 
   const regions = [...PCG815_MEMORY_MAP].sort((a, b) => a.start - b.start);

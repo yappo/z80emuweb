@@ -1,3 +1,4 @@
+// firmware-monitor パッケージの公開 API 入口。
 export * from './ast';
 export * from './command-registry';
 export * from './errors';

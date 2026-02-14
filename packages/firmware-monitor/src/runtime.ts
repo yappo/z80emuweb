@@ -9,6 +9,7 @@ import type {
   RuntimeOptions
 } from './types';
 
+// 不正入力は 0 に倒して互換挙動を安定させる。
 function parseIntSafe(text: string): number {
   const value = Number.parseInt(text, 10);
   return Number.isNaN(value) ? 0 : value;
@@ -22,6 +23,7 @@ function isDisplayInputByte(value: number): boolean {
   return (value >= 0x20 && value <= 0x7e) || value >= 0x80;
 }
 
+// PC-G815 互換の簡易 BASIC ランタイム。
 export class PcG815BasicRuntime {
   private readonly outputQueue: number[] = [];
 
@@ -67,6 +69,7 @@ export class PcG815BasicRuntime {
       return;
     }
 
+    // CR/LF を行確定トリガとして executeLine に渡す。
     if (value === 0x0d || value === 0x0a) {
       const line = this.lineBuffer;
       this.lineBuffer = '';
@@ -85,6 +88,7 @@ export class PcG815BasicRuntime {
     const rawLine = input;
     const line = rawLine.trim();
 
+    // INPUT 待機中は文解析せず、数値として変数へ代入して終了。
     if (this.waitingInputVar !== null) {
       const parsed = parseIntSafe(line);
       this.variables.set(this.waitingInputVar, parsed);
@@ -98,6 +102,7 @@ export class PcG815BasicRuntime {
       return;
     }
 
+    // 行番号付き入力はプログラム登録/削除として扱う。
     const lineNumberMatch = line.match(/^(\d+)\s*(.*)$/);
     if (lineNumberMatch) {
       const lineNoText = lineNumberMatch[1];
@@ -141,6 +146,7 @@ export class PcG815BasicRuntime {
 
   runProgram(maxSteps = 10_000): void {
     const lines = [...this.program.entries()].sort((a, b) => a[0] - b[0]);
+    // lineToIndex を先に作って GOTO/GOSUB を O(1) で解決する。
     const lineToIndex = new Map<number, number>();
     lines.forEach(([line], index) => lineToIndex.set(line, index));
 
@@ -148,6 +154,7 @@ export class PcG815BasicRuntime {
     let pc = 0;
     let steps = 0;
 
+    // 無限ループ検出はステップ数上限で行う。
     while (pc < lines.length) {
       steps += 1;
       if (steps > maxSteps) {
@@ -247,6 +254,7 @@ export class PcG815BasicRuntime {
   }
 
   private executeImmediateStatement(statement: StatementNode): void {
+    // RUN だけは文ごとの共通実行器ではなく専用ループへ委譲。
     if (statement.kind === 'RUN') {
       this.runProgram();
       return;

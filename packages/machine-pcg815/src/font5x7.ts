@@ -1,5 +1,6 @@
 import { PCG815_DISPLAY_SPEC } from './hardware-map';
 
+// ハードウェア仕様から描画定数をそのまま再公開する。
 export const LCD_WIDTH = PCG815_DISPLAY_SPEC.width;
 export const LCD_HEIGHT = PCG815_DISPLAY_SPEC.height;
 export const LCD_COLS = PCG815_DISPLAY_SPEC.textCols;
@@ -17,6 +18,7 @@ function glyph(...rows: string[]): Uint8Array {
   return Uint8Array.from(rows.map((bits) => row(bits)));
 }
 
+// 1 バイト文字コード -> 5x7 グリフ行データ。
 const GLYPHS = new Map<number, Uint8Array>([
   [0x20, glyph('00000', '00000', '00000', '00000', '00000', '00000', '00000')],
   [0x21, glyph('00100', '00100', '00100', '00100', '00100', '00000', '00100')],
@@ -255,5 +257,6 @@ export function hasGlyphForCode(code: number): boolean {
 }
 
 export function getGlyphForCode(code: number): Uint8Array {
+  // 未定義コードは代替グリフへフォールバックする。
   return resolveGlyph(code) ?? FALLBACK;
 }

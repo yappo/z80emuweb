@@ -30,6 +30,7 @@ const RST_VECTOR_BY_OPCODE = new Map<number, number>([
   [0xff, 0x38]
 ]);
 
+// 値を 8/16bit に収める基本ユーティリティ。
 function clamp8(value: number): number {
   return value & 0xff;
 }
@@ -63,6 +64,7 @@ export class Z80Cpu implements Cpu {
 
   private readonly options: Z80CpuOptions;
 
+  // 1 T-state ごとに消費するマイクロオペレーション列。
   private readonly queue: TStateOp[] = [];
 
   private readonly regs: CpuRegisters = {
@@ -131,6 +133,7 @@ export class Z80Cpu implements Cpu {
 
   stepTState(count: number): void {
     for (let i = 0; i < count; i += 1) {
+      // 命令デコードは queue が空になったタイミングでのみ行う。
       if (this.queue.length === 0) {
         this.scheduleNextInstruction();
       }
@@ -249,6 +252,7 @@ export class Z80Cpu implements Cpu {
       const pc = this.regs.pc;
       const opcode = this.bus.read8(pc);
       this.bus.onM1?.(pc);
+      // R レジスタは命令フェッチごとに下位 7bit を進める。
       this.bumpR();
       this.regs.pc = clamp16(this.regs.pc + 1);
       target(clamp8(opcode));
@@ -292,6 +296,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private scheduleNextInstruction(): void {
+    // 割り込み受理の優先順位は NMI > マスク可能割り込み > 通常命令。
     if (this.pendingNmi) {
       this.scheduleNmi();
       return;
@@ -349,6 +354,7 @@ export class Z80Cpu implements Cpu {
     this.enqueueIdle(7);
     this.enqueuePushWord(() => this.regs.pc);
     this.enqueueInternal(() => {
+      // IM2 は (I:dataBus) ベクタ参照、それ以外は IM0/IM1 の固定挙動へ。
       if (this.im === 2) {
         const vector = ((this.regs.i << 8) | dataBus) & 0xfffe;
         const low = this.bus.read8(vector);
@@ -367,6 +373,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeOpcode(opcode: number, indexMode: IndexMode): void {
+    // RST は opcode 値から直接ベクタ決定できるので先に処理する。
     const rstVector = RST_VECTOR_BY_OPCODE.get(opcode);
     if (rstVector !== undefined) {
       this.enqueuePushWord(() => this.regs.pc);
@@ -376,45 +383,57 @@ export class Z80Cpu implements Cpu {
       return;
     }
 
+    // xxxxx110b は「8bit レジスタ、またはメモリ間接先へ即値を代入する」命令群。
+    // regCode=6 の場合はレジスタではなく (HL)/(IX+d)/(IY+d) を対象にする。
     if ((opcode & 0xc7) === 0x06) {
       this.decodeLdRImmediate(opcode, indexMode);
       return;
     }
 
+    // xxxxx100b は「8bit 値を 1 増やす」命令群。
     if ((opcode & 0xc7) === 0x04) {
       this.decodeIncReg(opcode, indexMode);
       return;
     }
 
+    // xxxxx101b は「8bit 値を 1 減らす」命令群。
     if ((opcode & 0xc7) === 0x05) {
       this.decodeDecReg(opcode, indexMode);
       return;
     }
 
+    // ここから先は実装済み opcode を個別に分岐する。
+    // コメントは「命令ニーモニック / 引数 / 実装上の要点」を記載する。
     switch (opcode) {
       case 0x00:
+        // NOP: 何も変更せず、1 命令ぶんの時間だけ消費する。
         return;
       case 0x76:
+        // HALT: 割り込みが入るまで命令フェッチを停止する。
         this.enqueueInternal(() => {
           this.halted = true;
         });
         return;
       case 0xdd:
+        // プレフィクス DD: 後続命令で HL/H/L を IX/IXH/IXL とみなして実行する。
         this.enqueueFetchOpcode((next) => {
           this.decodeOpcode(next, 'IX');
         });
         return;
       case 0xfd:
+        // プレフィクス FD: 後続命令で HL/H/L を IY/IYH/IYL とみなして実行する。
         this.enqueueFetchOpcode((next) => {
           this.decodeOpcode(next, 'IY');
         });
         return;
       case 0xed:
+        // プレフィクス ED: 拡張命令群へ分岐する（本実装は一部の命令のみ対応）。
         this.enqueueFetchOpcode((next) => {
           this.decodeED(next);
         });
         return;
       case 0xcb:
+        // プレフィクス CB: ビットテスト・ビット更新・ローテート命令群へ分岐する。
         if (indexMode === 'HL') {
           this.enqueueFetchOpcode((next) => {
             this.decodeCB(next, 'HL', 0);
@@ -424,193 +443,244 @@ export class Z80Cpu implements Cpu {
         this.decodeIndexedCB(indexMode);
         return;
       case 0x01:
+        // LD BC,nn: 16bit 即値 nn を B/C レジスタ対へ代入する。
         this.decodeLdPairImmediate('BC');
         return;
       case 0x11:
+        // LD DE,nn: 16bit 即値 nn を D/E レジスタ対へ代入する。
         this.decodeLdPairImmediate('DE');
         return;
       case 0x21:
+        // LD HL,nn / LD IX,nn / LD IY,nn: 16bit 即値 nn をインデックス系レジスタ対へ代入する。
         this.decodeLdPairImmediate(indexMode === 'HL' ? 'HL' : indexMode);
         return;
       case 0x31:
+        // LD SP,nn: 16bit 即値 nn をスタックポインタへ代入する。
         this.decodeLdPairImmediate('SP');
         return;
       case 0x23:
+        // INC HL / INC IX / INC IY: 16bit レジスタ対を 1 増やす。
         this.enqueueInternal(() => {
           const value = clamp16(this.getPair(indexMode === 'HL' ? 'HL' : indexMode) + 1);
           this.setPair(indexMode === 'HL' ? 'HL' : indexMode, value);
         });
         return;
       case 0x2b:
+        // DEC HL / DEC IX / DEC IY: 16bit レジスタ対を 1 減らす。
         this.enqueueInternal(() => {
           const value = clamp16(this.getPair(indexMode === 'HL' ? 'HL' : indexMode) - 1);
           this.setPair(indexMode === 'HL' ? 'HL' : indexMode, value);
         });
         return;
       case 0x3a:
+        // LD A,(nn): アドレス nn の 1 バイトを読み取り、A レジスタへ格納する。
         this.decodeLdAFromAbsolute();
         return;
       case 0x32:
+        // LD (nn),A: A レジスタの値をアドレス nn へ書き込む。
         this.decodeLdAbsoluteFromA();
         return;
       case 0x7e:
+        // LD A,(HL) / LD A,(IX+d) / LD A,(IY+d): 間接先メモリの 1 バイトを A へ読み込む。
         this.decodeLdAFromPointer(indexMode);
         return;
       case 0x77:
+        // LD (HL),A / LD (IX+d),A / LD (IY+d),A: A の 1 バイトを間接先メモリへ書き込む。
         this.decodeLdPointerFromA(indexMode);
         return;
       case 0x36:
+        // LD (HL),n / LD (IX+d),n / LD (IY+d),n: 8bit 即値 n を間接先メモリへ書き込む。
         this.decodeLdPointerImmediate(indexMode);
         return;
       case 0x3e:
+        // LD A,n: 8bit 即値 n を A レジスタへ代入する。
         this.enqueueReadPc((value) => {
           this.regs.a = value;
         });
         return;
       case 0xaf:
+        // XOR A: A と A の排他的論理和を取り、結果 0 を A に入れて対応フラグを更新する。
         this.enqueueInternal(() => {
           this.regs.a = 0;
           this.regs.f = FLAG_Z | FLAG_PV;
         });
         return;
       case 0xb7:
+        // OR A: A と A の論理和を評価し、A の値は保ったまま状態フラグを再計算する。
         this.enqueueInternal(() => {
           const value = this.regs.a;
           this.regs.f = this.getSzxyParityFlags(value);
         });
         return;
       case 0xc6:
+        // ADD A,n: A に 8bit 即値 n を加算し、結果を A に格納する。
         this.enqueueReadPc((value) => {
           this.addToA(value, false);
         });
         return;
       case 0xce:
+        // ADC A,n: A + n + キャリーフラグの値を計算し、結果を A に格納する。
         this.enqueueReadPc((value) => {
           this.addToA(value, (this.regs.f & FLAG_C) !== 0);
         });
         return;
       case 0xd6:
+        // SUB n: A から 8bit 即値 n を減算し、結果を A に格納する。
         this.enqueueReadPc((value) => {
           this.subFromA(value, false);
         });
         return;
       case 0xde:
+        // SBC A,n: A から n とキャリーフラグ分を減算し、結果を A に格納する。
         this.enqueueReadPc((value) => {
           this.subFromA(value, (this.regs.f & FLAG_C) !== 0);
         });
         return;
       case 0xfe:
+        // CP n: A - n を比較用に計算し、A は変更せずフラグだけを更新する。
         this.enqueueReadPc((value) => {
           this.compareWithA(value);
         });
         return;
       case 0x18:
+        // JR e: 次の signed 8bit オフセット e を PC に加えて相対ジャンプする。
         this.decodeJr(true);
         return;
       case 0x20:
+        // JR NZ,e: ゼロフラグが 0 の場合だけ相対ジャンプする。
         this.decodeJr((this.regs.f & FLAG_Z) === 0);
         return;
       case 0x28:
+        // JR Z,e: ゼロフラグが 1 の場合だけ相対ジャンプする。
         this.decodeJr((this.regs.f & FLAG_Z) !== 0);
         return;
       case 0x30:
+        // JR NC,e: キャリーフラグが 0 の場合だけ相対ジャンプする。
         this.decodeJr((this.regs.f & FLAG_C) === 0);
         return;
       case 0x38:
+        // JR C,e: キャリーフラグが 1 の場合だけ相対ジャンプする。
         this.decodeJr((this.regs.f & FLAG_C) !== 0);
         return;
       case 0xc3:
+        // JP nn: 16bit 即値 nn をそのまま PC に設定して絶対ジャンプする。
         this.decodeJp(true);
         return;
       case 0xc2:
+        // JP NZ,nn: ゼロフラグが 0 の場合だけ nn へ絶対ジャンプする。
         this.decodeJp((this.regs.f & FLAG_Z) === 0);
         return;
       case 0xca:
+        // JP Z,nn: ゼロフラグが 1 の場合だけ nn へ絶対ジャンプする。
         this.decodeJp((this.regs.f & FLAG_Z) !== 0);
         return;
       case 0xd2:
+        // JP NC,nn: キャリーフラグが 0 の場合だけ nn へ絶対ジャンプする。
         this.decodeJp((this.regs.f & FLAG_C) === 0);
         return;
       case 0xda:
+        // JP C,nn: キャリーフラグが 1 の場合だけ nn へ絶対ジャンプする。
         this.decodeJp((this.regs.f & FLAG_C) !== 0);
         return;
       case 0xcd:
+        // CALL nn: 復帰先アドレスをスタックへ退避し、サブルーチン先 nn へ分岐する。
         this.decodeCall(true);
         return;
       case 0xc4:
+        // CALL NZ,nn: ゼロフラグが 0 の場合だけサブルーチン呼び出しを行う。
         this.decodeCall((this.regs.f & FLAG_Z) === 0);
         return;
       case 0xcc:
+        // CALL Z,nn: ゼロフラグが 1 の場合だけサブルーチン呼び出しを行う。
         this.decodeCall((this.regs.f & FLAG_Z) !== 0);
         return;
       case 0xd4:
+        // CALL NC,nn: キャリーフラグが 0 の場合だけサブルーチン呼び出しを行う。
         this.decodeCall((this.regs.f & FLAG_C) === 0);
         return;
       case 0xdc:
+        // CALL C,nn: キャリーフラグが 1 の場合だけサブルーチン呼び出しを行う。
         this.decodeCall((this.regs.f & FLAG_C) !== 0);
         return;
       case 0xc9:
+        // RET: スタックから 16bit の復帰先アドレスを取り出し、PC に戻す。
         this.enqueuePopWord((word) => {
           this.regs.pc = word;
         });
         return;
       case 0xc0:
+        // RET NZ: ゼロフラグが 0 の場合だけ復帰処理を行う。
         this.decodeRet((this.regs.f & FLAG_Z) === 0);
         return;
       case 0xc8:
+        // RET Z: ゼロフラグが 1 の場合だけ復帰処理を行う。
         this.decodeRet((this.regs.f & FLAG_Z) !== 0);
         return;
       case 0xd0:
+        // RET NC: キャリーフラグが 0 の場合だけ復帰処理を行う。
         this.decodeRet((this.regs.f & FLAG_C) === 0);
         return;
       case 0xd8:
+        // RET C: キャリーフラグが 1 の場合だけ復帰処理を行う。
         this.decodeRet((this.regs.f & FLAG_C) !== 0);
         return;
       case 0xc5:
+        // PUSH BC: B/C レジスタ対の 16bit 値をスタックへ退避する。
         this.enqueuePushWord(() => this.getPair('BC'));
         return;
       case 0xd5:
+        // PUSH DE: D/E レジスタ対の 16bit 値をスタックへ退避する。
         this.enqueuePushWord(() => this.getPair('DE'));
         return;
       case 0xe5:
+        // PUSH HL / PUSH IX / PUSH IY: 対象 16bit レジスタ対の値をスタックへ退避する。
         this.enqueuePushWord(() => this.getPair(indexMode === 'HL' ? 'HL' : indexMode));
         return;
       case 0xf5:
+        // PUSH AF: A/F レジスタ対の 16bit 値をスタックへ退避する。
         this.enqueuePushWord(() => this.getPair('AF'));
         return;
       case 0xc1:
+        // POP BC: スタック先頭の 16bit 値を取り出し、B/C レジスタ対へ復元する。
         this.enqueuePopWord((word) => {
           this.setPair('BC', word);
         });
         return;
       case 0xd1:
+        // POP DE: スタック先頭の 16bit 値を取り出し、D/E レジスタ対へ復元する。
         this.enqueuePopWord((word) => {
           this.setPair('DE', word);
         });
         return;
       case 0xe1:
+        // POP HL / POP IX / POP IY: スタック先頭の 16bit 値を対象レジスタ対へ復元する。
         this.enqueuePopWord((word) => {
           this.setPair(indexMode === 'HL' ? 'HL' : indexMode, word);
         });
         return;
       case 0xf1:
+        // POP AF: スタック先頭の 16bit 値を A/F レジスタ対へ復元する。
         this.enqueuePopWord((word) => {
           this.setPair('AF', word);
         });
         return;
       case 0xdb:
+        // IN A,(n): 即値 n で指定した I/O ポートから 1 バイト読み取り、A に格納する。
         this.decodeInAImmediate();
         return;
       case 0xd3:
+        // OUT (n),A: A レジスタの 1 バイトを即値 n の I/O ポートへ出力する。
         this.decodeOutImmediateA();
         return;
       case 0xf3:
+        // DI: マスク可能割り込みの受理を無効化する。
         this.enqueueInternal(() => {
           this.iff1 = false;
           this.iff2 = false;
         });
         return;
       case 0xfb:
+        // EI: マスク可能割り込みの受理を有効化し、直後 1 命令分だけ受理を遅延する。
         this.enqueueInternal(() => {
           this.iff1 = true;
           this.iff2 = true;
@@ -618,6 +688,7 @@ export class Z80Cpu implements Cpu {
         });
         return;
       case 0xeb:
+        // EX DE,HL / EX DE,IX / EX DE,IY: DE と対象 16bit レジスタ対の値を交換する。
         this.enqueueInternal(() => {
           const de = this.getPair('DE');
           const hl = this.getPair(indexMode === 'HL' ? 'HL' : indexMode);
@@ -631,6 +702,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeLdRImmediate(opcode: number, indexMode: IndexMode): void {
+    // 「8bit レジスタ/間接メモリへ即値を代入する命令」の共通処理。
     const regCode = (opcode >>> 3) & 0x07;
     if (regCode === 6) {
       this.decodeLdPointerImmediate(indexMode);
@@ -643,6 +715,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeIncReg(opcode: number, indexMode: IndexMode): void {
+    // 「8bit 値を 1 増やす命令」の共通処理。キャリーフラグは保持する。
     const regCode = (opcode >>> 3) & 0x07;
     if (regCode === 6) {
       this.decodeIncPointer(indexMode);
@@ -664,6 +737,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeDecReg(opcode: number, indexMode: IndexMode): void {
+    // 「8bit 値を 1 減らす命令」の共通処理。減算フラグを立て、キャリーフラグは保持する。
     const regCode = (opcode >>> 3) & 0x07;
     if (regCode === 6) {
       this.decodeDecPointer(indexMode);
@@ -686,6 +760,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeLdPairImmediate(target: 'BC' | 'DE' | 'HL' | 'IX' | 'IY' | 'SP'): void {
+    // 「16bit 即値をレジスタ対へ代入する命令」の共通処理。即値は下位バイト先行で読む。
     let low = 0;
     let high = 0;
     this.enqueueReadPc((value) => {
@@ -700,6 +775,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeLdAFromAbsolute(): void {
+    // 「アドレス nn のメモリ値を A に読み込む命令」の処理。
     let low = 0;
     let high = 0;
     this.enqueueReadPc((value) => {
@@ -714,6 +790,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeLdAbsoluteFromA(): void {
+    // 「A の値をアドレス nn のメモリへ書き込む命令」の処理。
     let low = 0;
     let high = 0;
     this.enqueueReadPc((value) => {
@@ -726,6 +803,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeLdAFromPointer(indexMode: IndexMode): void {
+    // 「間接メモリから A へ読み込む命令」の処理。
     if (indexMode === 'HL') {
       this.enqueueReadMem(() => this.getPair('HL'), (value) => {
         this.regs.a = value;
@@ -743,6 +821,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeLdPointerFromA(indexMode: IndexMode): void {
+    // 「A を間接メモリへ書き込む命令」の処理。
     if (indexMode === 'HL') {
       this.enqueueWriteMem(() => this.getPair('HL'), () => this.regs.a);
       return;
@@ -756,6 +835,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeLdPointerImmediate(indexMode: IndexMode): void {
+    // 「即値 n を間接メモリへ書き込む命令」の処理。
     let displacement = 0;
     let immediate = 0;
 
@@ -781,6 +861,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeIncPointer(indexMode: IndexMode): void {
+    // 「間接先メモリの 1 バイトを 1 増やす命令」の処理。
     let displacement = 0;
     let value = 0;
 
@@ -817,6 +898,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeDecPointer(indexMode: IndexMode): void {
+    // 「間接先メモリの 1 バイトを 1 減らす命令」の処理。
     let displacement = 0;
     let value = 0;
 
@@ -854,6 +936,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeJr(takeBranch: boolean): void {
+    // 「条件付き/無条件の相対ジャンプ命令」の処理。オフセットは signed 8bit。
     this.enqueueReadPc((rawOffset) => {
       if (!takeBranch) {
         return;
@@ -866,6 +949,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeJp(takeBranch: boolean): void {
+    // 「条件付き/無条件の絶対ジャンプ命令」の処理。
     let low = 0;
     let high = 0;
     this.enqueueReadPc((value) => {
@@ -883,6 +967,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeCall(takeBranch: boolean): void {
+    // 「条件付き/無条件のサブルーチン呼び出し命令」の処理。
     let low = 0;
     let high = 0;
     this.enqueueReadPc((value) => {
@@ -901,6 +986,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeRet(takeBranch: boolean): void {
+    // 「条件付き/無条件のサブルーチン復帰命令」の処理。
     if (!takeBranch) {
       this.enqueueInternal();
       return;
@@ -911,6 +997,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeInAImmediate(): void {
+    // 「I/O ポートから A へ入力する命令」の処理。
     let port = 0;
     let value = 0;
     this.enqueueReadPc((v) => {
@@ -925,6 +1012,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeOutImmediateA(): void {
+    // 「A の値を I/O ポートへ出力する命令」の処理。
     let port = 0;
     this.enqueueReadPc((v) => {
       port = v;
@@ -933,6 +1021,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeIndexedCB(indexMode: 'IX' | 'IY'): void {
+    // IX/IY を基準にした CB 拡張命令。先に変位 d を読んでから演算種別を解釈する。
     let displacement = 0;
     this.enqueueReadPc((value) => {
       displacement = signExtend8(value);
@@ -947,6 +1036,7 @@ export class Z80Cpu implements Cpu {
     const bitIndex = (opcode >>> 3) & 0x07;
     const regCode = opcode & 0x07;
 
+    // CB 拡張命令は「対象値の読出し -> ビット演算 -> 必要なら書戻し」を共通化している。
     const readTarget = (target: (value: number) => void): void => {
       if (regCode === 6) {
         const addr = this.getCbAddress(indexMode, displacement);
@@ -970,6 +1060,7 @@ export class Z80Cpu implements Cpu {
     };
 
     if (opGroup === 1) {
+      // BIT b,target: 指定ビットを検査し、結果をフラグへ反映する（値は変更しない）。
       readTarget((value) => {
         const bit = (value >>> bitIndex) & 1;
         this.regs.f =
@@ -983,6 +1074,7 @@ export class Z80Cpu implements Cpu {
     }
 
     if (opGroup === 2 || opGroup === 3) {
+      // RES b,target / SET b,target: 指定ビットを 0/1 に更新して書き戻す。
       let readValue = 0;
       readTarget((value) => {
         readValue = value;
@@ -995,10 +1087,12 @@ export class Z80Cpu implements Cpu {
     }
 
     if ((opcode & 0xf8) === 0x00) {
+      // RLC target: 対象値を左循環ローテートし、最上位ビットをキャリーへ出す。
       this.decodeRotateTarget(readTarget, writeTarget, 'RLC');
       return;
     }
     if ((opcode & 0xf8) === 0x10) {
+      // RL target: キャリーを介した左ローテートを行う。
       this.decodeRotateTarget(readTarget, writeTarget, 'RL');
       return;
     }
@@ -1011,6 +1105,7 @@ export class Z80Cpu implements Cpu {
     writeTarget: (value: () => number) => void,
     op: 'RLC' | 'RL'
   ): void {
+    // CB 系ローテート命令の共通演算部。
     let readValue = 0;
     let result = 0;
     readTarget((value) => {
@@ -1035,6 +1130,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeED(opcode: number): void {
+    // ED 拡張命令群の分岐。本実装にない opcode は未対応として扱う。
     switch (opcode) {
       case 0x44:
       case 0x4c:
@@ -1044,6 +1140,7 @@ export class Z80Cpu implements Cpu {
       case 0x6c:
       case 0x74:
       case 0x7c:
+        // NEG: A の符号を反転する形で 0 - A を計算し、結果を A に入れる。
         this.enqueueInternal(() => {
           const value = this.regs.a;
           const result = clamp8(0 - value);
@@ -1064,17 +1161,20 @@ export class Z80Cpu implements Cpu {
       case 0x6d:
       case 0x75:
       case 0x7d:
+        // RETN: スタックから復帰先を取り出して PC に戻し、IFF2 の値を IFF1 へ反映する。
         this.enqueuePopWord((word) => {
           this.regs.pc = word;
           this.iff1 = this.iff2;
         });
         return;
       case 0x4d:
+        // RETI: 割り込み復帰命令。現状実装では RET と同じく PC 復帰のみ行う。
         this.enqueuePopWord((word) => {
           this.regs.pc = word;
         });
         return;
       case 0x57:
+        // LD A,I: 割り込みベクタ上位レジスタ I を A へコピーする。
         this.enqueueInternal(() => {
           this.regs.a = this.regs.i;
           this.regs.f =
@@ -1084,6 +1184,7 @@ export class Z80Cpu implements Cpu {
         });
         return;
       case 0x5f:
+        // LD A,R: リフレッシュレジスタ R を A へコピーする。
         this.enqueueInternal(() => {
           this.regs.a = this.regs.r;
           this.regs.f =
@@ -1093,16 +1194,19 @@ export class Z80Cpu implements Cpu {
         });
         return;
       case 0x47:
+        // LD I,A: A の値を割り込みベクタ上位レジスタ I へコピーする。
         this.enqueueInternal(() => {
           this.regs.i = this.regs.a;
         });
         return;
       case 0x4f:
+        // LD R,A: A の値をリフレッシュレジスタ R へコピーする。
         this.enqueueInternal(() => {
           this.regs.r = this.regs.a;
         });
         return;
       case 0xb0:
+        // LDIR: HL から DE へ 1 バイト転送し、BC が 0 になるまで同命令を繰り返す。
         this.decodeLdir();
         return;
       default:
@@ -1111,6 +1215,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private decodeLdir(): void {
+    // LDIR の「1 回転送 + HL/DE/BC 更新 + 継続判定」を行う。
     let value = 0;
     this.enqueueReadMem(() => this.getPair('HL'), (v) => {
       value = v;
@@ -1123,6 +1228,7 @@ export class Z80Cpu implements Cpu {
       this.setPair('BC', bc);
       const baseFlags = this.regs.f & FLAG_C;
       this.regs.f = baseFlags | (bc !== 0 ? FLAG_PV : 0);
+      // BC が 0 でない間は PC を命令先頭へ戻し、次サイクルで同じ命令を再実行する。
       if (bc !== 0) {
         this.enqueueIdle(5);
         this.enqueueInternal(() => {
