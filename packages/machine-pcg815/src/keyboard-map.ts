@@ -68,7 +68,41 @@ export const KEY_MAP: KeyMapping[] = [
   { code: 'BracketLeft', row: 3, col: 4, normal: 0x5b, shifted: 0x7b },
   { code: 'BracketRight', row: 3, col: 5, normal: 0x5d, shifted: 0x7d },
   { code: 'Backslash', row: 3, col: 6, normal: 0x5c, shifted: 0x7c },
-  { code: 'Backquote', row: 3, col: 7, normal: 0x60, shifted: 0x7e }
+  { code: 'Backquote', row: 3, col: 7, normal: 0x60, shifted: 0x7e },
+
+  // Aliases for non-US keyboard layouts (mainly JIS variants).
+  { code: 'IntlYen', row: 3, col: 6, normal: 0x5c, shifted: 0x7c },
+  { code: 'IntlRo', row: 5, col: 3, normal: 0x5c, shifted: 0x5f },
+
+  // Common desktop control keys.
+  { code: 'Tab', row: 4, col: 0, normal: 0x09 },
+  { code: 'Escape', row: 4, col: 1, normal: 0x1b },
+  { code: 'Delete', row: 4, col: 2, normal: 0x08 },
+  { code: 'Insert', row: 4, col: 3 },
+  { code: 'CapsLock', row: 4, col: 4 },
+  { code: 'KanaMode', row: 4, col: 5 },
+  { code: 'Convert', row: 4, col: 6 },
+  { code: 'NonConvert', row: 4, col: 7 },
+
+  // Numpad aliases.
+  { code: 'Numpad0', row: 6, col: 1, normal: 0x30 },
+  { code: 'Numpad1', row: 6, col: 2, normal: 0x31 },
+  { code: 'Numpad2', row: 6, col: 3, normal: 0x32 },
+  { code: 'Numpad3', row: 6, col: 4, normal: 0x33 },
+  { code: 'Numpad4', row: 6, col: 5, normal: 0x34 },
+  { code: 'Numpad5', row: 6, col: 6, normal: 0x35 },
+  { code: 'Numpad6', row: 6, col: 7, normal: 0x36 },
+  { code: 'Numpad7', row: 5, col: 0, normal: 0x37 },
+  { code: 'Numpad8', row: 5, col: 1, normal: 0x38 },
+  { code: 'Numpad9', row: 5, col: 2, normal: 0x39 },
+  { code: 'NumpadDecimal', row: 5, col: 6, normal: 0x2e },
+  { code: 'NumpadComma', row: 5, col: 5, normal: 0x2c },
+  { code: 'NumpadAdd', row: 5, col: 4, normal: 0x2b },
+  { code: 'NumpadSubtract', row: 5, col: 3, normal: 0x2d },
+  { code: 'NumpadMultiply', row: 5, col: 1, normal: 0x2a },
+  { code: 'NumpadDivide', row: 5, col: 7, normal: 0x2f },
+  { code: 'NumpadEqual', row: 5, col: 4, normal: 0x3d },
+  { code: 'NumpadEnter', row: 7, col: 2, normal: 0x0d }
 ];
 
 export const KEY_MAP_BY_CODE = new Map(KEY_MAP.map((entry) => [entry.code, entry]));

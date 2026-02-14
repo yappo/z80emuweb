@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getGlyphForCode,
   getWorkAreaSpec,
+  KEY_MAP_BY_CODE,
   LCD_HEIGHT,
   LCD_WIDTH,
   PCG815_DISPLAY_SPEC,
@@ -99,6 +100,36 @@ describe('PCG815 hardware map metadata', () => {
 
     for (const code of requiredSymbols) {
       expect([...getGlyphForCode(code)]).not.toEqual(fallback);
+    }
+  });
+
+  it('registers extended browser key codes for JIS and numpad keyboards', () => {
+    const requiredCodes = [
+      'Tab',
+      'Escape',
+      'Delete',
+      'Insert',
+      'CapsLock',
+      'KanaMode',
+      'Convert',
+      'NonConvert',
+      'IntlYen',
+      'IntlRo',
+      'Numpad0',
+      'Numpad1',
+      'Numpad5',
+      'Numpad9',
+      'NumpadDecimal',
+      'NumpadAdd',
+      'NumpadSubtract',
+      'NumpadMultiply',
+      'NumpadDivide',
+      'NumpadEqual',
+      'NumpadEnter'
+    ] as const;
+
+    for (const code of requiredCodes) {
+      expect(KEY_MAP_BY_CODE.has(code)).toBe(true);
     }
   });
 
@@ -242,6 +273,32 @@ describe('PCG815Machine', () => {
 
     const code = machine.in8(0x12);
     expect(String.fromCharCode(code)).toBe('P');
+  });
+
+  it('generates ASCII queue from extended key codes (JIS + numpad)', () => {
+    const machine = new PCG815Machine();
+
+    machine.setKeyState('Numpad1', true);
+    machine.setKeyState('Numpad1', false);
+    expect(machine.in8(0x12)).toBe('1'.charCodeAt(0));
+
+    machine.setKeyState('NumpadAdd', true);
+    machine.setKeyState('NumpadAdd', false);
+    expect(machine.in8(0x12)).toBe('+'.charCodeAt(0));
+
+    machine.setKeyState('Tab', true);
+    machine.setKeyState('Tab', false);
+    expect(machine.in8(0x12)).toBe(0x09);
+
+    machine.setKeyState('IntlYen', true);
+    machine.setKeyState('IntlYen', false);
+    expect(machine.in8(0x12)).toBe('\\'.charCodeAt(0));
+
+    machine.setKeyState('ShiftLeft', true);
+    machine.setKeyState('IntlRo', true);
+    machine.setKeyState('IntlRo', false);
+    machine.setKeyState('ShiftLeft', false);
+    expect(machine.in8(0x12)).toBe('_'.charCodeAt(0));
   });
 
   it('renders LCD framebuffer from LCD ports 0x58/0x5A', () => {
