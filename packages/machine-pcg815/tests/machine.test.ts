@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -14,6 +17,30 @@ import {
 
 function run(machine: PCG815Machine, tstates: number): void {
   machine.tick(tstates);
+}
+
+const FONT5X7_GOLDEN = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./fixtures/font5x7-line-seed-20-ff.json', import.meta.url)), 'utf8')
+) as Record<string, string[]>;
+
+function toRowBits(glyph: Uint8Array): string[] {
+  const rows: string[] = [];
+  for (let y = 0; y < 7; y += 1) {
+    const bits = glyph[y] ?? 0;
+    rows.push(bits.toString(2).padStart(5, '0').slice(-5));
+  }
+  return rows;
+}
+
+function countLitPixels(glyph: Uint8Array): number {
+  let total = 0;
+  for (let y = 0; y < 7; y += 1) {
+    const bits = glyph[y] ?? 0;
+    for (let x = 0; x < 5; x += 1) {
+      total += (bits >> x) & 0x1;
+    }
+  }
+  return total;
 }
 
 describe('PCG815 hardware map metadata', () => {
@@ -72,6 +99,73 @@ describe('PCG815 hardware map metadata', () => {
 
     for (const code of requiredSymbols) {
       expect([...getGlyphForCode(code)]).not.toEqual(fallback);
+    }
+  });
+
+  it('defines glyphs across half-width katakana range 0xA1-0xDF', () => {
+    const fallback = [...getGlyphForCode(0x01)];
+    for (let code = 0xa1; code <= 0xdf; code += 1) {
+      expect([...getGlyphForCode(code)]).not.toEqual(fallback);
+    }
+  });
+
+  it('keeps small katakana 0xA7-0xAB lighter than full-size 0xB1-0xB5', () => {
+    const pairs = [
+      [0xa7, 0xb1], // ァ vs ア
+      [0xa8, 0xb2], // ィ vs イ
+      [0xa9, 0xb3], // ゥ vs ウ
+      [0xaa, 0xb4], // ェ vs エ
+      [0xab, 0xb5] // ォ vs オ
+    ] as const;
+
+    for (const [smallCode, fullCode] of pairs) {
+      const small = countLitPixels(getGlyphForCode(smallCode));
+      const full = countLitPixels(getGlyphForCode(fullCode));
+      expect(small).toBeLessThan(full);
+    }
+  });
+
+  it('keeps small katakana 0xAC-0xAF lighter than full-size counterparts', () => {
+    const pairs = [
+      [0xac, 0xd4], // ャ vs ヤ
+      [0xad, 0xd5], // ュ vs ユ
+      [0xae, 0xd6], // ョ vs ヨ
+      [0xaf, 0xc2] // ッ vs ツ
+    ] as const;
+
+    for (const [smallCode, fullCode] of pairs) {
+      const small = countLitPixels(getGlyphForCode(smallCode));
+      const full = countLitPixels(getGlyphForCode(fullCode));
+      expect(small).toBeLessThan(full);
+    }
+  });
+
+  it('defines glyphs across supplemental range 0x80-0xA0', () => {
+    const fallback = [...getGlyphForCode(0x01)];
+    for (let code = 0x80; code <= 0xa0; code += 1) {
+      expect([...getGlyphForCode(code)]).not.toEqual(fallback);
+    }
+  });
+
+  it('defines glyphs across lowercase ASCII range 0x61-0x7A', () => {
+    const fallback = [...getGlyphForCode(0x01)];
+    for (let code = 0x61; code <= 0x7a; code += 1) {
+      expect([...getGlyphForCode(code)]).not.toEqual(fallback);
+    }
+  });
+
+  it('defines glyphs across supplemental range 0xE0-0xFF', () => {
+    const fallback = [...getGlyphForCode(0x01)];
+    for (let code = 0xe0; code <= 0xff; code += 1) {
+      expect([...getGlyphForCode(code)]).not.toEqual(fallback);
+    }
+  });
+
+  it('matches committed font5x7 golden glyphs for complete range 0x20-0xFF', () => {
+    for (let code = 0x20; code <= 0xff; code += 1) {
+      const expected = FONT5X7_GOLDEN[code.toString(16)];
+      expect(expected, `missing golden for 0x${code.toString(16)}`).toBeDefined();
+      expect(toRowBits(getGlyphForCode(code))).toEqual(expected);
     }
   });
 
