@@ -97,6 +97,83 @@
       "commands": ["REM"],
       "lines": ["FOOBAR"],
       "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "next-without-for",
+      "profile": "public-observed-v1",
+      "commands": ["NEXT"],
+      "lines": ["10 NEXT", "RUN"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "dim-invalid-size",
+      "profile": "public-observed-v1",
+      "commands": ["DIM"],
+      "lines": ["DIM A(-1)"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "read-data-exhausted",
+      "profile": "public-observed-v1",
+      "commands": ["READ"],
+      "lines": ["10 DATA 1", "20 READ A,B", "RUN"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "restore-missing-line",
+      "profile": "public-observed-v1",
+      "commands": ["RESTORE"],
+      "lines": ["10 DATA 1", "20 RESTORE 999", "RUN"],
+      "expect": {"errorContains": ["NO LINE 999"], "errorCodeContains": ["E06"]}
+    },
+    {
+      "id": "peek-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["PEEK"],
+      "lines": ["PRINT PEEK()"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "poke-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["POKE"],
+      "lines": ["POKE 1"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "inp-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["INP"],
+      "lines": ["PRINT INP(1,2)"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "out-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["OUT"],
+      "lines": ["OUT 1"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "beep-too-many-args",
+      "profile": "public-observed-v1",
+      "commands": ["BEEP"],
+      "lines": ["BEEP 1,2,3,4"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "wait-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["WAIT"],
+      "lines": ["WAIT 1,2"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "locate-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["LOCATE"],
+      "lines": ["LOCATE"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     }
   ]
 }

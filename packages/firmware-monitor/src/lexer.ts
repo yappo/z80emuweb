@@ -14,7 +14,22 @@ const KEYWORDS = new Set([
   'IF',
   'THEN',
   'CLS',
-  'REM'
+  'REM',
+  'FOR',
+  'NEXT',
+  'DIM',
+  'DATA',
+  'READ',
+  'RESTORE',
+  'PEEK',
+  'POKE',
+  'INP',
+  'OUT',
+  'BEEP',
+  'WAIT',
+  'LOCATE',
+  'TO',
+  'STEP'
 ]);
 
 export type TokenType =

@@ -8,9 +8,13 @@ export interface BasicMachineAdapter {
   writeLcdChar?(charCode: number): void;
   setDisplayStartLine?(line: number): void;
   getDisplayStartLine?(): number;
+  setTextCursor?(col: number, row: number): void;
   readKeyMatrix?(row: number): number;
   in8?(port: number): number;
   out8?(port: number, value: number): void;
+  peek8?(address: number): number;
+  poke8?(address: number, value: number): void;
+  sleepMs?(ms: number): void;
 }
 
 // 互換確認向けの観測ケース定義。
@@ -57,6 +61,7 @@ export interface MonitorRuntimeSnapshot {
   outputQueue: number[];
   lineBuffer: string;
   variables: Record<string, number>;
+  arrays?: Record<string, { dimensions: number[]; data: number[] }>;
   program: Array<[number, string]>;
   waitingInputVar: string | null;
   observationProfileId?: string;

@@ -33,4 +33,33 @@ describe('parser and semantics', () => {
   it('rejects empty PRINT payload', () => {
     expect(() => parseStatement('PRINT')).toThrowError(/SYNTAX/);
   });
+
+  it('parses FOR/NEXT syntax with optional STEP', () => {
+    const forStmt = parseStatement('FOR I=1 TO 10 STEP 2');
+    expect(forStmt.kind).toBe('FOR');
+    if (forStmt.kind !== 'FOR') {
+      return;
+    }
+    expect(forStmt.variable).toBe('I');
+
+    const nextStmt = parseStatement('NEXT I');
+    expect(nextStmt.kind).toBe('NEXT');
+  });
+
+  it('parses array targets and INP/PEEK expressions', () => {
+    const dimStmt = parseStatement('DIM A(3,2)');
+    expect(dimStmt.kind).toBe('DIM');
+
+    const letStmt = parseStatement('A(1,2)=PEEK(49152)+INP(16)');
+    expect(letStmt.kind).toBe('LET');
+    if (letStmt.kind !== 'LET') {
+      return;
+    }
+    expect(letStmt.target.kind).toBe('array-element-target');
+  });
+
+  it('rejects malformed function argument counts', () => {
+    expect(() => parseStatement('LET A=INP(1,2)')).toThrowError(/SYNTAX/);
+    expect(() => parseStatement('LET A=PEEK()')).toThrowError(/SYNTAX/);
+  });
 });

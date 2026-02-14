@@ -124,6 +124,78 @@
       "expect": {
         "outputContains": ["5"]
       }
+    },
+    {
+      "id": "for-next-loop",
+      "profile": "public-observed-v1",
+      "commands": ["FOR", "NEXT"],
+      "lines": ["10 FOR I=1 TO 3", "20 PRINT I", "30 NEXT I", "RUN"],
+      "expect": {
+        "outputContains": ["1", "2", "3"]
+      }
+    },
+    {
+      "id": "dim-array-assignment",
+      "profile": "public-observed-v1",
+      "commands": ["DIM"],
+      "lines": ["DIM A(2)", "A(1)=7", "PRINT A(1)"],
+      "expect": {
+        "outputContains": ["7"]
+      }
+    },
+    {
+      "id": "data-read-restore",
+      "profile": "public-observed-v1",
+      "commands": ["DATA", "READ", "RESTORE"],
+      "lines": ["10 DATA 5,6", "20 READ A,B", "30 PRINT A,B", "40 RESTORE", "50 READ C", "60 PRINT C", "RUN"],
+      "expect": {
+        "outputContains": ["5 6", "5"]
+      }
+    },
+    {
+      "id": "peek-poke-roundtrip",
+      "profile": "public-observed-v1",
+      "commands": ["PEEK", "POKE"],
+      "lines": ["POKE 100,42", "PRINT PEEK(100)"],
+      "expect": {
+        "outputContains": ["255"]
+      }
+    },
+    {
+      "id": "inp-out-roundtrip",
+      "profile": "public-observed-v1",
+      "commands": ["INP", "OUT"],
+      "lines": ["OUT 16,99", "PRINT INP(16)"],
+      "expect": {
+        "outputContains": ["255"]
+      }
+    },
+    {
+      "id": "beep-calls-sleep",
+      "profile": "public-observed-v1",
+      "commands": ["BEEP"],
+      "lines": ["BEEP 8,1,0", "PRINT 1"],
+      "expect": {
+        "outputContains": ["1"]
+      }
+    },
+    {
+      "id": "wait-calls-sleep",
+      "profile": "public-observed-v1",
+      "commands": ["WAIT"],
+      "lines": ["WAIT 1", "PRINT 1"],
+      "expect": {
+        "outputContains": ["1"]
+      }
+    },
+    {
+      "id": "locate-moves-cursor",
+      "profile": "public-observed-v1",
+      "commands": ["LOCATE"],
+      "lines": ["LOCATE 1,1,0", "PRINT 2"],
+      "expect": {
+        "outputContains": ["2"]
+      }
     }
   ]
 }

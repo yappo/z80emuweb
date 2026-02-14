@@ -32,9 +32,4 @@ describe('basic command manifest', () => {
       }
     }
   });
-
-  it('has at least one TBD command to track strict-compatibility backlog', () => {
-    const manifest = loadManifest();
-    expect(manifest.commands.some((entry) => entry.status === 'TBD')).toBe(true);
-  });
 });

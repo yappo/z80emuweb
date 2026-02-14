@@ -273,187 +273,239 @@
       "id": "FOR",
       "keyword": "FOR",
       "category": "control",
-      "status": "TBD",
-      "confidence": "HYPOTHESIS",
-      "implemented": false,
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
       "evidence": [
         "ver0-doc-index"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E41。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "for-next-loop"
+      ],
+      "negativeCaseIds": [
+        "next-without-for"
+      ],
+      "notes": "FOR-NEXT loop with optional STEP is implemented."
     },
     {
       "id": "NEXT",
       "keyword": "NEXT",
       "category": "control",
-      "status": "TBD",
-      "confidence": "HYPOTHESIS",
-      "implemented": false,
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
       "evidence": [
         "ver0-doc-index"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E42。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "for-next-loop"
+      ],
+      "negativeCaseIds": [
+        "next-without-for"
+      ],
+      "notes": "Loop increment and branch is implemented."
     },
     {
       "id": "DIM",
       "keyword": "DIM",
       "category": "data",
-      "status": "TBD",
-      "confidence": "HYPOTHESIS",
-      "implemented": false,
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
       "evidence": [
         "ver0-doc-index"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E43。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "dim-array-assignment"
+      ],
+      "negativeCaseIds": [
+        "dim-invalid-size"
+      ],
+      "notes": "Numeric array declaration is implemented."
     },
     {
       "id": "DATA",
       "keyword": "DATA",
       "category": "data",
-      "status": "TBD",
-      "confidence": "HYPOTHESIS",
-      "implemented": false,
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
       "evidence": [
         "ver0-doc-index"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E44。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "data-read-restore"
+      ],
+      "negativeCaseIds": [
+        "read-data-exhausted"
+      ],
+      "notes": "DATA stream source is implemented."
     },
     {
       "id": "READ",
       "keyword": "READ",
       "category": "data",
-      "status": "TBD",
-      "confidence": "HYPOTHESIS",
-      "implemented": false,
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
       "evidence": [
         "ver0-doc-index"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E45。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "data-read-restore"
+      ],
+      "negativeCaseIds": [
+        "read-data-exhausted"
+      ],
+      "notes": "Sequential DATA stream read is implemented."
     },
     {
       "id": "RESTORE",
       "keyword": "RESTORE",
       "category": "data",
-      "status": "TBD",
-      "confidence": "HYPOTHESIS",
-      "implemented": false,
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
       "evidence": [
         "ver0-doc-index"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E46。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "data-read-restore"
+      ],
+      "negativeCaseIds": [
+        "restore-missing-line"
+      ],
+      "notes": "DATA pointer restore is implemented."
     },
     {
       "id": "PEEK",
       "keyword": "PEEK",
       "category": "machine",
-      "status": "TBD",
+      "status": "LOCKED",
       "confidence": "DERIVED",
-      "implemented": false,
+      "implemented": true,
       "evidence": [
         "pokecom-basic-samples",
         "akiyan-g850-tech"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E47。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "peek-poke-roundtrip"
+      ],
+      "negativeCaseIds": [
+        "peek-invalid-args"
+      ],
+      "notes": "PEEK(address[,bank]) is implemented; bank is currently accepted and ignored."
     },
     {
       "id": "POKE",
       "keyword": "POKE",
       "category": "machine",
-      "status": "TBD",
+      "status": "LOCKED",
       "confidence": "DERIVED",
-      "implemented": false,
+      "implemented": true,
       "evidence": [
         "pokecom-basic-samples",
         "akiyan-g850-tech"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E48。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "peek-poke-roundtrip"
+      ],
+      "negativeCaseIds": [
+        "poke-invalid-args"
+      ],
+      "notes": "POKE address,value is implemented via machine adapter."
     },
     {
       "id": "INP",
       "keyword": "INP",
       "category": "machine",
-      "status": "TBD",
+      "status": "LOCKED",
       "confidence": "DERIVED",
-      "implemented": false,
+      "implemented": true,
       "evidence": [
         "akiyan-g850-tech",
         "ver0-doc-index"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E49。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "inp-out-roundtrip"
+      ],
+      "negativeCaseIds": [
+        "inp-invalid-args"
+      ],
+      "notes": "INP(port) is implemented via machine adapter."
     },
     {
       "id": "OUT",
       "keyword": "OUT",
       "category": "machine",
-      "status": "TBD",
+      "status": "LOCKED",
       "confidence": "DERIVED",
-      "implemented": false,
+      "implemented": true,
       "evidence": [
         "pokecom-basic-samples",
         "akiyan-g850-tech"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E50。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "inp-out-roundtrip"
+      ],
+      "negativeCaseIds": [
+        "out-invalid-args"
+      ],
+      "notes": "OUT port,value is implemented via machine adapter."
     },
     {
       "id": "BEEP",
       "keyword": "BEEP",
       "category": "audio",
-      "status": "TBD",
-      "confidence": "HYPOTHESIS",
-      "implemented": false,
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
       "evidence": [
         "ashitani-g850-general"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E51。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "beep-calls-sleep"
+      ],
+      "negativeCaseIds": [
+        "beep-too-many-args"
+      ],
+      "notes": "Silent BEEP implementation with bounded sleep is implemented."
     },
     {
       "id": "WAIT",
       "keyword": "WAIT",
       "category": "machine",
-      "status": "TBD",
-      "confidence": "HYPOTHESIS",
-      "implemented": false,
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
       "evidence": [
         "ver0-doc-index"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E52。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "wait-calls-sleep"
+      ],
+      "negativeCaseIds": [
+        "wait-invalid-args"
+      ],
+      "notes": "WAIT is implemented with tick-based sleep. WAIT without args uses 1 second fallback."
     },
     {
       "id": "LOCATE",
       "keyword": "LOCATE",
       "category": "display",
-      "status": "TBD",
-      "confidence": "HYPOTHESIS",
-      "implemented": false,
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
       "evidence": [
         "ver0-doc-index"
       ],
-      "positiveCaseIds": [],
-      "negativeCaseIds": [],
-      "notes": "予約エラーコード E53。現挙動は ERR SYNTAX (E01) を維持。"
+      "positiveCaseIds": [
+        "locate-moves-cursor"
+      ],
+      "negativeCaseIds": [
+        "locate-invalid-args"
+      ],
+      "notes": "LOCATE x[,y[,z]] is implemented. z is accepted but currently ignored."
     }
   ]
 }

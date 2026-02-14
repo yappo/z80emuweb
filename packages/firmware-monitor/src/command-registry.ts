@@ -1,9 +1,7 @@
 import type { StatementNode } from './ast';
 import { BasicRuntimeError } from './errors';
-import { evaluateNumericExpression, evaluatePrintItems } from './semantics';
 import type { BasicCommandSpec, BasicMachineAdapter } from './types';
 
-// コマンドは「即時実行」と「RUN 中」の 2 モードで許可範囲が異なる。
 export type RuntimeMode = 'immediate' | 'program';
 
 export interface CommandExecutionContext {
@@ -23,180 +21,19 @@ export interface StatementExecutionResult {
   stopProgram?: boolean;
 }
 
-type StatementKind = StatementNode['kind'];
-type Handler<T extends StatementNode> = {
-  modes: RuntimeMode[];
-  run: (statement: T, context: CommandExecutionContext) => StatementExecutionResult;
-};
-
-function missingLine(targetLine: number): never {
-  throw new BasicRuntimeError('NO_LINE', `NO LINE ${targetLine}`);
-}
-
-// 文種別ごとの実装テーブル。
-const registry: Partial<Record<StatementKind, Handler<StatementNode>>> = {
-  EMPTY: {
-    modes: ['immediate', 'program'],
-    run: () => ({})
-  },
-  NEW: {
-    modes: ['immediate'],
-    run: (_statement, context) => {
-      context.program.clear();
-      context.variables.clear();
-      context.pushText('OK\r\n');
-      return {};
-    }
-  },
-  LIST: {
-    modes: ['immediate'],
-    run: (_statement, context) => {
-      for (const [line, body] of [...context.program.entries()].sort((a, b) => a[0] - b[0])) {
-        context.pushText(`${line} ${body}\r\n`);
-      }
-      return {};
-    }
-  },
-  RUN: {
-    modes: ['immediate'],
-    run: () => ({})
-  },
-  PRINT: {
-    modes: ['immediate', 'program'],
-    run: (statement, context) => {
-      if (statement.kind !== 'PRINT') {
-        throw new BasicRuntimeError('BAD_STMT', 'BAD STMT');
-      }
-      context.pushText(`${evaluatePrintItems(statement.items, context.variables)}\r\n`);
-      return {};
-    }
-  },
-  LET: {
-    modes: ['immediate', 'program'],
-    run: (statement, context) => {
-      if (statement.kind !== 'LET') {
-        throw new BasicRuntimeError('BAD_STMT', 'BAD STMT');
-      }
-      const value = evaluateNumericExpression(statement.expression, context.variables);
-      context.variables.set(statement.variable, value);
-      if (context.mode === 'immediate') {
-        context.pushText('OK\r\n');
-      }
-      return {};
-    }
-  },
-  INPUT: {
-    modes: ['immediate'],
-    run: (statement, context) => {
-      if (statement.kind !== 'INPUT') {
-        throw new BasicRuntimeError('BAD_STMT', 'BAD STMT');
-      }
-      context.setWaitingInput(statement.variable);
-      context.pushText('? ');
-      return {};
-    }
-  },
-  GOTO: {
-    modes: ['program'],
-    run: (statement, context) => {
-      if (statement.kind !== 'GOTO') {
-        throw new BasicRuntimeError('BAD_STMT', 'BAD STMT');
-      }
-      const target = context.lineToIndex.get(statement.targetLine);
-      if (target === undefined) {
-        missingLine(statement.targetLine);
-      }
-      return { jumpToIndex: target };
-    }
-  },
-  GOSUB: {
-    modes: ['program'],
-    run: (statement, context) => {
-      if (statement.kind !== 'GOSUB') {
-        throw new BasicRuntimeError('BAD_STMT', 'BAD STMT');
-      }
-      const target = context.lineToIndex.get(statement.targetLine);
-      if (target === undefined) {
-        missingLine(statement.targetLine);
-      }
-      context.gosubStack.push(context.nextPc);
-      return { jumpToIndex: target };
-    }
-  },
-  RETURN: {
-    modes: ['program'],
-    run: (_statement, context) => {
-      const resume = context.gosubStack.pop();
-      if (resume === undefined) {
-        throw new BasicRuntimeError('RETURN_WO_GOSUB', 'RETURN W/O GOSUB');
-      }
-      return { jumpToIndex: resume };
-    }
-  },
-  END: {
-    modes: ['program'],
-    run: () => ({ stopProgram: true })
-  },
-  STOP: {
-    modes: ['program'],
-    run: () => ({ stopProgram: true })
-  },
-  IF: {
-    modes: ['program'],
-    run: (statement, context) => {
-      if (statement.kind !== 'IF') {
-        throw new BasicRuntimeError('BAD_STMT', 'BAD STMT');
-      }
-      const cond = evaluateNumericExpression(statement.condition, context.variables);
-      if (cond === 0) {
-        return {};
-      }
-
-      const target = context.lineToIndex.get(statement.targetLine);
-      if (target === undefined) {
-        missingLine(statement.targetLine);
-      }
-      return { jumpToIndex: target };
-    }
-  },
-  CLS: {
-    modes: ['immediate', 'program'],
-    run: (_statement, context) => {
-      context.machineAdapter?.clearLcd?.();
-      if (context.mode === 'immediate') {
-        context.pushText('OK\r\n');
-      }
-      return {};
-    }
-  },
-  REM: {
-    modes: ['immediate', 'program'],
-    run: () => ({})
-  }
-};
-
-export function isRegisteredStatement(kind: StatementKind): boolean {
-  return registry[kind] !== undefined;
+// 実行は runtime.ts 側で行う。互換APIとして関数のみ維持。
+export function isRegisteredStatement(_kind: StatementNode['kind']): boolean {
+  return false;
 }
 
 export function executeRegisteredStatement(
   statement: StatementNode,
   context: CommandExecutionContext
 ): StatementExecutionResult {
-  const handler = registry[statement.kind];
-  if (!handler) {
-    throw new BasicRuntimeError('BAD_STMT', `BAD STMT: ${statement.kind}`);
+  if (statement.kind === 'INPUT' && context.mode === 'program') {
+    throw new BasicRuntimeError('INPUT_IN_RUN', 'INPUT IN RUN');
   }
-
-  // 互換メッセージを優先するため、INPUT は専用エラー文言へ落とし分ける。
-  if (!handler.modes.includes(context.mode)) {
-    if (statement.kind === 'INPUT' && context.mode === 'program') {
-      throw new BasicRuntimeError('INPUT_IN_RUN', 'INPUT IN RUN');
-    }
-    throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
-  }
-
-  return handler.run(statement, context);
+  throw new BasicRuntimeError('BAD_STMT', `BAD STMT: ${statement.kind}`);
 }
 
 // 互換性レポートで使う内蔵コマンド仕様一覧。
@@ -373,36 +210,156 @@ export const BUILTIN_COMMAND_SPECS: BasicCommandSpec[] = [
     id: 'FOR',
     keyword: 'FOR',
     category: 'control',
-    status: 'TBD',
-    confidence: 'HYPOTHESIS',
-    implemented: false,
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
     evidence: ['ver0-doc-index'],
-    positiveCaseIds: [],
-    negativeCaseIds: [],
-    notes: 'Not implemented yet.'
+    positiveCaseIds: ['for-next-loop'],
+    negativeCaseIds: ['next-without-for'],
+    notes: 'FOR-NEXT loop with optional STEP.'
   },
   {
     id: 'NEXT',
     keyword: 'NEXT',
     category: 'control',
-    status: 'TBD',
-    confidence: 'HYPOTHESIS',
-    implemented: false,
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
     evidence: ['ver0-doc-index'],
-    positiveCaseIds: [],
-    negativeCaseIds: [],
-    notes: 'Not implemented yet.'
+    positiveCaseIds: ['for-next-loop'],
+    negativeCaseIds: ['next-without-for'],
+    notes: 'Loop increment and branch.'
+  },
+  {
+    id: 'DIM',
+    keyword: 'DIM',
+    category: 'data',
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
+    evidence: ['ver0-doc-index'],
+    positiveCaseIds: ['dim-array-assignment'],
+    negativeCaseIds: ['dim-invalid-size'],
+    notes: 'Declares numeric arrays.'
+  },
+  {
+    id: 'DATA',
+    keyword: 'DATA',
+    category: 'data',
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
+    evidence: ['ver0-doc-index'],
+    positiveCaseIds: ['data-read-restore'],
+    negativeCaseIds: ['read-data-exhausted'],
+    notes: 'Program data stream source.'
+  },
+  {
+    id: 'READ',
+    keyword: 'READ',
+    category: 'data',
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
+    evidence: ['ver0-doc-index'],
+    positiveCaseIds: ['data-read-restore'],
+    negativeCaseIds: ['read-data-exhausted'],
+    notes: 'Reads values from DATA stream.'
+  },
+  {
+    id: 'RESTORE',
+    keyword: 'RESTORE',
+    category: 'data',
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
+    evidence: ['ver0-doc-index'],
+    positiveCaseIds: ['data-read-restore'],
+    negativeCaseIds: ['restore-missing-line'],
+    notes: 'Resets DATA pointer.'
+  },
+  {
+    id: 'PEEK',
+    keyword: 'PEEK',
+    category: 'machine',
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
+    evidence: ['pokecom-basic-samples', 'akiyan-g850-tech'],
+    positiveCaseIds: ['peek-poke-roundtrip'],
+    negativeCaseIds: ['peek-invalid-args'],
+    notes: 'Reads memory value as expression.'
   },
   {
     id: 'POKE',
     keyword: 'POKE',
     category: 'machine',
-    status: 'TBD',
+    status: 'LOCKED',
     confidence: 'DERIVED',
-    implemented: false,
+    implemented: true,
     evidence: ['pokecom-basic-samples', 'akiyan-g850-tech'],
-    positiveCaseIds: [],
-    negativeCaseIds: [],
-    notes: 'Not implemented yet.'
+    positiveCaseIds: ['peek-poke-roundtrip'],
+    negativeCaseIds: ['poke-invalid-args'],
+    notes: 'Writes memory value.'
+  },
+  {
+    id: 'INP',
+    keyword: 'INP',
+    category: 'machine',
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
+    evidence: ['akiyan-g850-tech', 'ver0-doc-index'],
+    positiveCaseIds: ['inp-out-roundtrip'],
+    negativeCaseIds: ['inp-invalid-args'],
+    notes: 'Reads I/O port as expression.'
+  },
+  {
+    id: 'OUT',
+    keyword: 'OUT',
+    category: 'machine',
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
+    evidence: ['pokecom-basic-samples', 'akiyan-g850-tech'],
+    positiveCaseIds: ['inp-out-roundtrip'],
+    negativeCaseIds: ['out-invalid-args'],
+    notes: 'Writes I/O port value.'
+  },
+  {
+    id: 'BEEP',
+    keyword: 'BEEP',
+    category: 'audio',
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
+    evidence: ['ashitani-g850-general'],
+    positiveCaseIds: ['beep-calls-sleep'],
+    negativeCaseIds: ['beep-too-many-args'],
+    notes: 'Silent implementation with bounded delay.'
+  },
+  {
+    id: 'WAIT',
+    keyword: 'WAIT',
+    category: 'machine',
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
+    evidence: ['ver0-doc-index'],
+    positiveCaseIds: ['wait-calls-sleep'],
+    negativeCaseIds: ['wait-invalid-args'],
+    notes: 'Waits by 1/64 second ticks or default 1s.'
+  },
+  {
+    id: 'LOCATE',
+    keyword: 'LOCATE',
+    category: 'display',
+    status: 'LOCKED',
+    confidence: 'DERIVED',
+    implemented: true,
+    evidence: ['ver0-doc-index'],
+    positiveCaseIds: ['locate-moves-cursor'],
+    negativeCaseIds: ['locate-invalid-args'],
+    notes: 'Moves text cursor; third argument is accepted but ignored.'
   }
 ];
