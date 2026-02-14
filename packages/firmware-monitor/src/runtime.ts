@@ -69,6 +69,23 @@ interface StatementExecutionResult {
   stopProgram?: boolean;
 }
 
+interface ActiveProgramState {
+  entries: ProgramEntry[];
+  lineToIndex: Map<number, number>;
+  forToNext: Map<number, number>;
+  pc: number;
+  steps: number;
+  maxSteps: number;
+  promptOnComplete: boolean;
+}
+
+class RuntimeWaitSignal extends Error {
+  constructor(readonly delayMs: number) {
+    super('RUNTIME_WAIT_SIGNAL');
+    this.name = 'RuntimeWaitSignal';
+  }
+}
+
 function missingLine(targetLine: number): never {
   throw new BasicRuntimeError('NO_LINE', `NO LINE ${targetLine}`);
 }
@@ -114,6 +131,10 @@ export class PcG815BasicRuntime {
 
   private observationProfileId: string;
 
+  private activeProgram: ActiveProgramState | null = null;
+
+  private activeProgramWakeAtMs = 0;
+
   constructor(private readonly options: RuntimeOptions = {}) {
     this.commandSpecs = [...(options.commandSpecs ?? BUILTIN_COMMAND_SPECS)];
     this.observationProfileId = options.defaultProfileId ?? 'public-observed-v1';
@@ -128,6 +149,8 @@ export class PcG815BasicRuntime {
     this.dataPool.length = 0;
     this.dataCursor = 0;
     this.dataLineToCursor.clear();
+    this.activeProgram = null;
+    this.activeProgramWakeAtMs = 0;
 
     if (cold) {
       this.variables.clear();
@@ -215,12 +238,16 @@ export class PcG815BasicRuntime {
       this.pushText(`ERR ${asDisplayError(error)}\r\n`);
     }
 
-    if (this.waitingInputVar === null) {
+    if (this.waitingInputVar === null && !this.isProgramRunning()) {
       this.pushPrompt();
     }
   }
 
-  runProgram(maxSteps = 10_000): void {
+  runProgram(maxSteps = 10_000, promptOnComplete = false): void {
+    if (this.activeProgram !== null) {
+      return;
+    }
+
     const entries = this.getSortedProgramEntries();
     const lineToIndex = new Map<number, number>();
     entries.forEach((entry, index) => lineToIndex.set(entry.line, index));
@@ -231,37 +258,72 @@ export class PcG815BasicRuntime {
     this.buildDataPool(entries);
     this.dataCursor = 0;
 
-    let pc = 0;
-    let steps = 0;
+    this.activeProgram = {
+      entries,
+      lineToIndex,
+      forToNext,
+      pc: 0,
+      steps: 0,
+      maxSteps,
+      promptOnComplete
+    };
+    this.activeProgramWakeAtMs = 0;
+    this.pump(Date.now());
+  }
 
-    while (pc < entries.length) {
-      steps += 1;
-      if (steps > maxSteps) {
-        throw new BasicRuntimeError('RUNAWAY', 'RUNAWAY');
+  pump(nowMs = Date.now()): void {
+    const active = this.activeProgram;
+    if (!active) {
+      return;
+    }
+    if (nowMs < this.activeProgramWakeAtMs) {
+      return;
+    }
+
+    while (active.pc < active.entries.length) {
+      active.steps += 1;
+      if (active.steps > active.maxSteps) {
+        this.finishProgramWithError(new BasicRuntimeError('RUNAWAY', 'RUNAWAY'));
+        return;
       }
 
-      const entry = entries[pc];
+      const entry = active.entries[active.pc];
       if (!entry) {
         break;
       }
 
-      const result = this.executeStatement(entry.statement, {
-        mode: 'program',
-        entries,
-        lineToIndex,
-        forToNext,
-        pc,
-        nextPc: pc + 1
-      });
+      try {
+        const result = this.executeStatement(entry.statement, {
+          mode: 'program',
+          entries: active.entries,
+          lineToIndex: active.lineToIndex,
+          forToNext: active.forToNext,
+          pc: active.pc,
+          nextPc: active.pc + 1
+        });
 
-      if (result.stopProgram) {
-        break;
+        if (result.stopProgram) {
+          this.finishProgramSuccess();
+          return;
+        }
+
+        active.pc = result.jumpToIndex ?? active.pc + 1;
+      } catch (error) {
+        if (error instanceof RuntimeWaitSignal) {
+          active.pc += 1;
+          this.activeProgramWakeAtMs = nowMs + Math.max(0, error.delayMs);
+          return;
+        }
+        this.finishProgramWithError(error);
+        return;
       }
-
-      pc = result.jumpToIndex ?? pc + 1;
     }
 
-    this.pushText('OK\r\n');
+    this.finishProgramSuccess();
+  }
+
+  isProgramRunning(): boolean {
+    return this.activeProgram !== null;
   }
 
   popOutputChar(): number {
@@ -349,7 +411,7 @@ export class PcG815BasicRuntime {
 
   private executeImmediateStatement(statement: StatementNode): void {
     if (statement.kind === 'RUN') {
-      this.runProgram();
+      this.runProgram(10_000, true);
       return;
     }
 
@@ -498,12 +560,12 @@ export class PcG815BasicRuntime {
         }
         const n = statement.n ? this.evaluateNumeric(statement.n) : 0;
         const sleepMs = computeBeepDurationMs(j, n);
-        this.sleepMilliseconds(sleepMs);
+        this.waitMilliseconds(sleepMs, state.mode);
         return {};
       }
       case 'WAIT': {
         if (!statement.duration) {
-          this.sleepMilliseconds(1000);
+          this.waitMilliseconds(1000, state.mode);
           return {};
         }
         const ticks = this.evaluateNumeric(statement.duration);
@@ -511,7 +573,7 @@ export class PcG815BasicRuntime {
           return {};
         }
         const sleepMs = Math.max(1, Math.trunc((ticks * 1000) / 64));
-        this.sleepMilliseconds(sleepMs);
+        this.waitMilliseconds(sleepMs, state.mode);
         return {};
       }
       case 'LOCATE': {
@@ -761,10 +823,37 @@ export class PcG815BasicRuntime {
       this.options.machineAdapter.sleepMs(clamped);
       return;
     }
+    // NOTE: デフォルト実装は非ブロッキング。時間待ちはアダプタ側へ委譲する。
+  }
 
-    const deadline = Date.now() + clamped;
-    while (Date.now() < deadline) {
-      // 同期待機で実時間遅延を再現する。
+  private waitMilliseconds(ms: number, mode: 'immediate' | 'program'): void {
+    const clamped = Math.max(0, Math.trunc(ms));
+    if (clamped <= 0) {
+      return;
+    }
+    if (mode === 'program') {
+      throw new RuntimeWaitSignal(clamped);
+    }
+    this.sleepMilliseconds(clamped);
+  }
+
+  private finishProgramSuccess(): void {
+    const promptOnComplete = this.activeProgram?.promptOnComplete ?? false;
+    this.activeProgram = null;
+    this.activeProgramWakeAtMs = 0;
+    this.pushText('OK\r\n');
+    if (promptOnComplete) {
+      this.pushPrompt();
+    }
+  }
+
+  private finishProgramWithError(error: unknown): void {
+    const promptOnComplete = this.activeProgram?.promptOnComplete ?? false;
+    this.activeProgram = null;
+    this.activeProgramWakeAtMs = 0;
+    this.pushText(`ERR ${asDisplayError(error)}\r\n`);
+    if (promptOnComplete) {
+      this.pushPrompt();
     }
   }
 

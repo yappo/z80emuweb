@@ -42,6 +42,50 @@
         </section>
 
         <section class="status-panel">
+          <section class="basic-editor-panel" aria-label="BASIC editor">
+            <div class="basic-editor-head">
+              <h2>BASIC Editor</h2>
+              <span id="basic-run-status" class="basic-run-status" role="status" aria-live="polite">Idle</span>
+            </div>
+            <p class="basic-editor-hint">
+              Editor focus: keyboard input types into this editor. Outside editor focus: keys control the emulator.
+              RUN executes: NEW -> program lines -> RUN.
+            </p>
+            <p class="basic-editor-ref">
+              Language reference:
+              <a
+                href="https://github.com/yappo/z80emuweb/blob/main/docs/basic-language-spec.md"
+                target="_blank"
+                rel="noopener noreferrer"
+                >basic-language-spec.md</a
+              >
+            </p>
+            <div class="basic-editor-body">
+              <pre id="basic-editor-lines" class="basic-editor-lines" aria-hidden="true">1</pre>
+              <textarea
+                id="basic-editor"
+                class="basic-editor"
+                spellcheck="false"
+                autocapitalize="off"
+                autocomplete="off"
+                aria-label="BASIC source editor"
+              >10 A = 1
+20 PRINT A
+30 A = A + 1
+40 WAIT 64
+50 IF A > 10 THEN 70
+60 GOTO 20
+70 PRINT "owari"
+80 END</textarea>
+            </div>
+            <div class="basic-editor-controls" role="group" aria-label="BASIC editor controls">
+              <button id="basic-run" type="button">RUN Program</button>
+              <button id="basic-stop" type="button">STOP CPU</button>
+              <button id="basic-new" type="button">NEW</button>
+              <button id="basic-load-sample" type="button">Load Sample</button>
+            </div>
+          </section>
+
           <h2>Status</h2>
           <pre id="debug-view" class="debug-view" hidden></pre>
           <h3>Input Log</h3>

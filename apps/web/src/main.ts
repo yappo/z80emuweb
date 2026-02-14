@@ -13,11 +13,22 @@ import {
 import './styles.css';
 
 type BootState = 'BOOTING' | 'READY' | 'FAILED' | 'STALLED';
+type ProgramRunStatus = 'idle' | 'running' | 'ok' | 'failed';
+
+interface RunBasicProgramOptions {
+  resetProgram?: boolean;
+}
+
+interface RunBasicProgramResult {
+  ok: boolean;
+  errorLine?: string;
+}
 
 declare global {
   interface Window {
     __pcg815?: {
       injectBasicLine: (line: string) => void;
+      runBasicProgram: (source: string, options?: RunBasicProgramOptions) => Promise<RunBasicProgramResult>;
       getTextLines: () => string[];
       getBootState: () => BootState;
       setKanaMode: (enabled: boolean) => void;
@@ -46,6 +57,13 @@ const bootStatus = document.querySelector<HTMLElement>('#boot-status');
 const debugView = document.querySelector<HTMLElement>('#debug-view');
 const logView = document.querySelector<HTMLElement>('#log-view');
 const keyMapList = document.querySelector<HTMLElement>('#keymap-list');
+const basicEditor = document.querySelector<HTMLTextAreaElement>('#basic-editor');
+const basicEditorLines = document.querySelector<HTMLElement>('#basic-editor-lines');
+const basicRunStatus = document.querySelector<HTMLElement>('#basic-run-status');
+const basicRunButton = document.querySelector<HTMLButtonElement>('#basic-run');
+const basicStopButton = document.querySelector<HTMLButtonElement>('#basic-stop');
+const basicNewButton = document.querySelector<HTMLButtonElement>('#basic-new');
+const basicLoadSampleButton = document.querySelector<HTMLButtonElement>('#basic-load-sample');
 const fontDebugPanel = document.querySelector<HTMLElement>('#font-debug-panel');
 const fontDebugMeta = document.querySelector<HTMLElement>('#font-debug-meta');
 const fontDebugCanvas = document.querySelector<HTMLCanvasElement>('#font-debug-canvas');
@@ -63,6 +81,13 @@ if (
   !debugView ||
   !logView ||
   !keyMapList ||
+  !basicEditor ||
+  !basicEditorLines ||
+  !basicRunStatus ||
+  !basicRunButton ||
+  !basicStopButton ||
+  !basicNewButton ||
+  !basicLoadSampleButton ||
   !fontDebugPanel ||
   !fontDebugMeta ||
   !fontDebugCanvas ||
@@ -139,6 +164,22 @@ let lastLitPixels = 0;
 
 const inputLog: string[] = [];
 const pressedCodes = new Set<string>();
+const BASIC_SAMPLE = `10 A = 1
+20 PRINT A
+30 A = A + 1
+40 WAIT 64
+50 IF A > 10 THEN 70
+60 GOTO 20
+70 PRINT "owari"
+80 END`;
+let programRunInFlight = false;
+let programRunToken = 0;
+
+function waitForAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
 
 if (debugMode) {
   debugView.hidden = false;
@@ -157,6 +198,123 @@ function appendLog(line: string): void {
     inputLog.shift();
   }
   logView.textContent = inputLog.join('\n');
+}
+
+function updateEditorLineNumbers(): void {
+  const lineCount = basicEditor.value.split('\n').length;
+  const lines = Array.from({ length: Math.max(1, lineCount) }, (_, idx) => String(idx + 1));
+  basicEditorLines.textContent = lines.join('\n');
+}
+
+function syncEditorScroll(): void {
+  basicEditorLines.scrollTop = basicEditor.scrollTop;
+}
+
+function setProgramRunStatus(state: ProgramRunStatus, detail: string): void {
+  basicRunStatus.dataset.state = state;
+  basicRunStatus.textContent = detail;
+}
+
+function setProgramRunInFlight(inFlight: boolean): void {
+  programRunInFlight = inFlight;
+  basicRunButton.disabled = inFlight;
+}
+
+function normalizeProgramSource(source: string): string[] {
+  return source
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0);
+}
+
+function isTextInputTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) {
+    return true;
+  }
+  return target.isContentEditable;
+}
+
+function injectBasicLine(line: string): void {
+  for (const ch of line) {
+    machine.out8(0x1c, ch.charCodeAt(0) & 0xff);
+  }
+  machine.out8(0x1c, 0x0d);
+  machine.tick(40_000);
+  renderLcd();
+}
+
+async function runBasicProgram(
+  source: string,
+  options: RunBasicProgramOptions = {}
+): Promise<RunBasicProgramResult> {
+  if (programRunInFlight) {
+    return { ok: false, errorLine: 'RUN ALREADY IN PROGRESS' };
+  }
+
+  setProgramRunInFlight(true);
+  const runToken = ++programRunToken;
+  setProgramRunStatus('running', 'Running');
+  appendLog('BASIC RUN start');
+
+  try {
+    if (!running) {
+      setRunningState(true);
+    }
+
+    const resetProgram = options.resetProgram !== false;
+    const lines = normalizeProgramSource(source);
+
+    if (resetProgram) {
+      injectBasicLine('NEW');
+    }
+    for (const line of lines) {
+      injectBasicLine(line);
+    }
+    injectBasicLine('RUN');
+
+    const timeoutMs = 20_000;
+    const start = performance.now();
+    while (machine.isRuntimeProgramRunning()) {
+      if (programRunToken !== runToken) {
+        setProgramRunStatus('idle', 'Stopped');
+        appendLog('BASIC RUN stopped');
+        return { ok: false, errorLine: 'STOPPED' };
+      }
+      if (!running) {
+        setRunningState(true);
+      }
+      if (performance.now() - start > timeoutMs) {
+        const timeoutLine = 'RUN TIMEOUT';
+        setProgramRunStatus('failed', `Failed: ${timeoutLine}`);
+        appendLog(`BASIC RUN failed ${timeoutLine}`);
+        return { ok: false, errorLine: timeoutLine };
+      }
+      await waitForAnimationFrame();
+    }
+
+    const text = machine.getTextLines();
+    const errorLine = text.find((line) => line.includes('ERR '));
+    if (errorLine) {
+      setProgramRunStatus('failed', `Failed: ${errorLine}`);
+      appendLog(`BASIC RUN failed ${errorLine}`);
+      return { ok: false, errorLine };
+    }
+
+    setProgramRunStatus('ok', 'Run OK');
+    appendLog('BASIC RUN ok');
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    setProgramRunStatus('failed', `Failed: ${message}`);
+    appendLog(`BASIC RUN exception ${message}`);
+    return { ok: false, errorLine: message };
+  } finally {
+    setProgramRunInFlight(false);
+  }
 }
 
 function updateKanaToggleUi(): void {
@@ -551,18 +709,22 @@ function frame(now: number): void {
   requestAnimationFrame(frame);
 }
 
-function toggleRunState(): void {
+function setRunningState(next: boolean): void {
   if (currentState === 'FAILED') {
     appendLog('RUN ignored: failed state');
     return;
   }
 
-  running = !running;
+  running = next;
   runToggleButton.textContent = running ? 'Stop' : 'Run';
 
   if (running && currentState !== 'READY') {
     setBootStatus('READY', `strict=${strictMode ? 1 : 0}`);
   }
+}
+
+function toggleRunState(): void {
+  setRunningState(!running);
 }
 
 fontDebugToggleButton.addEventListener('click', () => {
@@ -609,6 +771,41 @@ runToggleButton.addEventListener('click', () => {
   toggleRunState();
 });
 
+basicRunButton.addEventListener('click', async () => {
+  if (programRunInFlight) {
+    return;
+  }
+  await runBasicProgram(basicEditor.value, { resetProgram: true });
+});
+
+basicStopButton.addEventListener('click', () => {
+  programRunToken += 1;
+  setRunningState(false);
+  setProgramRunStatus('idle', 'Stopped');
+  appendLog('CPU STOP by editor');
+});
+
+basicNewButton.addEventListener('click', () => {
+  injectBasicLine('NEW');
+  setProgramRunStatus('idle', 'Program cleared');
+  appendLog('BASIC NEW');
+});
+
+basicLoadSampleButton.addEventListener('click', () => {
+  basicEditor.value = BASIC_SAMPLE;
+  updateEditorLineNumbers();
+  syncEditorScroll();
+  setProgramRunStatus('idle', 'Sample loaded');
+});
+
+basicEditor.addEventListener('input', () => {
+  updateEditorLineNumbers();
+});
+
+basicEditor.addEventListener('scroll', () => {
+  syncEditorScroll();
+});
+
 stepButton.addEventListener('click', () => {
   try {
     machine.tick(64);
@@ -632,6 +829,9 @@ kanaToggleButton.addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', (event) => {
+  if (isTextInputTarget(event.target)) {
+    return;
+  }
   if (!KEY_MAP_BY_CODE.has(event.code)) {
     return;
   }
@@ -647,6 +847,9 @@ window.addEventListener('keydown', (event) => {
 });
 
 window.addEventListener('keyup', (event) => {
+  if (isTextInputTarget(event.target)) {
+    return;
+  }
   if (!KEY_MAP_BY_CODE.has(event.code)) {
     return;
   }
@@ -672,16 +875,14 @@ if (booted) {
 updateKanaToggleUi();
 redrawFontDebug();
 updateFontMeta(selectedGlyphCode);
+setProgramRunStatus('idle', 'Idle');
+basicEditor.value = BASIC_SAMPLE;
+updateEditorLineNumbers();
+syncEditorScroll();
 
 window.__pcg815 = {
-  injectBasicLine: (line: string) => {
-    for (const ch of line) {
-      machine.out8(0x1c, ch.charCodeAt(0) & 0xff);
-    }
-    machine.out8(0x1c, 0x0d);
-    machine.tick(40_000);
-    renderLcd();
-  },
+  injectBasicLine,
+  runBasicProgram,
   getTextLines: () => machine.getTextLines(),
   getBootState: () => currentState,
   setKanaMode: (enabled: boolean) => {

@@ -190,6 +190,113 @@ button[data-active='1'] {
   align-content: start;
 }
 
+.basic-editor-panel {
+  margin: 0;
+  padding: 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #b9a68a;
+  background: color-mix(in oklab, var(--panel), white 20%);
+  display: grid;
+  gap: 0.45rem;
+}
+
+.basic-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.basic-run-status {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem;
+  color: #2f251a;
+  background: #e8dec8;
+  border: 1px solid #b9a68a;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+}
+
+.basic-run-status[data-state='running'] {
+  color: #204020;
+  background: #d9ecd4;
+  border-color: #7ba06f;
+}
+
+.basic-run-status[data-state='failed'] {
+  color: #6e1f1f;
+  background: #f5d9d9;
+  border-color: #b45f5f;
+}
+
+.basic-run-status[data-state='ok'] {
+  color: #244020;
+  background: #e0f0dd;
+  border-color: #72926c;
+}
+
+.basic-editor-hint {
+  margin: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.basic-editor-ref {
+  margin: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.basic-editor-ref a {
+  color: #244020;
+}
+
+.basic-editor-body {
+  border: 1px solid #b9a68a;
+  border-radius: 8px;
+  background: #f4ecdc;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.basic-editor-lines {
+  margin: 0;
+  padding: 0.5rem 0.35rem;
+  min-width: 2.2rem;
+  text-align: right;
+  color: #7a6651;
+  background: #e5d8c0;
+  border-right: 1px solid #c2ae8f;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  user-select: none;
+  overflow: hidden;
+}
+
+.basic-editor {
+  resize: vertical;
+  min-height: 180px;
+  margin: 0;
+  border: 0;
+  outline: none;
+  padding: 0.5rem 0.6rem;
+  background: transparent;
+  color: #2a2118;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.basic-editor-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .status-panel h2,
 .status-panel h3 {
   margin: 0;
