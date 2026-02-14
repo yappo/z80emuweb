@@ -20,6 +20,10 @@ declare global {
       injectBasicLine: (line: string) => void;
       getTextLines: () => string[];
       getBootState: () => BootState;
+      setKanaMode: (enabled: boolean) => void;
+      getKanaMode: () => boolean;
+      drainAsciiFifo: () => number[];
+      tapKey: (code: string) => void;
     };
   }
 }
@@ -35,6 +39,7 @@ const canvas = document.querySelector<HTMLCanvasElement>('#lcd');
 const runToggleButton = document.querySelector<HTMLButtonElement>('#run-toggle');
 const stepButton = document.querySelector<HTMLButtonElement>('#step');
 const resetButton = document.querySelector<HTMLButtonElement>('#reset');
+const kanaToggleButton = document.querySelector<HTMLButtonElement>('#kana-toggle');
 const fontDebugToggleButton = document.querySelector<HTMLButtonElement>('#font-debug-toggle');
 const speedIndicator = document.querySelector<HTMLElement>('#speed-indicator');
 const bootStatus = document.querySelector<HTMLElement>('#boot-status');
@@ -51,6 +56,7 @@ if (
   !runToggleButton ||
   !stepButton ||
   !resetButton ||
+  !kanaToggleButton ||
   !fontDebugToggleButton ||
   !speedIndicator ||
   !bootStatus ||
@@ -151,6 +157,25 @@ function appendLog(line: string): void {
     inputLog.shift();
   }
   logView.textContent = inputLog.join('\n');
+}
+
+function updateKanaToggleUi(): void {
+  const enabled = machine.getKanaMode();
+  kanaToggleButton.dataset.active = enabled ? '1' : '0';
+  kanaToggleButton.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+  kanaToggleButton.textContent = enabled ? 'かな ON' : 'かな OFF';
+}
+
+function setKanaMode(enabled: boolean, source: 'ui' | 'api'): void {
+  const next = Boolean(enabled);
+  if (machine.getKanaMode() === next) {
+    updateKanaToggleUi();
+    return;
+  }
+  machine.setKanaMode(next);
+  updateKanaToggleUi();
+  appendLog(`KANA ${next ? 'ON' : 'OFF'} (${source})`);
+  updateDebugView();
 }
 
 function codeToAsciiLabel(code: number): string {
@@ -370,6 +395,7 @@ function updateDebugView(): void {
       tstates: state.tstates,
       halted: state.halted,
       queueDepth: state.queueDepth,
+      kanaMode: machine.getKanaMode(),
       speed: speedIndicator.textContent
     },
     null,
@@ -395,6 +421,7 @@ function fail(state: 'FAILED' | 'STALLED', message: string, error?: unknown): vo
       pc: `0x${cpu.registers.pc.toString(16).padStart(4, '0')}`,
       tstates: cpu.tstates,
       queueDepth: cpu.queueDepth,
+      kanaMode: machine.getKanaMode(),
       strict: strictMode
     },
     null,
@@ -600,6 +627,10 @@ resetButton.addEventListener('click', () => {
   }
 });
 
+kanaToggleButton.addEventListener('click', () => {
+  setKanaMode(!machine.getKanaMode(), 'ui');
+});
+
 window.addEventListener('keydown', (event) => {
   if (!KEY_MAP_BY_CODE.has(event.code)) {
     return;
@@ -638,6 +669,7 @@ if (booted) {
   startAnimationLoop();
 }
 
+updateKanaToggleUi();
 redrawFontDebug();
 updateFontMeta(selectedGlyphCode);
 
@@ -651,5 +683,24 @@ window.__pcg815 = {
     renderLcd();
   },
   getTextLines: () => machine.getTextLines(),
-  getBootState: () => currentState
+  getBootState: () => currentState,
+  setKanaMode: (enabled: boolean) => {
+    setKanaMode(Boolean(enabled), 'api');
+  },
+  getKanaMode: () => machine.getKanaMode(),
+  drainAsciiFifo: () => {
+    const out: number[] = [];
+    for (let i = 0; i < 64; i += 1) {
+      const code = machine.in8(0x12);
+      if (code === 0) {
+        break;
+      }
+      out.push(code);
+    }
+    return out;
+  },
+  tapKey: (code: string) => {
+    machine.setKeyState(code, true);
+    machine.setKeyState(code, false);
+  }
 };

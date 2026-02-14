@@ -14,6 +14,8 @@ export interface SnapshotV1 {
     selectedKeyRow: number;
     keyboardRows: number[];
     asciiQueue: number[];
+    kanaMode: boolean;
+    kanaComposeBuffer: string;
     romBankSelect: number;
     expansionControl: number;
     runtime: MonitorRuntimeSnapshot;
@@ -24,6 +26,8 @@ export interface SnapshotV1 {
 export interface MachinePCG815 {
   tick(tstates: number): void;
   setKeyState(code: string, pressed: boolean): void;
+  setKanaMode(enabled: boolean): void;
+  getKanaMode(): boolean;
   getFrameBuffer(): Uint8Array;
   reset(cold: boolean): void;
 }

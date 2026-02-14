@@ -18,6 +18,10 @@ function normalizeProgramLine(statement: string): string {
   return statement.trim();
 }
 
+function isDisplayInputByte(value: number): boolean {
+  return (value >= 0x20 && value <= 0x7e) || value >= 0x80;
+}
+
 export class PcG815BasicRuntime {
   private readonly outputQueue: number[] = [];
 
@@ -71,10 +75,9 @@ export class PcG815BasicRuntime {
       return;
     }
 
-    if (value >= 0x20 && value <= 0x7e) {
-      const ch = String.fromCharCode(value);
-      this.lineBuffer += ch;
-      this.pushText(ch);
+    if (isDisplayInputByte(value)) {
+      this.lineBuffer += String.fromCharCode(value);
+      this.pushByte(value);
     }
   }
 
@@ -272,6 +275,10 @@ export class PcG815BasicRuntime {
     for (const ch of text) {
       this.outputQueue.push(ch.charCodeAt(0) & 0xff);
     }
+  }
+
+  private pushByte(byte: number): void {
+    this.outputQueue.push(byte & 0xff);
   }
 }
 

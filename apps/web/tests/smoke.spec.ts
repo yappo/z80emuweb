@@ -21,6 +21,7 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
   await expect(page.locator('#run-toggle')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Step' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Reset' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /かな OFF/i })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Fonts' })).toBeVisible();
 
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
@@ -31,6 +32,54 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
   await expect(page.locator('#font-debug-panel')).toBeVisible();
   await expect(page.locator('#font-debug-meta')).toContainText(/0x41/i);
   await expect(page.locator('#font-kana-canvas')).toBeVisible();
+
+  // Stop CPU loop so ASCII FIFO is not consumed by runtime while testing input mapping.
+  await page.getByRole('button', { name: 'Stop' }).click();
+  await expect(page.getByRole('button', { name: 'Run' })).toBeVisible();
+
+  const kanaToggle = page.getByRole('button', { name: /かな OFF/i });
+  await kanaToggle.click();
+  await expect(page.getByRole('button', { name: /かな ON/i })).toBeVisible();
+
+  await page.evaluate(() => {
+    (window as { __pcg815?: { drainAsciiFifo: () => number[] } }).__pcg815?.drainAsciiFifo();
+  });
+
+  await page.evaluate(() => {
+    const api = window as { __pcg815?: { tapKey: (code: string) => void } };
+    api.__pcg815?.tapKey('KeyK');
+    api.__pcg815?.tapKey('KeyA');
+  });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { drainAsciiFifo: () => number[] } };
+          return api.__pcg815?.drainAsciiFifo() ?? [];
+        }),
+      { timeout: 3_000, intervals: [100, 250, 500] }
+    )
+    .toEqual([0xb6]);
+
+  await page.getByRole('button', { name: /かな ON/i }).click();
+  await expect(page.getByRole('button', { name: /かな OFF/i })).toBeVisible();
+
+  await page.evaluate(() => {
+    const api = window as { __pcg815?: { tapKey: (code: string) => void } };
+    api.__pcg815?.tapKey('KeyA');
+  });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { drainAsciiFifo: () => number[] } };
+          return api.__pcg815?.drainAsciiFifo() ?? [];
+        }),
+      { timeout: 3_000, intervals: [100, 250, 500] }
+    )
+    .toEqual([0x41]);
 
   await expect
     .poll(
@@ -135,4 +184,27 @@ test('strict URL parameter enables strict boot mode diagnostics', async ({ page 
   await page.goto('/?strict=1&debug=1');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
   await expect(page.locator('#boot-status')).toContainText(/strict=1/i);
+});
+
+test('kana mode renders half-width katakana on LCD', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('button', { name: /かな OFF/i }).click();
+  await expect(page.getByRole('button', { name: /かな ON/i })).toBeVisible();
+
+  await page.keyboard.press('KeyS');
+  await page.keyboard.press('KeyA');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          const lines = api.__pcg815?.getTextLines() ?? [];
+          return lines.some((line) => [...line].some((ch) => ch.charCodeAt(0) === 0xbb));
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toBe(true);
 });

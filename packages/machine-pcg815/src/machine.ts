@@ -70,6 +70,199 @@ const PORT_LCD_STATUS_MIRROR = getIoPortSpec('lcd-status-mirror').port;
 
 const WORKAREA_DISPLAY_START_LINE = getWorkAreaSpec('display-start-line').address;
 
+const HALF_WIDTH_KANA_DAKUTEN = 0xde;
+const HALF_WIDTH_KANA_HANDAKUTEN = 0xdf;
+const HALF_WIDTH_KANA_SOKUON = 0xaf;
+const HALF_WIDTH_KANA_N = 0xdd;
+
+const KANA_DIRECT_KEYCODE_TO_HALFWIDTH = new Map<string, readonly number[]>([
+  ['Minus', [0xb0]], // ｰ
+  ['Comma', [0xa4]], // ､
+  ['Period', [0xa1]], // ｡
+  ['Slash', [0xa5]], // ･
+  ['Quote', [HALF_WIDTH_KANA_DAKUTEN]], // ﾞ
+  ['BracketLeft', [HALF_WIDTH_KANA_HANDAKUTEN]] // ﾟ
+]);
+
+const ROMAJI_TO_HALFWIDTH = new Map<string, readonly number[]>([
+  ['a', [0xb1]],
+  ['i', [0xb2]],
+  ['u', [0xb3]],
+  ['e', [0xb4]],
+  ['o', [0xb5]],
+  ['wi', [0xb2]],
+  ['we', [0xb4]],
+  ['wu', [0xb3]],
+  ['wa', [0xdc]],
+  ['wo', [0xa6]],
+
+  ['xa', [0xa7]],
+  ['la', [0xa7]],
+  ['xi', [0xa8]],
+  ['li', [0xa8]],
+  ['xu', [0xa9]],
+  ['lu', [0xa9]],
+  ['xe', [0xaa]],
+  ['le', [0xaa]],
+  ['xo', [0xab]],
+  ['lo', [0xab]],
+  ['xya', [0xac]],
+  ['lya', [0xac]],
+  ['xyu', [0xad]],
+  ['lyu', [0xad]],
+  ['xyo', [0xae]],
+  ['lyo', [0xae]],
+  ['xtu', [HALF_WIDTH_KANA_SOKUON]],
+  ['ltu', [HALF_WIDTH_KANA_SOKUON]],
+  ['xtsu', [HALF_WIDTH_KANA_SOKUON]],
+  ['ltsu', [HALF_WIDTH_KANA_SOKUON]],
+  ['xwa', [0xdc]],
+  ['lwa', [0xdc]],
+
+  ['ka', [0xb6]],
+  ['ki', [0xb7]],
+  ['ku', [0xb8]],
+  ['ke', [0xb9]],
+  ['ko', [0xba]],
+  ['kya', [0xb7, 0xac]],
+  ['kyu', [0xb7, 0xad]],
+  ['kyo', [0xb7, 0xae]],
+
+  ['sa', [0xbb]],
+  ['si', [0xbc]],
+  ['shi', [0xbc]],
+  ['su', [0xbd]],
+  ['se', [0xbe]],
+  ['so', [0xbf]],
+  ['sya', [0xbc, 0xac]],
+  ['syu', [0xbc, 0xad]],
+  ['syo', [0xbc, 0xae]],
+  ['sha', [0xbc, 0xac]],
+  ['shu', [0xbc, 0xad]],
+  ['sho', [0xbc, 0xae]],
+
+  ['ta', [0xc0]],
+  ['ti', [0xc1]],
+  ['chi', [0xc1]],
+  ['tu', [0xc2]],
+  ['tsu', [0xc2]],
+  ['te', [0xc3]],
+  ['to', [0xc4]],
+  ['tya', [0xc1, 0xac]],
+  ['tyu', [0xc1, 0xad]],
+  ['tyo', [0xc1, 0xae]],
+  ['cha', [0xc1, 0xac]],
+  ['chu', [0xc1, 0xad]],
+  ['cho', [0xc1, 0xae]],
+
+  ['na', [0xc5]],
+  ['ni', [0xc6]],
+  ['nu', [0xc7]],
+  ['ne', [0xc8]],
+  ['no', [0xc9]],
+  ['nya', [0xc6, 0xac]],
+  ['nyu', [0xc6, 0xad]],
+  ['nyo', [0xc6, 0xae]],
+
+  ['ha', [0xca]],
+  ['hi', [0xcb]],
+  ['hu', [0xcc]],
+  ['fu', [0xcc]],
+  ['he', [0xcd]],
+  ['ho', [0xce]],
+  ['hya', [0xcb, 0xac]],
+  ['hyu', [0xcb, 0xad]],
+  ['hyo', [0xcb, 0xae]],
+
+  ['ma', [0xcf]],
+  ['mi', [0xd0]],
+  ['mu', [0xd1]],
+  ['me', [0xd2]],
+  ['mo', [0xd3]],
+  ['mya', [0xd0, 0xac]],
+  ['myu', [0xd0, 0xad]],
+  ['myo', [0xd0, 0xae]],
+
+  ['ya', [0xd4]],
+  ['yu', [0xd5]],
+  ['yo', [0xd6]],
+
+  ['ra', [0xd7]],
+  ['ri', [0xd8]],
+  ['ru', [0xd9]],
+  ['re', [0xda]],
+  ['ro', [0xdb]],
+  ['rya', [0xd8, 0xac]],
+  ['ryu', [0xd8, 0xad]],
+  ['ryo', [0xd8, 0xae]],
+
+  ['ga', [0xb6, HALF_WIDTH_KANA_DAKUTEN]],
+  ['gi', [0xb7, HALF_WIDTH_KANA_DAKUTEN]],
+  ['gu', [0xb8, HALF_WIDTH_KANA_DAKUTEN]],
+  ['ge', [0xb9, HALF_WIDTH_KANA_DAKUTEN]],
+  ['go', [0xba, HALF_WIDTH_KANA_DAKUTEN]],
+  ['gya', [0xb7, HALF_WIDTH_KANA_DAKUTEN, 0xac]],
+  ['gyu', [0xb7, HALF_WIDTH_KANA_DAKUTEN, 0xad]],
+  ['gyo', [0xb7, HALF_WIDTH_KANA_DAKUTEN, 0xae]],
+
+  ['za', [0xbb, HALF_WIDTH_KANA_DAKUTEN]],
+  ['zi', [0xbc, HALF_WIDTH_KANA_DAKUTEN]],
+  ['ji', [0xbc, HALF_WIDTH_KANA_DAKUTEN]],
+  ['zu', [0xbd, HALF_WIDTH_KANA_DAKUTEN]],
+  ['ze', [0xbe, HALF_WIDTH_KANA_DAKUTEN]],
+  ['zo', [0xbf, HALF_WIDTH_KANA_DAKUTEN]],
+  ['zya', [0xbc, HALF_WIDTH_KANA_DAKUTEN, 0xac]],
+  ['zyu', [0xbc, HALF_WIDTH_KANA_DAKUTEN, 0xad]],
+  ['zyo', [0xbc, HALF_WIDTH_KANA_DAKUTEN, 0xae]],
+  ['ja', [0xbc, HALF_WIDTH_KANA_DAKUTEN, 0xac]],
+  ['ju', [0xbc, HALF_WIDTH_KANA_DAKUTEN, 0xad]],
+  ['jo', [0xbc, HALF_WIDTH_KANA_DAKUTEN, 0xae]],
+  ['jya', [0xbc, HALF_WIDTH_KANA_DAKUTEN, 0xac]],
+  ['jyu', [0xbc, HALF_WIDTH_KANA_DAKUTEN, 0xad]],
+  ['jyo', [0xbc, HALF_WIDTH_KANA_DAKUTEN, 0xae]],
+
+  ['da', [0xc0, HALF_WIDTH_KANA_DAKUTEN]],
+  ['di', [0xc1, HALF_WIDTH_KANA_DAKUTEN]],
+  ['du', [0xc2, HALF_WIDTH_KANA_DAKUTEN]],
+  ['de', [0xc3, HALF_WIDTH_KANA_DAKUTEN]],
+  ['do', [0xc4, HALF_WIDTH_KANA_DAKUTEN]],
+  ['dya', [0xc1, HALF_WIDTH_KANA_DAKUTEN, 0xac]],
+  ['dyu', [0xc1, HALF_WIDTH_KANA_DAKUTEN, 0xad]],
+  ['dyo', [0xc1, HALF_WIDTH_KANA_DAKUTEN, 0xae]],
+
+  ['ba', [0xca, HALF_WIDTH_KANA_DAKUTEN]],
+  ['bi', [0xcb, HALF_WIDTH_KANA_DAKUTEN]],
+  ['bu', [0xcc, HALF_WIDTH_KANA_DAKUTEN]],
+  ['be', [0xcd, HALF_WIDTH_KANA_DAKUTEN]],
+  ['bo', [0xce, HALF_WIDTH_KANA_DAKUTEN]],
+  ['bya', [0xcb, HALF_WIDTH_KANA_DAKUTEN, 0xac]],
+  ['byu', [0xcb, HALF_WIDTH_KANA_DAKUTEN, 0xad]],
+  ['byo', [0xcb, HALF_WIDTH_KANA_DAKUTEN, 0xae]],
+
+  ['pa', [0xca, HALF_WIDTH_KANA_HANDAKUTEN]],
+  ['pi', [0xcb, HALF_WIDTH_KANA_HANDAKUTEN]],
+  ['pu', [0xcc, HALF_WIDTH_KANA_HANDAKUTEN]],
+  ['pe', [0xcd, HALF_WIDTH_KANA_HANDAKUTEN]],
+  ['po', [0xce, HALF_WIDTH_KANA_HANDAKUTEN]],
+  ['pya', [0xcb, HALF_WIDTH_KANA_HANDAKUTEN, 0xac]],
+  ['pyu', [0xcb, HALF_WIDTH_KANA_HANDAKUTEN, 0xad]],
+  ['pyo', [0xcb, HALF_WIDTH_KANA_HANDAKUTEN, 0xae]]
+]);
+
+const ROMAJI_KEYS = [...ROMAJI_TO_HALFWIDTH.keys()];
+const MAX_ROMAJI_SEQUENCE_LENGTH = ROMAJI_KEYS.reduce((max, key) => Math.max(max, key.length), 1);
+
+function keyCodeToRomajiLetter(code: string): string | undefined {
+  if (code.length === 4 && code.startsWith('Key')) {
+    return code[3]?.toLowerCase();
+  }
+  return undefined;
+}
+
+function isSokuonConsonant(ch: string): boolean {
+  return ch >= 'a' && ch <= 'z' && !'aeioun'.includes(ch);
+}
+
 export class PCG815Machine implements MachinePCG815, Bus {
   static readonly CLOCK_HZ = 3_579_545;
 
@@ -96,6 +289,9 @@ export class PCG815Machine implements MachinePCG815, Bus {
   private readonly pressedCodes = new Set<string>();
 
   private readonly asciiQueue: number[] = [];
+
+  private kanaMode = false;
+  private kanaComposeBuffer = '';
 
   private selectedKeyRow = 0;
 
@@ -136,6 +332,8 @@ export class PCG815Machine implements MachinePCG815, Bus {
     this.keyboardRows.fill(0xff);
     this.pressedCodes.clear();
     this.asciiQueue.length = 0;
+    this.kanaMode = false;
+    this.kanaComposeBuffer = '';
     this.selectedKeyRow = 0;
     this.lcdCursor = 0;
     this.romBankSelect = 0;
@@ -168,9 +366,9 @@ export class PCG815Machine implements MachinePCG815, Bus {
       this.keyboardRows[mapping.row] = currentRowState & ~rowMask;
 
       if (firstPress) {
-        const ascii = this.resolveAsciiCode(mapping.normal, mapping.shifted);
-        if (ascii !== undefined) {
-          this.asciiQueue.push(ascii);
+        const asciiCodes = this.resolveAsciiCodes(mapping.code, mapping.normal, mapping.shifted);
+        if (asciiCodes.length > 0) {
+          this.asciiQueue.push(...asciiCodes);
         }
       }
       return;
@@ -186,6 +384,15 @@ export class PCG815Machine implements MachinePCG815, Bus {
       this.renderFrameBuffer();
     }
     return this.frameBuffer;
+  }
+
+  setKanaMode(enabled: boolean): void {
+    this.kanaMode = Boolean(enabled);
+    this.kanaComposeBuffer = '';
+  }
+
+  getKanaMode(): boolean {
+    return this.kanaMode;
   }
 
   getTextLines(): string[] {
@@ -219,6 +426,8 @@ export class PCG815Machine implements MachinePCG815, Bus {
         selectedKeyRow: this.selectedKeyRow,
         keyboardRows: [...this.keyboardRows],
         asciiQueue: [...this.asciiQueue],
+        kanaMode: this.kanaMode,
+        kanaComposeBuffer: this.kanaComposeBuffer,
         romBankSelect: this.romBankSelect,
         expansionControl: this.expansionControl,
         runtime: this.runtime.getSnapshot()
@@ -249,6 +458,8 @@ export class PCG815Machine implements MachinePCG815, Bus {
 
     this.asciiQueue.length = 0;
     this.asciiQueue.push(...snapshot.io.asciiQueue.map((v) => v & 0xff));
+    this.kanaMode = Boolean(snapshot.io.kanaMode);
+    this.kanaComposeBuffer = snapshot.io.kanaComposeBuffer ?? '';
 
     this.romBankSelect = snapshot.io.romBankSelect & 0xff;
     this.expansionControl = snapshot.io.expansionControl & 0xff;
@@ -375,10 +586,17 @@ export class PCG815Machine implements MachinePCG815, Bus {
     );
   }
 
-  private resolveAsciiCode(normal?: number, shifted?: number): number | undefined {
+  private resolveAsciiCodes(code: string, normal?: number, shifted?: number): number[] {
     if (normal === undefined) {
-      return undefined;
+      return [];
     }
+    if (!this.kanaMode) {
+      return [this.resolveAsciiWithoutKana(normal, shifted)];
+    }
+    return this.resolveKanaAsciiCodes(code, normal, shifted);
+  }
+
+  private resolveAsciiWithoutKana(normal: number, shifted?: number): number {
     const shiftActive = this.pressedCodes.has('ShiftLeft') || this.pressedCodes.has('ShiftRight');
     if (shiftActive && shifted !== undefined) {
       return shifted & 0xff;
@@ -387,6 +605,93 @@ export class PCG815Machine implements MachinePCG815, Bus {
       return (normal + 0x20) & 0xff;
     }
     return normal & 0xff;
+  }
+
+  private resolveKanaAsciiCodes(code: string, normal: number, shifted?: number): number[] {
+    const out: number[] = [];
+
+    const letter = keyCodeToRomajiLetter(code);
+    if (letter !== undefined) {
+      this.kanaComposeBuffer += letter;
+      this.flushKanaCompose(out, false);
+      return out;
+    }
+
+    const directKana = KANA_DIRECT_KEYCODE_TO_HALFWIDTH.get(code);
+    if (directKana) {
+      this.flushKanaCompose(out, true);
+      out.push(...directKana);
+      return out;
+    }
+
+    this.flushKanaCompose(out, true);
+    out.push(this.resolveAsciiWithoutKana(normal, shifted));
+    return out;
+  }
+
+  private flushKanaCompose(out: number[], force: boolean): void {
+    while (this.kanaComposeBuffer.length > 0) {
+      if (this.kanaComposeBuffer.startsWith('nn')) {
+        out.push(HALF_WIDTH_KANA_N);
+        this.kanaComposeBuffer = this.kanaComposeBuffer.slice(1);
+        continue;
+      }
+
+      if (this.kanaComposeBuffer.length >= 2) {
+        const first = this.kanaComposeBuffer[0] ?? '';
+        const second = this.kanaComposeBuffer[1] ?? '';
+        if (first === second && isSokuonConsonant(first)) {
+          out.push(HALF_WIDTH_KANA_SOKUON);
+          this.kanaComposeBuffer = this.kanaComposeBuffer.slice(1);
+          continue;
+        }
+      }
+
+      const matched = this.findRomajiMatch(this.kanaComposeBuffer);
+      if (matched) {
+        if (!force && matched.length === this.kanaComposeBuffer.length && this.hasRomajiLongerPrefix(matched)) {
+          return;
+        }
+        const kana = ROMAJI_TO_HALFWIDTH.get(matched);
+        if (kana) {
+          out.push(...kana);
+        }
+        this.kanaComposeBuffer = this.kanaComposeBuffer.slice(matched.length);
+        continue;
+      }
+
+      if (!force) {
+        if (this.kanaComposeBuffer === 'n' || this.isPotentialRomajiPrefix(this.kanaComposeBuffer)) {
+          return;
+        }
+      }
+
+      const head = this.kanaComposeBuffer[0] ?? '';
+      if (head === 'n') {
+        out.push(HALF_WIDTH_KANA_N);
+      } else {
+        out.push(head.toUpperCase().charCodeAt(0) & 0xff);
+      }
+      this.kanaComposeBuffer = this.kanaComposeBuffer.slice(1);
+    }
+  }
+
+  private findRomajiMatch(buffer: string): string | undefined {
+    for (let len = Math.min(MAX_ROMAJI_SEQUENCE_LENGTH, buffer.length); len >= 1; len -= 1) {
+      const candidate = buffer.slice(0, len);
+      if (ROMAJI_TO_HALFWIDTH.has(candidate)) {
+        return candidate;
+      }
+    }
+    return undefined;
+  }
+
+  private hasRomajiLongerPrefix(value: string): boolean {
+    return ROMAJI_KEYS.some((key) => key.length > value.length && key.startsWith(value));
+  }
+
+  private isPotentialRomajiPrefix(value: string): boolean {
+    return ROMAJI_KEYS.some((key) => key.startsWith(value));
   }
 
   private getDisplayStartLine(): number {
