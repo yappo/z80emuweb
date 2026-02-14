@@ -354,6 +354,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
     const clamped = Math.max(0, Math.floor(tstates));
     this.cpu.stepTState(clamped);
     this.elapsedTStates += clamped;
+    this.runtime.pump();
   }
 
   setKeyState(code: string, pressed: boolean): void {
@@ -399,6 +400,10 @@ export class PCG815Machine implements MachinePCG815, Bus {
 
   getKanaMode(): boolean {
     return this.kanaMode;
+  }
+
+  isRuntimeProgramRunning(): boolean {
+    return this.runtime.isProgramRunning();
   }
 
   getTextLines(): string[] {
@@ -845,12 +850,8 @@ export class PCG815Machine implements MachinePCG815, Bus {
       out8: (port: number, value: number) => this.out8(port, value),
       peek8: (address: number) => this.read8(address),
       poke8: (address: number, value: number) => this.write8(address, value),
-      sleepMs: (ms: number) => {
-        const deadline = Date.now() + Math.max(0, Math.trunc(ms));
-        while (Date.now() < deadline) {
-          // 同期待機で BEEP/WAIT の体感を再現する。
-        }
-      }
+      // 非ブロッキング方針: WAIT/BEEP でメインスレッドを塞がない。
+      sleepMs: (_ms: number) => {}
     };
   }
 }

@@ -30,6 +30,7 @@ export interface MachinePCG815 {
   setKeyState(code: string, pressed: boolean): void;
   setKanaMode(enabled: boolean): void;
   getKanaMode(): boolean;
+  isRuntimeProgramRunning(): boolean;
   getFrameBuffer(): Uint8Array;
   reset(cold: boolean): void;
 }

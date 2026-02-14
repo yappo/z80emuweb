@@ -9,6 +9,19 @@ npm install
 npm run dev
 ```
 
+## Browser BASIC Editor
+
+- 右側の `BASIC Editor` にプログラムを入力し、`RUN Program` で実行します
+- 実行シーケンスは `NEW -> program lines -> RUN`（既定）です
+- `STOP CPU` はエミュレータCPU実行を停止します（暴走時の退避用）
+- `Load Sample` は `WAIT/IF THEN` を含むカウントアップサンプルを読み込みます
+
+### 既知ギャップ（MVP）
+
+- 保存/読込（`.bas`）は未実装
+- 差分送信RUNは未実装（毎回 `NEW` で全行再投入）
+- エミュレータ内実行のみ対応（実機転送は対象外）
+
 ## ワークスペース構成
 
 - `apps/web`: ViteベースのWebアプリ（Canvas2D UI）

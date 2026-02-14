@@ -23,6 +23,15 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
   await expect(page.getByRole('button', { name: 'Reset' })).toBeVisible();
   await expect(page.getByRole('button', { name: /かな OFF/i })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Fonts' })).toBeVisible();
+  await expect(page.locator('#basic-editor')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'RUN Program' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'STOP CPU' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'NEW' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Load Sample' })).toBeVisible();
+  await expect(page.locator('.basic-editor-hint')).toContainText(/Editor focus:/i);
+  await page.locator('#basic-editor').click();
+  await page.keyboard.type('30 PRINT 654');
+  await expect(page.locator('#basic-editor')).toHaveValue(/30 PRINT 654/);
 
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
   await expect(page.locator('#boot-status')).toContainText(/strict=0/i);
@@ -34,8 +43,8 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
   await expect(page.locator('#font-kana-canvas')).toBeVisible();
 
   // Stop CPU loop so ASCII FIFO is not consumed by runtime while testing input mapping.
-  await page.getByRole('button', { name: 'Stop' }).click();
-  await expect(page.getByRole('button', { name: 'Run' })).toBeVisible();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Run', exact: true })).toBeVisible();
 
   const kanaToggle = page.getByRole('button', { name: /かな OFF/i });
   await kanaToggle.click();
@@ -152,11 +161,9 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
     )
     .toBeGreaterThan(0);
 
-  await page.evaluate(() => {
-    (window as { __pcg815?: { injectBasicLine: (line: string) => void } }).__pcg815?.injectBasicLine(
-      'PRINT 321'
-    );
-  });
+  await page.locator('#basic-editor').fill('10 PRINT 321\n20 END');
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Run OK/i, { timeout: 5_000 });
 
   await expect
     .poll(
@@ -178,6 +185,57 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
 
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
+});
+
+test('basic editor handles syntax error and reset rerun flow', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.locator('#basic-editor').fill('10 GOTO 9999\n20 END');
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Failed:/i, { timeout: 5_000 });
+
+  await page.locator('#basic-editor').fill('10 PRINT 999\n20 END');
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Run OK/i, { timeout: 5_000 });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('999');
+
+  await page.getByRole('button', { name: 'STOP CPU' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Stopped/i);
+});
+
+test('basic editor can rerun after STOP CPU with WAIT program', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.locator('#basic-editor').fill('10 PRINT 1\n20 WAIT 64\n30 PRINT 2\n40 END');
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await page.getByRole('button', { name: 'STOP CPU' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Stopped/i, { timeout: 5_000 });
+
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Run OK/i, { timeout: 5_000 });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('2');
 });
 
 test('strict URL parameter enables strict boot mode diagnostics', async ({ page }) => {

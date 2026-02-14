@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createMonitorRom } from '../src/monitor-rom';
 import { MonitorRuntime, PcG815BasicRuntime } from '../src/runtime';
@@ -18,6 +18,11 @@ function drain(runtime: PcG815BasicRuntime): string {
 function executeLines(runtime: PcG815BasicRuntime, lines: string[]): string {
   for (const line of lines) {
     runtime.executeLine(line);
+  }
+  let now = Date.now();
+  for (let i = 0; i < 20_000 && runtime.isProgramRunning(); i += 1) {
+    now += 1000;
+    runtime.pump(now);
   }
   return drain(runtime);
 }
@@ -218,6 +223,34 @@ describe('PcG815BasicRuntime', () => {
     expect(sleeps[1]).toBe(1000);
     expect(sleeps[2]).toBeGreaterThanOrEqual(1000);
     expect(sleeps[2]).toBeLessThanOrEqual(3000);
+  });
+
+  it('delays RUN progression for WAIT until pump reaches wake time', () => {
+    const runtime = new PcG815BasicRuntime();
+    const baseNow = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(baseNow);
+
+    runtime.executeLine('10 PRINT 1');
+    runtime.executeLine('20 WAIT 64');
+    runtime.executeLine('30 PRINT 2');
+    runtime.executeLine('RUN');
+
+    const earlyOutput = drain(runtime);
+    expect(earlyOutput).toContain('1');
+    expect(earlyOutput).not.toContain('2');
+    expect(runtime.isProgramRunning()).toBe(true);
+
+    runtime.pump(baseNow + 999);
+    expect(drain(runtime)).toBe('');
+    expect(runtime.isProgramRunning()).toBe(true);
+
+    runtime.pump(baseNow + 1000);
+    const finalOutput = drain(runtime);
+    expect(finalOutput).toContain('2');
+    expect(finalOutput).toContain('OK');
+    expect(runtime.isProgramRunning()).toBe(false);
+
+    nowSpy.mockRestore();
   });
 
   it('supports LOCATE via machine adapter cursor API', () => {
