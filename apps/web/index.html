@@ -30,6 +30,9 @@
               <button id="run-toggle" type="button">Stop</button>
               <button id="step" type="button">Step</button>
               <button id="reset" type="button">Reset</button>
+              <button id="font-debug-toggle" type="button" aria-expanded="false" aria-controls="font-debug-panel">
+                Fonts
+              </button>
             </div>
           </div>
         </section>
@@ -41,6 +44,16 @@
           <pre id="log-view" class="log-view"></pre>
           <h3>Key Matrix Map</h3>
           <div id="keymap-list" class="keymap-list"></div>
+          <section id="font-debug-panel" class="font-debug-panel" hidden>
+            <div class="font-debug-head">
+              <h3>Font 5x7 Atlas</h3>
+              <span id="font-debug-meta" class="font-debug-meta">0x41 "A"</span>
+            </div>
+            <p class="font-debug-hint">Click a cell to inspect glyph code (0x00-0xFF).</p>
+            <canvas id="font-debug-canvas" aria-label="Font 5x7 glyph atlas"></canvas>
+            <h4 class="font-kana-title">A0-DF Zoom</h4>
+            <canvas id="font-kana-canvas" aria-label="Kana glyph zoom"></canvas>
+          </section>
         </section>
       </main>
     </div>
