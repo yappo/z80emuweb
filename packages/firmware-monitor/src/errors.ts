@@ -1,15 +1,12 @@
-// BASIC ランタイムで表示互換を保つためのエラーコード。
-export type RuntimeErrorCode =
-  | 'SYNTAX'
-  | 'BAD_LINE'
-  | 'BAD_VAR'
-  | 'BAD_LET'
-  | 'BAD_IF'
-  | 'NO_LINE'
-  | 'RUNAWAY'
-  | 'INPUT_IN_RUN'
-  | 'RETURN_WO_GOSUB'
-  | 'BAD_STMT';
+import {
+  getErrorCatalogEntryForRuntimeCode,
+  getUnknownErrorCatalogEntry,
+  type ErrorCatalogEntry,
+  type NumericErrorCode,
+  type RuntimeErrorCode
+} from './error-catalog';
+
+export type { ErrorCatalogEntry, NumericErrorCode, RuntimeErrorCode } from './error-catalog';
 
 export class BasicRuntimeError extends Error {
   readonly code: RuntimeErrorCode;
@@ -21,7 +18,7 @@ export class BasicRuntimeError extends Error {
   }
 
   // 実機寄りの短い表示文言へ変換する。
-  toDisplayString(): string {
+  toDisplayMessage(): string {
     switch (this.code) {
       case 'BAD_LINE':
         return 'BAD LINE';
@@ -41,6 +38,18 @@ export class BasicRuntimeError extends Error {
         return this.message;
     }
   }
+
+  getCatalogEntry(): ErrorCatalogEntry {
+    return getErrorCatalogEntryForRuntimeCode(this.code);
+  }
+
+  getNumericCode(): NumericErrorCode {
+    return this.getCatalogEntry().numericCode;
+  }
+
+  toDisplayString(): string {
+    return `${this.toDisplayMessage()} (${this.getNumericCode()})`;
+  }
 }
 
 // UI 表示向けに unknown を文字列化する共通入口。
@@ -48,8 +57,10 @@ export function asDisplayError(error: unknown): string {
   if (error instanceof BasicRuntimeError) {
     return error.toDisplayString();
   }
+  const unknownEntry = getUnknownErrorCatalogEntry();
   if (error instanceof Error) {
-    return error.message;
+    const message = error.message.length > 0 ? error.message : unknownEntry.message;
+    return `${message} (${unknownEntry.numericCode})`;
   }
-  return 'UNKNOWN';
+  return `${unknownEntry.message} (${unknownEntry.numericCode})`;
 }

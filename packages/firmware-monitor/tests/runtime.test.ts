@@ -89,6 +89,20 @@ describe('PcG815BasicRuntime', () => {
     expect(output).toContain('OK');
   });
 
+  it('prints syntax errors with numeric code suffix', () => {
+    const runtime = new PcG815BasicRuntime();
+
+    const output = executeLines(runtime, ['PRINT']);
+    expect(output).toContain('ERR SYNTAX (E01)');
+  });
+
+  it('prints dynamic NO LINE errors with numeric code suffix', () => {
+    const runtime = new PcG815BasicRuntime();
+
+    const output = executeLines(runtime, ['10 GOTO 999', 'RUN']);
+    expect(output).toContain('ERR NO LINE 999 (E06)');
+  });
+
   it('exposes compatibility report', () => {
     const runtime = new PcG815BasicRuntime();
     runtime.loadObservationProfile('public-observed-v1');

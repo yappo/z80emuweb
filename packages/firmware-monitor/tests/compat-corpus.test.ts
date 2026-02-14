@@ -50,6 +50,10 @@ describe('observation corpus compatibility', () => {
         expect(output).toContain(token);
       }
 
+      for (const token of expected.errorCodeContains ?? []) {
+        expect(output).toContain(token);
+      }
+
       for (const [name, value] of Object.entries(expected.variables ?? {})) {
         expect(runtime.getVariables().get(name)).toBe(value);
       }

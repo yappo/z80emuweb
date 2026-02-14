@@ -23,6 +23,7 @@ export interface BasicObservationCase {
     outputContains?: string[];
     outputNotContains?: string[];
     errorContains?: string[];
+    errorCodeContains?: string[];
     variables?: Record<string, number>;
   };
 }

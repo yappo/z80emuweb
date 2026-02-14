@@ -5,98 +5,98 @@
       "profile": "public-observed-v1",
       "commands": ["NEW"],
       "lines": ["NEW 1"],
-      "expect": {"errorContains": ["SYNTAX"]}
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     },
     {
       "id": "list-rejects-arguments",
       "profile": "public-observed-v1",
       "commands": ["LIST"],
       "lines": ["LIST 1"],
-      "expect": {"errorContains": ["SYNTAX"]}
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     },
     {
       "id": "run-detects-runaway",
       "profile": "public-observed-v1",
       "commands": ["RUN"],
       "lines": ["10 GOTO 10", "RUN"],
-      "expect": {"errorContains": ["RUNAWAY"]}
+      "expect": {"errorContains": ["RUNAWAY"], "errorCodeContains": ["E07"]}
     },
     {
       "id": "print-rejects-empty-expression",
       "profile": "public-observed-v1",
       "commands": ["PRINT"],
       "lines": ["PRINT"],
-      "expect": {"errorContains": ["SYNTAX"]}
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     },
     {
       "id": "let-rejects-invalid-var",
       "profile": "public-observed-v1",
       "commands": ["LET"],
       "lines": ["LET 1A=10"],
-      "expect": {"errorContains": ["BAD LET"]}
+      "expect": {"errorContains": ["BAD LET"], "errorCodeContains": ["E04"]}
     },
     {
       "id": "input-rejected-in-run",
       "profile": "public-observed-v1",
       "commands": ["INPUT"],
       "lines": ["10 INPUT A", "RUN"],
-      "expect": {"errorContains": ["INPUT IN RUN"]}
+      "expect": {"errorContains": ["INPUT IN RUN"], "errorCodeContains": ["E08"]}
     },
     {
       "id": "goto-missing-line",
       "profile": "public-observed-v1",
       "commands": ["GOTO"],
       "lines": ["10 GOTO 999", "RUN"],
-      "expect": {"errorContains": ["NO LINE 999"]}
+      "expect": {"errorContains": ["NO LINE 999"], "errorCodeContains": ["E06"]}
     },
     {
       "id": "gosub-missing-line",
       "profile": "public-observed-v1",
       "commands": ["GOSUB"],
       "lines": ["10 GOSUB 999", "RUN"],
-      "expect": {"errorContains": ["NO LINE 999"]}
+      "expect": {"errorContains": ["NO LINE 999"], "errorCodeContains": ["E06"]}
     },
     {
       "id": "return-without-gosub",
       "profile": "public-observed-v1",
       "commands": ["RETURN"],
       "lines": ["10 RETURN", "RUN"],
-      "expect": {"errorContains": ["RETURN W/O GOSUB"]}
+      "expect": {"errorContains": ["RETURN W/O GOSUB"], "errorCodeContains": ["E09"]}
     },
     {
       "id": "if-rejects-malformed",
       "profile": "public-observed-v1",
       "commands": ["IF"],
       "lines": ["10 IF A THEN X", "RUN"],
-      "expect": {"errorContains": ["BAD IF"]}
+      "expect": {"errorContains": ["BAD IF"], "errorCodeContains": ["E05"]}
     },
     {
       "id": "end-rejects-arguments",
       "profile": "public-observed-v1",
       "commands": ["END"],
       "lines": ["END 1"],
-      "expect": {"errorContains": ["SYNTAX"]}
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     },
     {
       "id": "stop-rejects-arguments",
       "profile": "public-observed-v1",
       "commands": ["STOP"],
       "lines": ["STOP 1"],
-      "expect": {"errorContains": ["SYNTAX"]}
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     },
     {
       "id": "cls-rejects-arguments",
       "profile": "public-observed-v1",
       "commands": ["CLS"],
       "lines": ["CLS 1"],
-      "expect": {"errorContains": ["SYNTAX"]}
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     },
     {
       "id": "unknown-command",
       "profile": "public-observed-v1",
       "commands": ["REM"],
       "lines": ["FOOBAR"],
-      "expect": {"errorContains": ["SYNTAX"]}
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     }
   ]
 }

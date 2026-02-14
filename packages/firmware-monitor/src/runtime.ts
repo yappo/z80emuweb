@@ -108,7 +108,7 @@ export class PcG815BasicRuntime {
       const lineNoText = lineNumberMatch[1];
       const statementText = lineNumberMatch[2] ?? '';
       if (!lineNoText) {
-        this.pushText('ERR BAD LINE\r\n');
+        this.pushText(`ERR ${asDisplayError(new BasicRuntimeError('BAD_LINE'))}\r\n`);
         this.pushPrompt();
         return;
       }
