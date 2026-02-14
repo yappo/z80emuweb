@@ -1,3 +1,4 @@
+// ハードウェア仕様の根拠情報。ID は map 定義側で参照される。
 export interface HardwareEvidence {
   id: string;
   title: string;
@@ -72,6 +73,7 @@ export type HardwareEvidenceId = (typeof PCG815_EVIDENCE)[number]['id'];
 
 const evidenceById = new Map(PCG815_EVIDENCE.map((entry) => [entry.id, entry]));
 
+// 参照 ID から根拠メタデータを取得する。
 export function getHardwareEvidence(id: HardwareEvidenceId): HardwareEvidence {
   const entry = evidenceById.get(id);
   if (!entry) {

@@ -1,3 +1,4 @@
+// 物理キーを 8x8 行列と ASCII へマッピングする定義。
 export interface KeyMapping {
   code: string;
   row: number;
@@ -105,4 +106,5 @@ export const KEY_MAP: KeyMapping[] = [
   { code: 'NumpadEnter', row: 7, col: 2, normal: 0x0d }
 ];
 
+// setKeyState から高速参照するための索引。
 export const KEY_MAP_BY_CODE = new Map(KEY_MAP.map((entry) => [entry.code, entry]));

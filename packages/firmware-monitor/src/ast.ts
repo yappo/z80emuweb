@@ -1,3 +1,4 @@
+// 式ノード: 評価器 (semantics.ts) が直接解釈する最小 AST。
 export interface NumberLiteral {
   kind: 'number-literal';
   value: number;
@@ -102,6 +103,7 @@ export interface EmptyStatement {
   kind: 'EMPTY';
 }
 
+// 文ノード: parser.ts がこの union を返し、runtime.ts が実行する。
 export type StatementNode =
   | NewStatement
   | ListStatement

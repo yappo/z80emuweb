@@ -3,6 +3,7 @@ import { BasicRuntimeError } from './errors';
 import { evaluateNumericExpression, evaluatePrintItems } from './semantics';
 import type { BasicCommandSpec, BasicMachineAdapter } from './types';
 
+// コマンドは「即時実行」と「RUN 中」の 2 モードで許可範囲が異なる。
 export type RuntimeMode = 'immediate' | 'program';
 
 export interface CommandExecutionContext {
@@ -32,6 +33,7 @@ function missingLine(targetLine: number): never {
   throw new BasicRuntimeError('NO_LINE', `NO LINE ${targetLine}`);
 }
 
+// 文種別ごとの実装テーブル。
 const registry: Partial<Record<StatementKind, Handler<StatementNode>>> = {
   EMPTY: {
     modes: ['immediate', 'program'],
@@ -186,6 +188,7 @@ export function executeRegisteredStatement(
     throw new BasicRuntimeError('BAD_STMT', `BAD STMT: ${statement.kind}`);
   }
 
+  // 互換メッセージを優先するため、INPUT は専用エラー文言へ落とし分ける。
   if (!handler.modes.includes(context.mode)) {
     if (statement.kind === 'INPUT' && context.mode === 'program') {
       throw new BasicRuntimeError('INPUT_IN_RUN', 'INPUT IN RUN');
@@ -196,6 +199,7 @@ export function executeRegisteredStatement(
   return handler.run(statement, context);
 }
 
+// 互換性レポートで使う内蔵コマンド仕様一覧。
 export const BUILTIN_COMMAND_SPECS: BasicCommandSpec[] = [
   {
     id: 'NEW',

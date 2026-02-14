@@ -21,10 +21,12 @@ import type {
 import { BasicRuntimeError } from './errors';
 import { isIdentifier, normalizeIdentifier, tokenizeLine, type Token } from './lexer';
 
+// トークン文字列を整数へ変換する補助。
 function toInt(text: string): number {
   return Number.parseInt(text, 10);
 }
 
+// 1 行分の BASIC 文パーサ。
 class Parser {
   private readonly tokens: Token[];
 
@@ -39,6 +41,7 @@ class Parser {
       return { kind: 'EMPTY' } satisfies EmptyStatement;
     }
 
+    // キーワード先頭の構文を優先して分岐する。
     const first = this.peek();
     if (first.type === 'keyword') {
       switch (first.value) {
@@ -197,6 +200,7 @@ class Parser {
   }
 
   private parseIf(): IfStatement {
+    // IF 式部は THEN までを別トークン列として再パースする。
     const condition = this.parseExpressionUntilThen();
 
     const thenToken = this.next();
@@ -265,6 +269,7 @@ class Parser {
     return this.parseComparison();
   }
 
+  // 比較 > 加減算 > 乗除算 > 単項 > primary の優先順位で再帰下降する。
   private parseComparison(): ExpressionNode {
     let node = this.parseAddSub();
 
@@ -409,6 +414,7 @@ class Parser {
 }
 
 export function parseStatement(input: string): StatementNode {
+  // 字句解析と構文解析を一体化した公開 API。
   const parser = new Parser(tokenizeLine(input));
   return parser.parseStatement();
 }

@@ -1,3 +1,4 @@
+// CPU が外部バスとやり取りする最小インターフェース。
 export interface Bus {
   read8(addr: number): number;
   write8(addr: number, value: number): void;
@@ -8,6 +9,7 @@ export interface Bus {
 
 export type InterruptMode = 0 | 1 | 2;
 
+// エミュレータが保持する主レジスタ群。
 export interface CpuRegisters {
   a: number;
   f: number;
@@ -25,6 +27,7 @@ export interface CpuRegisters {
   r: number;
 }
 
+// 保存/復元可能な CPU 実行状態スナップショット。
 export interface CpuState {
   registers: CpuRegisters;
   iff1: boolean;
@@ -37,6 +40,7 @@ export interface CpuState {
   queueDepth: number;
 }
 
+// CPU 実装の公開操作。
 export interface Cpu {
   reset(): void;
   stepTState(count: number): void;

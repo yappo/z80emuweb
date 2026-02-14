@@ -1,9 +1,11 @@
+// モニタ ROM は 16KiB 窓を前提に作成する。
 const ROM_SIZE = 0x4000;
 
 function textToBytes(text: string): number[] {
   return [...text].map((ch) => ch.charCodeAt(0));
 }
 
+// 起動メッセージと簡易 I/O ループだけを持つ最小ブート ROM。
 export function createMonitorRom(): Uint8Array {
   const rom = new Uint8Array(ROM_SIZE);
 

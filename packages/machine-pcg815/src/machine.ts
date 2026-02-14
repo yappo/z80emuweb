@@ -30,6 +30,7 @@ import {
 import { KEY_MAP_BY_CODE } from './keyboard-map';
 import type { MachinePCG815, PCG815MachineOptions, SnapshotV1 } from './types';
 
+// グリフ未定義時の表示は空白にフォールバックする。
 const SPACE_CODE = 0x20;
 
 function clamp8(value: number): number {
@@ -70,6 +71,7 @@ const PORT_LCD_STATUS_MIRROR = getIoPortSpec('lcd-status-mirror').port;
 
 const WORKAREA_DISPLAY_START_LINE = getWorkAreaSpec('display-start-line').address;
 
+// かな入力合成で使う半角カナ特殊コード。
 const HALF_WIDTH_KANA_DAKUTEN = 0xde;
 const HALF_WIDTH_KANA_HANDAKUTEN = 0xdf;
 const HALF_WIDTH_KANA_SOKUON = 0xaf;
@@ -84,6 +86,7 @@ const KANA_DIRECT_KEYCODE_TO_HALFWIDTH = new Map<string, readonly number[]>([
   ['BracketLeft', [HALF_WIDTH_KANA_HANDAKUTEN]] // ﾟ
 ]);
 
+// ローマ字列 -> 半角カナ列の変換表。
 const ROMAJI_TO_HALFWIDTH = new Map<string, readonly number[]>([
   ['a', [0xb1]],
   ['i', [0xb2]],
@@ -263,6 +266,7 @@ function isSokuonConsonant(ch: string): boolean {
   return ch >= 'a' && ch <= 'z' && !'aeioun'.includes(ch);
 }
 
+// PC-G815 互換マシン本体。CPU バス実装も兼ねる。
 export class PCG815Machine implements MachinePCG815, Bus {
   static readonly CLOCK_HZ = 3_579_545;
 
@@ -311,6 +315,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
 
     this.seedRomWindows();
 
+    // BASIC ランタイムは machine adapter 経由で LCD/IO を操作する。
     this.runtime = new MonitorRuntime({
       machineAdapter: this.createBasicMachineAdapter()
     });
@@ -365,6 +370,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
       const currentRowState = this.keyboardRows[mapping.row] ?? 0xff;
       this.keyboardRows[mapping.row] = currentRowState & ~rowMask;
 
+      // 押下エッジでのみ ASCII キューへ投入し、オートリピートの暴走を防ぐ。
       if (firstPress) {
         const asciiCodes = this.resolveAsciiCodes(mapping.code, mapping.normal, mapping.shifted);
         if (asciiCodes.length > 0) {
@@ -479,6 +485,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
       return 0xff;
     }
 
+    // メモリマップ定義に従って RAM/ROM の窓を切り替える。
     if (region.kind === 'ram-window') {
       return this.mainRam[address - RAM_REGION.start] ?? 0xff;
     }
@@ -521,6 +528,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
       case PORT_KEYBOARD_ROW_DATA:
         return this.keyboardRows[this.selectedKeyRow] ?? 0xff;
       case PORT_KEYBOARD_ASCII_FIFO:
+        // FIFO は読み出しで消費される。
         return this.asciiQueue.shift() ?? 0x00;
       case PORT_LCD_STATUS:
       case PORT_LCD_STATUS_MIRROR:
@@ -551,6 +559,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
         this.expansionControl = byte;
         return;
       case PORT_RUNTIME_INPUT:
+        // モニタ実行系への入力チャネル。
         this.runtime.receiveChar(byte);
         return;
       case PORT_LCD_COMMAND:
@@ -610,6 +619,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
   private resolveKanaAsciiCodes(code: string, normal: number, shifted?: number): number[] {
     const out: number[] = [];
 
+    // アルファベットは一旦 compose buffer に貯め、確定可能な分だけ吐き出す。
     const letter = keyCodeToRomajiLetter(code);
     if (letter !== undefined) {
       this.kanaComposeBuffer += letter;
@@ -630,6 +640,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
   }
 
   private flushKanaCompose(out: number[], force: boolean): void {
+    // force=false: まだ続く可能性がある入力は確定しない。
     while (this.kanaComposeBuffer.length > 0) {
       if (this.kanaComposeBuffer.startsWith('nn')) {
         out.push(HALF_WIDTH_KANA_N);
@@ -701,6 +712,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
   }
 
   private handleLcdCommand(command: number): void {
+    // 現状は CLS とカーソル設定のみを実装。
     if (command === 0x01) {
       this.textVram.fill(SPACE_CODE);
       this.lcdCursor = 0;
@@ -720,6 +732,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
   private handleLcdData(rawValue: number): void {
     const value = rawValue & 0xff;
 
+    // CR/LF/BS を先に処理して、テキスト VRAM の編集挙動を再現する。
     if (value === 0x0d) {
       const row = Math.floor(this.lcdCursor / LCD_COLS);
       this.lcdCursor = row * LCD_COLS;
@@ -775,6 +788,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
   }
 
   private renderFrameBuffer(): void {
+    // textVRAM の文字コードを 5x7 グリフへ展開し、1bpp バッファを生成する。
     this.frameBuffer.fill(0);
     const verticalScroll = this.getDisplayStartLine();
 
@@ -807,6 +821,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
   }
 
   private createBasicMachineAdapter(): BasicMachineAdapter {
+    // firmware-monitor から見える操作だけを束ねて公開する。
     return {
       clearLcd: () => {
         this.handleLcdCommand(0x01);

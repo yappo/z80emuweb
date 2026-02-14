@@ -1,6 +1,7 @@
 import type { ExpressionNode } from './ast';
 import { BasicRuntimeError } from './errors';
 
+// BASIC 互換のため、非数や小数は安全側に丸める。
 function clampInt(value: number): number {
   if (!Number.isFinite(value) || Number.isNaN(value)) {
     return 0;
@@ -8,6 +9,7 @@ function clampInt(value: number): number {
   return Math.trunc(value);
 }
 
+// AST の式を評価して number|string を返す。
 export function evaluateExpression(node: ExpressionNode, vars: Map<string, number>): number | string {
   switch (node.kind) {
     case 'number-literal':
@@ -57,6 +59,7 @@ export function evaluateExpression(node: ExpressionNode, vars: Map<string, numbe
   }
 }
 
+// 数値として解釈できない式は SYNTAX として扱う。
 export function evaluateNumericExpression(node: ExpressionNode, vars: Map<string, number>): number {
   const value = evaluateExpression(node, vars);
   if (typeof value === 'string') {
@@ -65,6 +68,7 @@ export function evaluateNumericExpression(node: ExpressionNode, vars: Map<string
   return clampInt(value);
 }
 
+// PRINT は各項目を空白区切りで連結する。
 export function evaluatePrintItems(items: ExpressionNode[], vars: Map<string, number>): string {
   return items
     .map((item) => {
