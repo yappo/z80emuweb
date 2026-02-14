@@ -170,6 +170,12 @@ button:active {
   border-bottom-width: 2px;
 }
 
+button[data-active='1'] {
+  background: linear-gradient(180deg, #d6efcd, #a9c99f);
+  border-color: #5e7a54;
+  color: #203018;
+}
+
 .status-panel {
   padding: 1rem;
   display: grid;
@@ -207,6 +213,75 @@ button:active {
 
 .keymap-list span {
   display: block;
+}
+
+.font-debug-panel {
+  margin: 0;
+  padding: 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #b9a68a;
+  background: color-mix(in oklab, var(--panel), white 20%);
+  display: grid;
+  gap: 0.45rem;
+}
+
+.font-debug-panel[hidden] {
+  display: none;
+}
+
+.font-debug-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.font-debug-head h3 {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.font-debug-meta {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem;
+  color: #2f251a;
+  background: #e8dec8;
+  border: 1px solid #b9a68a;
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+  white-space: nowrap;
+}
+
+.font-debug-hint {
+  margin: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+#font-debug-canvas {
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid #7f6845;
+  background: #dbeacc;
+  image-rendering: pixelated;
+  cursor: crosshair;
+}
+
+.font-kana-title {
+  margin: 0.1rem 0 0;
+  font-size: 0.78rem;
+}
+
+#font-kana-canvas {
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid #7f6845;
+  background: #dbeacc;
+  image-rendering: pixelated;
+  cursor: crosshair;
 }
 
 @media (max-width: 900px) {

@@ -21,9 +21,52 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
   await expect(page.locator('#run-toggle')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Step' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Reset' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Fonts' })).toBeVisible();
 
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
   await expect(page.locator('#boot-status')).toContainText(/strict=0/i);
+
+  await expect(page.locator('#font-debug-panel')).toBeHidden();
+  await page.getByRole('button', { name: 'Fonts' }).click();
+  await expect(page.locator('#font-debug-panel')).toBeVisible();
+  await expect(page.locator('#font-debug-meta')).toContainText(/0x41/i);
+  await expect(page.locator('#font-kana-canvas')).toBeVisible();
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const atlas = document.querySelector<HTMLCanvasElement>('#font-debug-canvas');
+          if (!atlas) {
+            return false;
+          }
+          const ctx = atlas.getContext('2d');
+          if (!ctx) {
+            return false;
+          }
+
+          const data = ctx.getImageData(0, 0, atlas.width, atlas.height).data;
+          const r0 = data[0];
+          const g0 = data[1];
+          const b0 = data[2];
+          for (let i = 4; i < data.length; i += 4) {
+            if (data[i] !== r0 || data[i + 1] !== g0 || data[i + 2] !== b0) {
+              return true;
+            }
+          }
+          return false;
+        }),
+      {
+        timeout: 5_000,
+        intervals: [100, 250, 500]
+      }
+    )
+    .toBe(true);
+
+  await page.locator('#font-debug-canvas').click({ position: { x: 6, y: 6 } });
+  await expect(page.locator('#font-debug-meta')).toContainText(/0x00/i);
+  await page.locator('#font-kana-canvas').click({ position: { x: 30, y: 8 } });
+  await expect(page.locator('#font-debug-meta')).toContainText(/0xA1/i);
 
   await expect
     .poll(

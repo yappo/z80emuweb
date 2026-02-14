@@ -9,6 +9,7 @@ import {
 
 import {
   getGlyphForCode,
+  hasGlyphForCode,
   LCD_COLS,
   LCD_GLYPH_HEIGHT,
   LCD_GLYPH_PITCH_X,
@@ -40,7 +41,7 @@ function clamp16(value: number): number {
 }
 
 function toDisplayCode(value: number): number {
-  if (value >= 0x20 && value <= 0x7e) {
+  if (hasGlyphForCode(value)) {
     return value;
   }
   return SPACE_CODE;
