@@ -310,6 +310,9 @@ export class PcG815BasicRuntime {
         active.pc = result.jumpToIndex ?? active.pc + 1;
       } catch (error) {
         if (error instanceof RuntimeWaitSignal) {
+          // WAITで協調的に制御を返したプログラムは、RUNAWAYカウンタをリセットする。
+          // これにより WAIT を含む常駐ループが時間経過だけで E07 にならない。
+          active.steps = 0;
           active.pc += 1;
           this.activeProgramWakeAtMs = nowMs + Math.max(0, error.delayMs);
           return;

@@ -28,6 +28,7 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
   await expect(page.getByRole('button', { name: 'STOP CPU' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'NEW' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Load Sample' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sample Game' })).toBeVisible();
   await expect(page.locator('.basic-editor-hint')).toContainText(/Editor focus:/i);
   await page.locator('#basic-editor').click();
   await page.keyboard.type('30 PRINT 654');
@@ -212,6 +213,23 @@ test('basic editor handles syntax error and reset rerun flow', async ({ page }) 
 
   await page.getByRole('button', { name: 'STOP CPU' }).click();
   await expect(page.locator('#basic-run-status')).toContainText(/Stopped/i);
+});
+
+test('sample game button loads maze code and starts running', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('button', { name: 'Sample Game' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Sample game loaded/i, { timeout: 5_000 });
+  await expect(page.locator('#basic-editor')).toHaveValue(/MAZE 4X4/);
+  await expect(page.locator('#basic-editor')).toHaveValue(/KEY\+GOAL/);
+  await expect(page.locator('#basic-editor')).toHaveValue(/OUT 16,7/);
+  await expect(page.locator('#basic-editor')).toHaveValue(/OUT 16,6/);
+  await expect(page.locator('#basic-editor')).toHaveValue(/CLEAR!/);
+
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Running|Run OK/i, { timeout: 5_000 });
+  await expect(page.locator('#basic-run-status')).not.toContainText(/Failed:/i);
 });
 
 test('basic editor can rerun after STOP CPU with WAIT program', async ({ page }) => {

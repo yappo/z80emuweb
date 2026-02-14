@@ -64,6 +64,7 @@ const basicRunButton = document.querySelector<HTMLButtonElement>('#basic-run');
 const basicStopButton = document.querySelector<HTMLButtonElement>('#basic-stop');
 const basicNewButton = document.querySelector<HTMLButtonElement>('#basic-new');
 const basicLoadSampleButton = document.querySelector<HTMLButtonElement>('#basic-load-sample');
+const basicLoadGameButton = document.querySelector<HTMLButtonElement>('#basic-load-game');
 const fontDebugPanel = document.querySelector<HTMLElement>('#font-debug-panel');
 const fontDebugMeta = document.querySelector<HTMLElement>('#font-debug-meta');
 const fontDebugCanvas = document.querySelector<HTMLCanvasElement>('#font-debug-canvas');
@@ -88,6 +89,7 @@ if (
   !basicStopButton ||
   !basicNewButton ||
   !basicLoadSampleButton ||
+  !basicLoadGameButton ||
   !fontDebugPanel ||
   !fontDebugMeta ||
   !fontDebugCanvas ||
@@ -164,6 +166,8 @@ let lastLitPixels = 0;
 
 const inputLog: string[] = [];
 const pressedCodes = new Set<string>();
+const pendingKeyRelease = new Map<string, number>();
+const KEY_RELEASE_LATCH_MS = 280;
 const BASIC_SAMPLE = `10 A = 1
 20 PRINT A
 30 A = A + 1
@@ -172,6 +176,179 @@ const BASIC_SAMPLE = `10 A = 1
 60 GOTO 20
 70 PRINT "owari"
 80 END`;
+const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V2
+100 CLS
+110 PRINT "MAZE 4X4 KEY+GOAL"
+120 LET SE=INP(18)+INP(17)+PEEK(0)
+130 IF SE<>0 THEN 150
+140 LET SE=37
+150 GOSUB 2000
+160 LET X=1
+170 LET Y=1
+180 LET K=0
+190 LET T=0
+200 GOSUB 3000
+210 WAIT 16
+220 LET DX=0
+230 LET DY=0
+240 GOSUB 900
+250 IF M=1 THEN 300
+260 IF M=2 THEN 320
+270 IF M=3 THEN 340
+280 IF M=4 THEN 360
+290 GOTO 200
+300 LET DX=-1
+310 GOTO 380
+320 LET DX=1
+330 GOTO 380
+340 LET DY=-1
+350 GOTO 380
+360 LET DY=1
+380 LET NX=X+DX
+390 LET NY=Y+DY
+400 IF NX<1 THEN 200
+410 IF NX>4 THEN 200
+420 IF NY<1 THEN 200
+430 IF NY>4 THEN 200
+440 IF NX<>W1X THEN 460
+450 IF NY=W1Y THEN 200
+460 IF NX<>W2X THEN 480
+470 IF NY=W2Y THEN 200
+480 IF NX<>W3X THEN 500
+490 IF NY=W3Y THEN 200
+500 LET X=NX
+510 LET Y=NY
+520 LET T=T+1
+530 IF X<>KX THEN 550
+540 IF Y=KY THEN 560
+550 GOTO 580
+560 LET K=1
+580 IF K=0 THEN 200
+590 IF X<>GX THEN 200
+600 IF Y<>GY THEN 200
+610 GOTO 5000
+900 LET M=0
+910 LET C=INP(18)
+920 IF C=65 THEN 1260
+930 IF C=97 THEN 1260
+940 IF C=68 THEN 1280
+950 IF C=100 THEN 1280
+960 IF C=87 THEN 1300
+970 IF C=119 THEN 1300
+980 IF C=83 THEN 1320
+990 IF C=115 THEN 1320
+1000 OUT 16,0
+1010 LET R=INP(17)
+1020 IF R=254 THEN 1260
+1030 IF R=247 THEN 1280
+1040 OUT 16,2
+1050 LET R=INP(17)
+1060 IF R=191 THEN 1300
+1070 IF R=251 THEN 1320
+1080 OUT 16,7
+1090 LET R=INP(17)
+1100 IF R=127 THEN 1260
+1110 IF R=223 THEN 1300
+1120 IF R=191 THEN 1320
+1130 OUT 16,6
+1140 LET R=INP(17)
+1150 IF R=254 THEN 1280
+1160 RETURN
+1260 LET M=1
+1270 RETURN
+1280 LET M=2
+1290 RETURN
+1300 LET M=3
+1310 RETURN
+1320 LET M=4
+1330 RETURN
+2000 GOSUB 2600
+2010 LET P=R
+2020 IF P=1 THEN 2100
+2030 IF P=2 THEN 2230
+2040 GOTO 2360
+2100 LET KX=4
+2110 LET KY=1
+2120 LET GX=4
+2130 LET GY=4
+2140 LET W1X=2
+2150 LET W1Y=2
+2160 LET W2X=3
+2170 LET W2Y=2
+2180 LET W3X=2
+2190 LET W3Y=4
+2200 RETURN
+2230 LET KX=4
+2240 LET KY=2
+2250 LET GX=2
+2260 LET GY=4
+2270 LET W1X=2
+2280 LET W1Y=1
+2290 LET W2X=3
+2300 LET W2Y=3
+2310 LET W3X=1
+2320 LET W3Y=4
+2330 RETURN
+2360 LET KX=1
+2370 LET KY=4
+2380 LET GX=4
+2390 LET GY=2
+2400 LET W1X=3
+2410 LET W1Y=1
+2420 LET W2X=2
+2430 LET W2Y=3
+2440 LET W3X=4
+2450 LET W3Y=3
+2460 RETURN
+2600 LET SE=SE*17+29
+2610 IF SE<997 THEN 2640
+2620 LET SE=SE-997
+2630 GOTO 2610
+2640 LET R=SE
+2650 IF R<4 THEN 2680
+2660 LET R=R-3
+2670 GOTO 2650
+2680 RETURN
+3000 CLS
+3010 FOR J=1 TO 4
+3020 FOR I=1 TO 4
+3030 LET AX=I
+3040 LET AY=J
+3050 GOSUB 3300
+3060 NEXT I
+3070 NEXT J
+3080 RETURN
+3300 LET CH=46
+3310 IF AX<>W1X THEN 3340
+3320 IF AY=W1Y THEN 3500
+3340 IF AX<>W2X THEN 3370
+3350 IF AY=W2Y THEN 3500
+3370 IF AX<>W3X THEN 3400
+3380 IF AY=W3Y THEN 3500
+3400 IF AX<>GX THEN 3430
+3410 IF AY=GY THEN 3510
+3430 IF K<>0 THEN 3460
+3440 IF AX<>KX THEN 3460
+3450 IF AY=KY THEN 3520
+3460 IF AX<>X THEN 3490
+3470 IF AY=Y THEN 3530
+3490 GOTO 3540
+3500 LET CH=35
+3505 GOTO 3540
+3510 LET CH=71
+3515 GOTO 3540
+3520 LET CH=75
+3525 GOTO 3540
+3530 LET CH=64
+3540 LET CX=AX-1
+3550 LET CY=AY-1
+3560 LOCATE CX,CY
+3570 OUT 90,CH
+3580 RETURN
+5000 CLS
+5010 PRINT "CLEAR!"
+5020 PRINT "STEP",T
+5030 END`;
 let programRunInFlight = false;
 let programRunToken = 0;
 
@@ -236,6 +413,42 @@ function isTextInputTarget(target: EventTarget | null): boolean {
     return true;
   }
   return target.isContentEditable;
+}
+
+function resolveKeyboardCode(event: KeyboardEvent): string | undefined {
+  if (KEY_MAP_BY_CODE.has(event.code)) {
+    return event.code;
+  }
+  const key = event.key;
+  if (!key) {
+    return undefined;
+  }
+  const lower = key.toLowerCase();
+  if (lower === 'w') {
+    return 'KeyW';
+  }
+  if (lower === 'a') {
+    return 'KeyA';
+  }
+  if (lower === 's') {
+    return 'KeyS';
+  }
+  if (lower === 'd') {
+    return 'KeyD';
+  }
+  if (key === 'ArrowUp') {
+    return 'ArrowUp';
+  }
+  if (key === 'ArrowDown') {
+    return 'ArrowDown';
+  }
+  if (key === 'ArrowLeft') {
+    return 'ArrowLeft';
+  }
+  if (key === 'ArrowRight') {
+    return 'ArrowRight';
+  }
+  return undefined;
 }
 
 function injectBasicLine(line: string): void {
@@ -665,7 +878,9 @@ function verifyHealth(elapsedMs: number, litPixels: number): void {
     return;
   }
 
-  if (litPixels <= 0 && lastLitPixels <= 0) {
+  // BASIC実行中は CLS と描画更新の間で一時的に無点灯になり得るため、
+  // 「無点灯=フリーズ」判定は外す。
+  if (!machine.isRuntimeProgramRunning() && litPixels <= 0 && lastLitPixels <= 0) {
     fail('STALLED', 'LCD has no lit pixels');
     return;
   }
@@ -775,6 +990,9 @@ basicRunButton.addEventListener('click', async () => {
   if (programRunInFlight) {
     return;
   }
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
   await runBasicProgram(basicEditor.value, { resetProgram: true });
 });
 
@@ -796,6 +1014,13 @@ basicLoadSampleButton.addEventListener('click', () => {
   updateEditorLineNumbers();
   syncEditorScroll();
   setProgramRunStatus('idle', 'Sample loaded');
+});
+
+basicLoadGameButton.addEventListener('click', () => {
+  basicEditor.value = BASIC_SAMPLE_GAME;
+  updateEditorLineNumbers();
+  syncEditorScroll();
+  setProgramRunStatus('idle', 'Sample game loaded (v2)');
 });
 
 basicEditor.addEventListener('input', () => {
@@ -829,10 +1054,11 @@ kanaToggleButton.addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', (event) => {
-  if (isTextInputTarget(event.target)) {
+  const resolvedCode = resolveKeyboardCode(event);
+  if (!resolvedCode) {
     return;
   }
-  if (!KEY_MAP_BY_CODE.has(event.code)) {
+  if (isTextInputTarget(event.target)) {
     return;
   }
 
@@ -841,26 +1067,45 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
-  machine.setKeyState(event.code, true);
-  pressedCodes.add(event.code);
-  appendLog(`DOWN ${event.code}`);
+  const pendingTimer = pendingKeyRelease.get(resolvedCode);
+  if (pendingTimer !== undefined) {
+    window.clearTimeout(pendingTimer);
+    pendingKeyRelease.delete(resolvedCode);
+  }
+
+  machine.setKeyState(resolvedCode, true);
+  pressedCodes.add(resolvedCode);
+  appendLog(`DOWN ${resolvedCode}`);
 });
 
 window.addEventListener('keyup', (event) => {
-  if (isTextInputTarget(event.target)) {
+  const resolvedCode = resolveKeyboardCode(event);
+  if (!resolvedCode) {
     return;
   }
-  if (!KEY_MAP_BY_CODE.has(event.code)) {
+  if (isTextInputTarget(event.target)) {
     return;
   }
 
   event.preventDefault();
-  machine.setKeyState(event.code, false);
-  pressedCodes.delete(event.code);
-  appendLog(`UP   ${event.code}`);
+  const pendingTimer = pendingKeyRelease.get(resolvedCode);
+  if (pendingTimer !== undefined) {
+    window.clearTimeout(pendingTimer);
+  }
+  const timerId = window.setTimeout(() => {
+    machine.setKeyState(resolvedCode, false);
+    pressedCodes.delete(resolvedCode);
+    pendingKeyRelease.delete(resolvedCode);
+    appendLog(`UP   ${resolvedCode}`);
+  }, KEY_RELEASE_LATCH_MS);
+  pendingKeyRelease.set(resolvedCode, timerId);
 });
 
 window.addEventListener('blur', () => {
+  for (const timerId of pendingKeyRelease.values()) {
+    window.clearTimeout(timerId);
+  }
+  pendingKeyRelease.clear();
   for (const code of pressedCodes) {
     machine.setKeyState(code, false);
   }

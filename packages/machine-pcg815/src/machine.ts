@@ -298,6 +298,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
   private kanaComposeBuffer = '';
 
   private selectedKeyRow = 0;
+  private runtimeSelectedKeyRow = 0;
 
   private lcdCursor = 0;
 
@@ -308,6 +309,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
   private dirtyFrame = true;
 
   private elapsedTStates = 0;
+  private wasRuntimeProgramRunning = false;
 
   constructor(options?: PCG815MachineOptions) {
     const monitorRom = options?.rom ?? createMonitorRom();
@@ -340,6 +342,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
     this.kanaMode = false;
     this.kanaComposeBuffer = '';
     this.selectedKeyRow = 0;
+    this.runtimeSelectedKeyRow = 0;
     this.lcdCursor = 0;
     this.romBankSelect = 0;
     this.expansionControl = 0;
@@ -348,13 +351,25 @@ export class PCG815Machine implements MachinePCG815, Bus {
     this.cpu.reset();
     this.dirtyFrame = true;
     this.elapsedTStates = 0;
+    this.wasRuntimeProgramRunning = false;
   }
 
   tick(tstates: number): void {
     const clamped = Math.max(0, Math.floor(tstates));
+    const wasRunning = this.runtime.isProgramRunning();
     this.cpu.stepTState(clamped);
     this.elapsedTStates += clamped;
     this.runtime.pump();
+    const isRunning = this.runtime.isProgramRunning();
+    if (!wasRunning && isRunning) {
+      // RUN開始時にタイプ済み文字を捨てる（終了後の遅延エコー防止）。
+      this.asciiQueue.length = 0;
+    }
+    if (wasRunning && !isRunning) {
+      // RUN中に押されたキー残骸を破棄する。
+      this.asciiQueue.length = 0;
+    }
+    this.wasRuntimeProgramRunning = isRunning;
   }
 
   setKeyState(code: string, pressed: boolean): void {
@@ -373,9 +388,12 @@ export class PCG815Machine implements MachinePCG815, Bus {
 
       // 押下エッジでのみ ASCII キューへ投入し、オートリピートの暴走を防ぐ。
       if (firstPress) {
-        const asciiCodes = this.resolveAsciiCodes(mapping.code, mapping.normal, mapping.shifted);
-        if (asciiCodes.length > 0) {
-          this.asciiQueue.push(...asciiCodes);
+        // BASIC RUN中はASCIIキューに積まない（終了後エコー抑止）。
+        if (!this.runtime.isProgramRunning()) {
+          const asciiCodes = this.resolveAsciiCodes(mapping.code, mapping.normal, mapping.shifted);
+          if (asciiCodes.length > 0) {
+            this.asciiQueue.push(...asciiCodes);
+          }
         }
       }
       return;
@@ -533,6 +551,11 @@ export class PCG815Machine implements MachinePCG815, Bus {
       case PORT_KEYBOARD_ROW_DATA:
         return this.keyboardRows[this.selectedKeyRow] ?? 0xff;
       case PORT_KEYBOARD_ASCII_FIFO:
+        // BASIC RUN中はCPU側モニタへのASCII供給を止め、
+        // キー押下文字がLCDへエコーされるのを防ぐ。
+        if (this.runtime.isProgramRunning()) {
+          return 0x00;
+        }
         // FIFO は読み出しで消費される。
         return this.asciiQueue.shift() ?? 0x00;
       case PORT_LCD_STATUS:
@@ -575,6 +598,30 @@ export class PCG815Machine implements MachinePCG815, Bus {
         return;
       default:
         return;
+    }
+  }
+
+  private runtimeIn8(port: number): number {
+    const normalized = port & 0xff;
+    switch (normalized) {
+      case PORT_KEYBOARD_ROW_DATA:
+        return this.keyboardRows[this.runtimeSelectedKeyRow] ?? 0xff;
+      case PORT_KEYBOARD_ASCII_FIFO:
+        return this.asciiQueue.shift() ?? 0x00;
+      default:
+        return this.in8(normalized);
+    }
+  }
+
+  private runtimeOut8(port: number, value: number): void {
+    const normalized = port & 0xff;
+    const byte = clamp8(value);
+    switch (normalized) {
+      case PORT_KEYBOARD_ROW_SELECT:
+        this.runtimeSelectedKeyRow = byte & 0x07;
+        return;
+      default:
+        this.out8(normalized, byte);
     }
   }
 
@@ -846,8 +893,8 @@ export class PCG815Machine implements MachinePCG815, Bus {
       },
       getDisplayStartLine: () => this.getDisplayStartLine(),
       readKeyMatrix: (row: number) => this.keyboardRows[row & 0x07] ?? 0xff,
-      in8: (port: number) => this.in8(port),
-      out8: (port: number, value: number) => this.out8(port, value),
+      in8: (port: number) => this.runtimeIn8(port),
+      out8: (port: number, value: number) => this.runtimeOut8(port, value),
       peek8: (address: number) => this.read8(address),
       poke8: (address: number, value: number) => this.write8(address, value),
       // 非ブロッキング方針: WAIT/BEEP でメインスレッドを塞がない。

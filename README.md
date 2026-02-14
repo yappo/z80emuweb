@@ -15,6 +15,15 @@ npm run dev
 - 実行シーケンスは `NEW -> program lines -> RUN`（既定）です
 - `STOP CPU` はエミュレータCPU実行を停止します（暴走時の退避用）
 - `Load Sample` は `WAIT/IF THEN` を含むカウントアップサンプルを読み込みます
+- `Sample Game` は 迷路探索4x4ゲーム（鍵取得後に出口到達）を読み込みます
+- スクリーンショットは準備中です
+
+### Sample Game の使い方
+
+1. `Sample Game` を押してゲームコードをエディタへ読み込む
+2. `RUN Program` を押してゲーム開始
+3. `W/A/S/D` または `↑/↓/←/→` で移動
+4. 鍵 `K` を取得してから出口 `G` に到達すると `CLEAR!`
 
 ### 既知ギャップ（MVP）
 
