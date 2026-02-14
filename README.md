@@ -65,4 +65,4 @@ npm run test:compat
 
 公開URL:
 
-- <https://yappo.github.io/z80emuweb/>
+- <https://yappo.github.io/z80emuweb/?debug=1>
