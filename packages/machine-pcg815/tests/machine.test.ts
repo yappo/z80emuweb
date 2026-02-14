@@ -286,6 +286,72 @@ describe('PCG815Machine', () => {
     expect(machine.in8(0x12)).toBe('a'.charCodeAt(0));
   });
 
+  it('maps romaji sequences to half-width katakana when kana mode is enabled', () => {
+    const machine = new PCG815Machine();
+    machine.setKanaMode(true);
+
+    machine.setKeyState('KeyK', true);
+    machine.setKeyState('KeyK', false);
+    expect(machine.in8(0x12)).toBe(0x00); // pending "k"
+
+    machine.setKeyState('KeyA', true);
+    machine.setKeyState('KeyA', false);
+    expect(machine.in8(0x12)).toBe(0xb6); // ｶ
+
+    machine.setKeyState('KeyK', true);
+    machine.setKeyState('KeyK', false);
+    machine.setKeyState('KeyY', true);
+    machine.setKeyState('KeyY', false);
+    machine.setKeyState('KeyA', true);
+    machine.setKeyState('KeyA', false);
+    expect(machine.in8(0x12)).toBe(0xb7); // ｷ
+    expect(machine.in8(0x12)).toBe(0xac); // ｬ
+  });
+
+  it('handles sokuon and n conversion in romaji kana mode', () => {
+    const machine = new PCG815Machine();
+    machine.setKanaMode(true);
+
+    machine.setKeyState('KeyK', true);
+    machine.setKeyState('KeyK', false);
+    machine.setKeyState('KeyK', true);
+    machine.setKeyState('KeyK', false);
+    machine.setKeyState('KeyO', true);
+    machine.setKeyState('KeyO', false);
+    expect(machine.in8(0x12)).toBe(0xaf); // ｯ
+    expect(machine.in8(0x12)).toBe(0xba); // ｺ
+
+    machine.setKeyState('KeyN', true);
+    machine.setKeyState('KeyN', false);
+    machine.setKeyState('KeyN', true);
+    machine.setKeyState('KeyN', false);
+    expect(machine.in8(0x12)).toBe(0xdd); // ﾝ
+  });
+
+  it('keeps romaji-kana conversion under SHIFT while kana mode is enabled', () => {
+    const machine = new PCG815Machine();
+    machine.setKanaMode(true);
+
+    machine.setKeyState('ShiftLeft', true);
+    machine.setKeyState('KeyK', true);
+    machine.setKeyState('KeyK', false);
+    machine.setKeyState('KeyA', true);
+    machine.setKeyState('KeyA', false);
+    machine.setKeyState('ShiftLeft', false);
+
+    expect(machine.in8(0x12)).toBe(0xb6); // ｶ
+  });
+
+  it('returns to ASCII mapping when kana mode is disabled', () => {
+    const machine = new PCG815Machine();
+    machine.setKanaMode(true);
+    machine.setKanaMode(false);
+
+    machine.setKeyState('KeyA', true);
+    machine.setKeyState('KeyA', false);
+    expect(machine.in8(0x12)).toBe('A'.charCodeAt(0));
+  });
+
   it('generates ASCII queue from extended key codes (JIS + numpad)', () => {
     const machine = new PCG815Machine();
 
@@ -378,6 +444,7 @@ describe('PCG815Machine', () => {
 
   it('supports snapshot round-trip', () => {
     const machine = new PCG815Machine();
+    machine.setKanaMode(true);
     machine.out8(0x58, 0x01);
     machine.out8(0x5a, 'X'.charCodeAt(0));
     machine.out8(0x19, 0x03);
@@ -391,8 +458,11 @@ describe('PCG815Machine', () => {
 
     expect(clone.getTextLines()[0]?.startsWith('X')).toBe(true);
     expect(clone.in8(0x12)).toBe('1'.charCodeAt(0));
+    expect(clone.getKanaMode()).toBe(true);
 
     const cloneSnapshot = clone.createSnapshot();
+    expect(cloneSnapshot.io.kanaMode).toBe(true);
+    expect(cloneSnapshot.io.kanaComposeBuffer).toBe('');
     expect(cloneSnapshot.io.romBankSelect).toBe(0x03);
     expect(cloneSnapshot.io.expansionControl).toBe(0x04);
   });
