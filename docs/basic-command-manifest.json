@@ -281,7 +281,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "厳密互換拡張向けの実装予定。"
+      "notes": "予約エラーコード E41。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "NEXT",
@@ -295,7 +295,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "厳密互換拡張向けの実装予定。"
+      "notes": "予約エラーコード E42。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "DIM",
@@ -309,7 +309,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "配列サポートは未実装。"
+      "notes": "予約エラーコード E43。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "DATA",
@@ -323,7 +323,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "DATA/READストリームは未実装。"
+      "notes": "予約エラーコード E44。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "READ",
@@ -337,7 +337,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "DATAストリーム読み出しは未実装。"
+      "notes": "予約エラーコード E45。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "RESTORE",
@@ -351,7 +351,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "DATAポインタ復帰は未実装。"
+      "notes": "予約エラーコード E46。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "PEEK",
@@ -366,7 +366,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "メモリ参照関数として実装予定。"
+      "notes": "予約エラーコード E47。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "POKE",
@@ -381,7 +381,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "メモリ書き込み命令として実装予定。"
+      "notes": "予約エラーコード E48。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "INP",
@@ -396,7 +396,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "I/Oポート読み取り関数として実装予定。"
+      "notes": "予約エラーコード E49。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "OUT",
@@ -411,7 +411,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "I/Oポート書き込み命令として実装予定。"
+      "notes": "予約エラーコード E50。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "BEEP",
@@ -425,7 +425,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "音源経路は現スコープ外。"
+      "notes": "予約エラーコード E51。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "WAIT",
@@ -439,7 +439,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "待機タイミング意味論は未実装。"
+      "notes": "予約エラーコード E52。現挙動は ERR SYNTAX (E01) を維持。"
     },
     {
       "id": "LOCATE",
@@ -453,7 +453,7 @@
       ],
       "positiveCaseIds": [],
       "negativeCaseIds": [],
-      "notes": "カーソル位置指定命令として実装予定。"
+      "notes": "予約エラーコード E53。現挙動は ERR SYNTAX (E01) を維持。"
     }
   ]
 }

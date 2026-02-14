@@ -111,18 +111,46 @@
 
 ## 5. エラー表示
 
-主な表示エラー:
+### 5.1 表示文言フォーマット
 
-- `SYNTAX`
-- `BAD LINE`
-- `BAD VAR`
-- `BAD LET`
-- `BAD IF`
-- `NO LINE <line>`
-- `RUNAWAY`
-- `INPUT IN RUN`
-- `RETURN W/O GOSUB`
-- `BAD STMT`
+- 表示形式は `ERR <message> (<numericCode>)`
+- 例:
+  - `ERR SYNTAX (E01)`
+  - `ERR NO LINE 999 (E06)`
+
+### 5.2 実運用コード（ACTIVE）
+
+| numericCode | message | runtimeCode |
+|---|---|---|
+| `E01` | `SYNTAX` | `SYNTAX` |
+| `E02` | `BAD LINE` | `BAD_LINE` |
+| `E03` | `BAD VAR` | `BAD_VAR` |
+| `E04` | `BAD LET` | `BAD_LET` |
+| `E05` | `BAD IF` | `BAD_IF` |
+| `E06` | `NO LINE` / `NO LINE <line>` | `NO_LINE` |
+| `E07` | `RUNAWAY` | `RUNAWAY` |
+| `E08` | `INPUT IN RUN` | `INPUT_IN_RUN` |
+| `E09` | `RETURN W/O GOSUB` | `RETURN_WO_GOSUB` |
+| `E10` | `BAD STMT` | `BAD_STMT` |
+| `E99` | `UNKNOWN` | フォールバック |
+
+### 5.3 予約コード（RESERVED）
+
+未実装命令向けの予約コード（現時点では出力しない）:
+
+- `E41 FOR`
+- `E42 NEXT`
+- `E43 DIM`
+- `E44 DATA`
+- `E45 READ`
+- `E46 RESTORE`
+- `E47 PEEK`
+- `E48 POKE`
+- `E49 INP`
+- `E50 OUT`
+- `E51 BEEP`
+- `E52 WAIT`
+- `E53 LOCATE`
 
 ## 6. PC-G815 BASIC 由来の未実装一覧（同一管理）
 
