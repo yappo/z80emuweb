@@ -5,6 +5,7 @@ coverage
 playwright-report
 test-results
 .DS_Store
+*.swp
 packages/*/src/**/*.js
 packages/*/src/**/*.js.map
 packages/*/src/**/*.d.ts
