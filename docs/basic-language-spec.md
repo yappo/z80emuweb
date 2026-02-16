@@ -1,10 +1,10 @@
 # PC-G815 BASIC 実装仕様（Task1-7 同期版）
 
-この文書は `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src` の現行実装を基準にした仕様です。
+この文書は `packages/firmware-monitor/src` の現行実装を基準にした仕様です。
 
 - 対象ランタイム: `PcG815BasicRuntime`
-- 参照マニフェスト: `/Users/yappo/Projects/z80emu/docs/basic-command-manifest.json`
-- 参照コーパス: `/Users/yappo/Projects/z80emu/docs/basic-observation-corpus/*.yaml`
+- 参照マニフェスト: `docs/basic-command-manifest.json`
+- 参照コーパス: `docs/basic-observation-corpus/*.yaml`
 
 ## 1. 実行モデル
 
@@ -90,8 +90,8 @@
 
 ## 8. 参照実装
 
-- `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src/lexer.ts`
-- `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src/parser.ts`
-- `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src/semantics.ts`
-- `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src/runtime.ts`
-- `/Users/yappo/Projects/z80emu/packages/firmware-monitor/src/types.ts`
+- `packages/firmware-monitor/src/lexer.ts`
+- `packages/firmware-monitor/src/parser.ts`
+- `packages/firmware-monitor/src/semantics.ts`
+- `packages/firmware-monitor/src/runtime.ts`
+- `packages/firmware-monitor/src/types.ts`
