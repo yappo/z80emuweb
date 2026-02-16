@@ -11,7 +11,7 @@
       "id": "list-rejects-arguments",
       "profile": "public-observed-v1",
       "commands": ["LIST"],
-      "lines": ["LIST 1"],
+      "lines": ["LIST *"],
       "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     },
     {
@@ -39,8 +39,8 @@
       "id": "input-rejected-in-run",
       "profile": "public-observed-v1",
       "commands": ["INPUT"],
-      "lines": ["10 INPUT A", "RUN"],
-      "expect": {"errorContains": ["INPUT IN RUN"], "errorCodeContains": ["E08"]}
+      "lines": ["INPUT"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     },
     {
       "id": "goto-missing-line",
@@ -151,7 +151,7 @@
       "id": "out-invalid-args",
       "profile": "public-observed-v1",
       "commands": ["OUT"],
-      "lines": ["OUT 1"],
+      "lines": ["OUT"],
       "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     },
     {

@@ -2,8 +2,10 @@
 const KEYWORDS = new Set([
   'NEW',
   'LIST',
+  'LLIST',
   'RUN',
   'PRINT',
+  'LPRINT',
   'LET',
   'INPUT',
   'GOTO',
@@ -11,8 +13,10 @@ const KEYWORDS = new Set([
   'RETURN',
   'END',
   'STOP',
+  'CONT',
   'IF',
   'THEN',
+  'ELSE',
   'CLS',
   'REM',
   'FOR',
@@ -29,7 +33,37 @@ const KEYWORDS = new Set([
   'WAIT',
   'LOCATE',
   'TO',
-  'STEP'
+  'STEP',
+  'AND',
+  'OR',
+  'XOR',
+  'MOD',
+  'NOT',
+  'CLEAR',
+  'DELETE',
+  'ERASE',
+  'ON',
+  'RANDOMIZE',
+  'RENUM',
+  'USING',
+  'MON',
+  'OPEN',
+  'CLOSE',
+  'LOAD',
+  'SAVE',
+  'LFILES',
+  'LCOPY',
+  'KILL',
+  'CALL',
+  'GCURSOR',
+  'GPRINT',
+  'LINE',
+  'PSET',
+  'PRESET',
+  'INPUT',
+  'OUTPUT',
+  'APPEND',
+  'AS'
 ]);
 
 export type TokenType =
@@ -40,6 +74,8 @@ export type TokenType =
   | 'operator'
   | 'comma'
   | 'semicolon'
+  | 'colon'
+  | 'hash'
   | 'lparen'
   | 'rparen'
   | 'eof';
@@ -55,14 +91,27 @@ export function normalizeIdentifier(value: string): string {
 }
 
 export function isIdentifier(value: string): boolean {
-  return /^[A-Z][A-Z0-9]*$/.test(value);
+  return /^[A-Z][A-Z0-9]*\$?$/.test(value);
+}
+
+function parseNumberToken(text: string): number {
+  if (text.startsWith('&H')) {
+    const value = Number.parseInt(text.slice(2), 16);
+    return Number.isNaN(value) ? 0 : value;
+  }
+
+  const asFloat = Number.parseFloat(text);
+  if (!Number.isFinite(asFloat) || Number.isNaN(asFloat)) {
+    return 0;
+  }
+  return Math.trunc(asFloat);
 }
 
 // 1 行分をトークン列へ分解する。
 // 行末には必ず eof トークンを付けて parser の終端判定を単純化する。
 export function tokenizeLine(input: string): Token[] {
   const tokens: Token[] = [];
-  const source = input.trim();
+  const source = input.trimEnd();
   let index = 0;
 
   while (index < source.length) {
@@ -76,12 +125,35 @@ export function tokenizeLine(input: string): Token[] {
       continue;
     }
 
+    if (ch === '\'') {
+      // 行末コメント。
+      break;
+    }
+
     if (/[0-9]/.test(ch)) {
       let end = index + 1;
       while (end < source.length && /[0-9]/.test(source[end] ?? '')) {
         end += 1;
       }
-      tokens.push({ type: 'number', value: source.slice(index, end) });
+      if (source[end] === '.') {
+        end += 1;
+        while (end < source.length && /[0-9]/.test(source[end] ?? '')) {
+          end += 1;
+        }
+      }
+      const raw = source.slice(index, end).toUpperCase();
+      tokens.push({ type: 'number', value: String(parseNumberToken(raw)) });
+      index = end;
+      continue;
+    }
+
+    if (ch === '&' && (source[index + 1] === 'H' || source[index + 1] === 'h')) {
+      let end = index + 2;
+      while (end < source.length && /[0-9A-Fa-f]/.test(source[end] ?? '')) {
+        end += 1;
+      }
+      const raw = source.slice(index, end).toUpperCase();
+      tokens.push({ type: 'number', value: String(parseNumberToken(raw)) });
       index = end;
       continue;
     }
@@ -101,7 +173,7 @@ export function tokenizeLine(input: string): Token[] {
 
     if (/[A-Za-z]/.test(ch)) {
       let end = index + 1;
-      while (end < source.length && /[A-Za-z0-9]/.test(source[end] ?? '')) {
+      while (end < source.length && /[A-Za-z0-9$]/.test(source[end] ?? '')) {
         end += 1;
       }
       const raw = source.slice(index, end);
@@ -121,7 +193,7 @@ export function tokenizeLine(input: string): Token[] {
       continue;
     }
 
-    if ('+-*/=<>'.includes(ch)) {
+    if ('+-*/\\^=<>' .includes(ch)) {
       tokens.push({ type: 'operator', value: ch });
       index += 1;
       continue;
@@ -135,6 +207,18 @@ export function tokenizeLine(input: string): Token[] {
 
     if (ch === ';') {
       tokens.push({ type: 'semicolon', value: ch });
+      index += 1;
+      continue;
+    }
+
+    if (ch === ':') {
+      tokens.push({ type: 'colon', value: ch });
+      index += 1;
+      continue;
+    }
+
+    if (ch === '#') {
+      tokens.push({ type: 'hash', value: ch });
       index += 1;
       continue;
     }

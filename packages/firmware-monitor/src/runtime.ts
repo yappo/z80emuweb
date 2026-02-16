@@ -2,19 +2,33 @@ import { BUILTIN_COMMAND_SPECS } from './command-registry';
 import type {
   AssignmentTarget,
   DataStatement,
+  DeleteStatement,
+  DimStatement,
   ExpressionNode,
   ForStatement,
+  GcursorStatement,
+  GprintStatement,
+  IfStatement,
+  InputStatement,
+  LineReference,
+  ListStatement,
   NextStatement,
+  OnStatement,
+  ParsedLine,
+  PrintStatement,
+  RenumStatement,
   StatementNode
 } from './ast';
 import { asDisplayError, BasicRuntimeError } from './errors';
-import { parseStatement } from './parser';
-import { evaluateNumericExpression, evaluatePrintItems } from './semantics';
+import { parseStatements } from './parser';
+import { evaluateExpression, evaluateNumericExpression, evaluatePrintItems } from './semantics';
 import type {
   BasicCommandSpec,
   CompatibilityReport,
   MonitorRuntimeSnapshot,
-  RuntimeOptions
+  RuntimeOptions,
+  ScalarValue,
+  SnapshotArray
 } from './types';
 
 function parseIntSafe(text: string): number {
@@ -37,16 +51,43 @@ function clampInt(value: number): number {
   return Math.trunc(value);
 }
 
+function isStringName(name: string): boolean {
+  return name.endsWith('$');
+}
+
+function quoteStringIfNeeded(value: string): string {
+  if (/[,\s:]/.test(value)) {
+    return `"${value}"`;
+  }
+  return value;
+}
+
 interface ProgramEntry {
   line: number;
   source: string;
+  parsed: ParsedLine;
+}
+
+interface ProgramInstruction {
+  line: number;
+  statementIndex: number;
   statement: StatementNode;
 }
 
-interface BasicArray {
+interface NumberArray {
+  kind: 'number-array';
   dimensions: number[];
   data: number[];
 }
+
+interface StringArray {
+  kind: 'string-array';
+  dimensions: number[];
+  length: number;
+  data: string[];
+}
+
+type BasicArray = NumberArray | StringArray;
 
 interface ForFrame {
   variable: string;
@@ -57,26 +98,39 @@ interface ForFrame {
 
 interface ExecutionState {
   mode: 'immediate' | 'program';
-  entries: ProgramEntry[];
-  lineToIndex: Map<number, number>;
-  forToNext: Map<number, number>;
+  instructions: ProgramInstruction[];
+  lineToPc: Map<number, number>;
+  labelToPc: Map<string, number>;
   pc: number;
   nextPc: number;
 }
 
 interface StatementExecutionResult {
-  jumpToIndex?: number;
+  jumpToPc?: number;
   stopProgram?: boolean;
+  suspendProgram?: 'stop' | 'input';
 }
 
 interface ActiveProgramState {
-  entries: ProgramEntry[];
-  lineToIndex: Map<number, number>;
-  forToNext: Map<number, number>;
+  instructions: ProgramInstruction[];
+  lineToPc: Map<number, number>;
+  labelToPc: Map<string, number>;
   pc: number;
   steps: number;
   maxSteps: number;
   promptOnComplete: boolean;
+}
+
+interface PendingInput {
+  variables: AssignmentTarget[];
+  prompt: string;
+  mode: 'immediate' | 'program';
+  channel?: number;
+}
+
+interface SuspendedProgramState {
+  reason: 'stop' | 'input';
+  state: ActiveProgramState;
 }
 
 class RuntimeWaitSignal extends Error {
@@ -86,28 +140,83 @@ class RuntimeWaitSignal extends Error {
   }
 }
 
-function missingLine(targetLine: number): never {
-  throw new BasicRuntimeError('NO_LINE', `NO LINE ${targetLine}`);
-}
-
-function shouldContinueLoop(current: number, endValue: number, stepValue: number): boolean {
-  if (stepValue < 0) {
-    return current >= endValue;
+function missingLine(reference: LineReference): never {
+  if (reference.kind === 'line-reference-number') {
+    throw new BasicRuntimeError('NO_LINE', `NO LINE ${reference.line}`);
   }
-  return current <= endValue;
+  throw new BasicRuntimeError('NO_LINE', `NO LINE ${reference.label}`);
 }
 
-function computeBeepDurationMs(j: number, n: number): number {
-  const seconds = 0.125 * (n + 1) * j;
-  const clamped = Math.max(1, Math.min(3, seconds));
-  return Math.trunc(clamped * 1000);
+function splitInputValues(line: string): string[] {
+  const values: string[] = [];
+  let current = '';
+  let inString = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i] ?? '';
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (!inString && ch === ',') {
+      values.push(current.trim());
+      current = '';
+      continue;
+    }
+
+    current += ch;
+  }
+
+  values.push(current.trim());
+  return values;
 }
 
-// PC-G815 互換の簡易 BASIC ランタイム。
+function updateNumericReferences(source: string, mapping: Map<number, number>): string {
+  if (mapping.size === 0) {
+    return source;
+  }
+
+  let updated = source;
+
+  updated = updated.replace(
+    /\b(RUN|LIST|GOTO|GOSUB|THEN|ELSE|RESTORE|RETURN)\s+(\d+)\b/gi,
+    (_full, keyword: string, lineText: string) => {
+      const line = parseIntSafe(lineText);
+      const mapped = mapping.get(line);
+      if (mapped === undefined) {
+        return `${keyword} ${lineText}`;
+      }
+      return `${keyword} ${mapped}`;
+    }
+  );
+
+  updated = updated.replace(/\bON\s+([^:]*?)\b(GOTO|GOSUB)\s+([^:]+)/gi, (full, prefix, mode, listText: string) => {
+    const rewritten = listText
+      .split(',')
+      .map((item) => {
+        const trimmed = item.trim();
+        if (!/^\d+$/.test(trimmed)) {
+          return item;
+        }
+        const mapped = mapping.get(parseIntSafe(trimmed));
+        if (mapped === undefined) {
+          return item;
+        }
+        return item.replace(trimmed, String(mapped));
+      })
+      .join(',');
+    return `ON ${prefix}${mode} ${rewritten}`;
+  });
+
+  return updated;
+}
+
+// PC-G815 互換の BASIC ランタイム。
 export class PcG815BasicRuntime {
   private readonly outputQueue: number[] = [];
 
-  private readonly variables = new Map<string, number>();
+  private readonly variables = new Map<string, ScalarValue>();
 
   private readonly arrays = new Map<string, BasicArray>();
 
@@ -119,21 +228,35 @@ export class PcG815BasicRuntime {
 
   private readonly gosubStack: number[] = [];
 
-  private readonly dataPool: number[] = [];
+  private readonly dataPool: ScalarValue[] = [];
 
   private readonly dataLineToCursor = new Map<number, number>();
+
+  private readonly openFileHandles = new Map<number, number>();
 
   private dataCursor = 0;
 
   private lineBuffer = '';
 
-  private waitingInputVar: string | null = null;
+  private pendingInput: PendingInput | null = null;
 
   private observationProfileId: string;
 
   private activeProgram: ActiveProgramState | null = null;
 
+  private suspendedProgram: SuspendedProgramState | null = null;
+
   private activeProgramWakeAtMs = 0;
+
+  private printWaitTicks = 0;
+
+  private printPauseMode = false;
+
+  private currentUsingFormat: string | undefined;
+
+  private graphicCursorX = 0;
+
+  private graphicCursorY = 0;
 
   constructor(private readonly options: RuntimeOptions = {}) {
     this.commandSpecs = [...(options.commandSpecs ?? BUILTIN_COMMAND_SPECS)];
@@ -143,14 +266,21 @@ export class PcG815BasicRuntime {
   reset(cold = false): void {
     this.outputQueue.length = 0;
     this.lineBuffer = '';
-    this.waitingInputVar = null;
+    this.pendingInput = null;
     this.forStack.length = 0;
     this.gosubStack.length = 0;
     this.dataPool.length = 0;
     this.dataCursor = 0;
     this.dataLineToCursor.clear();
     this.activeProgram = null;
+    this.suspendedProgram = null;
     this.activeProgramWakeAtMs = 0;
+    this.openFileHandles.clear();
+    this.printWaitTicks = 0;
+    this.printPauseMode = false;
+    this.currentUsingFormat = undefined;
+    this.graphicCursorX = 0;
+    this.graphicCursorY = 0;
 
     if (cold) {
       this.variables.clear();
@@ -191,11 +321,8 @@ export class PcG815BasicRuntime {
   executeLine(input: string): void {
     const line = input.trim();
 
-    if (this.waitingInputVar !== null) {
-      const parsed = parseIntSafe(line);
-      this.variables.set(this.waitingInputVar, parsed);
-      this.waitingInputVar = null;
-      this.pushPrompt();
+    if (this.pendingInput !== null) {
+      this.consumePendingInput(line);
       return;
     }
 
@@ -220,7 +347,7 @@ export class PcG815BasicRuntime {
         if (normalized.length === 0) {
           this.program.delete(lineNumber);
         } else {
-          parseStatement(normalized);
+          parseStatements(normalized);
           this.program.set(lineNumber, normalized);
         }
         this.pushText('OK\r\n');
@@ -232,41 +359,79 @@ export class PcG815BasicRuntime {
     }
 
     try {
-      const statement = parseStatement(line);
-      this.executeImmediateStatement(statement);
+      const parsed = parseStatements(line);
+      this.executeImmediateLine(parsed);
     } catch (error) {
       this.pushText(`ERR ${asDisplayError(error)}\r\n`);
     }
 
-    if (this.waitingInputVar === null && !this.isProgramRunning()) {
+    if (this.pendingInput === null && !this.isProgramRunning()) {
       this.pushPrompt();
     }
   }
 
-  runProgram(maxSteps = 10_000, promptOnComplete = false): void {
+  runProgram(maxSteps = 10_000, promptOnComplete = false, target?: LineReference): void {
     if (this.activeProgram !== null) {
       return;
     }
 
     const entries = this.getSortedProgramEntries();
-    const lineToIndex = new Map<number, number>();
-    entries.forEach((entry, index) => lineToIndex.set(entry.line, index));
-    const forToNext = this.buildForToNextMap(entries);
+    const instructions: ProgramInstruction[] = [];
+    const lineToPc = new Map<number, number>();
+    const labelToPc = new Map<string, number>();
 
+    for (const entry of entries) {
+      if (!lineToPc.has(entry.line)) {
+        lineToPc.set(entry.line, instructions.length);
+      }
+
+      if (entry.parsed.label && !labelToPc.has(entry.parsed.label)) {
+        labelToPc.set(entry.parsed.label, instructions.length);
+      }
+
+      if (entry.parsed.statements.length === 0) {
+        instructions.push({
+          line: entry.line,
+          statementIndex: 0,
+          statement: { kind: 'EMPTY' }
+        });
+        continue;
+      }
+
+      entry.parsed.statements.forEach((statement, statementIndex) => {
+        instructions.push({
+          line: entry.line,
+          statementIndex,
+          statement
+        });
+      });
+    }
+
+    this.variables.clear();
+    this.arrays.clear();
     this.forStack.length = 0;
     this.gosubStack.length = 0;
+    this.currentUsingFormat = undefined;
+    this.printWaitTicks = 0;
+    this.printPauseMode = false;
     this.buildDataPool(entries);
     this.dataCursor = 0;
 
+    let startPc = 0;
+    if (target) {
+      startPc = this.resolveReferencePc(target, { lineToPc, labelToPc });
+    }
+
     this.activeProgram = {
-      entries,
-      lineToIndex,
-      forToNext,
-      pc: 0,
+      instructions,
+      lineToPc,
+      labelToPc,
+      pc: startPc,
       steps: 0,
       maxSteps,
       promptOnComplete
     };
+    this.suspendedProgram = null;
     this.activeProgramWakeAtMs = 0;
     this.pump(Date.now());
   }
@@ -280,34 +445,50 @@ export class PcG815BasicRuntime {
       return;
     }
 
-    while (active.pc < active.entries.length) {
+    while (active.pc < active.instructions.length) {
       active.steps += 1;
       if (active.steps > active.maxSteps) {
         this.finishProgramWithError(new BasicRuntimeError('RUNAWAY', 'RUNAWAY'));
         return;
       }
 
-      const entry = active.entries[active.pc];
-      if (!entry) {
+      const instruction = active.instructions[active.pc];
+      if (!instruction) {
         break;
       }
 
       try {
-        const result = this.executeStatement(entry.statement, {
+        const result = this.executeStatement(instruction.statement, {
           mode: 'program',
-          entries: active.entries,
-          lineToIndex: active.lineToIndex,
-          forToNext: active.forToNext,
+          instructions: active.instructions,
+          lineToPc: active.lineToPc,
+          labelToPc: active.labelToPc,
           pc: active.pc,
           nextPc: active.pc + 1
         });
+
+        if (result.suspendProgram) {
+          this.suspendedProgram = {
+            reason: result.suspendProgram,
+            state: {
+              ...active,
+              pc: result.jumpToPc ?? active.pc + 1
+            }
+          };
+          this.activeProgram = null;
+          this.activeProgramWakeAtMs = 0;
+          if (result.suspendProgram === 'stop') {
+            this.pushText('BREAK\r\n');
+          }
+          return;
+        }
 
         if (result.stopProgram) {
           this.finishProgramSuccess();
           return;
         }
 
-        active.pc = result.jumpToIndex ?? active.pc + 1;
+        active.pc = result.jumpToPc ?? active.pc + 1;
       } catch (error) {
         if (error instanceof RuntimeWaitSignal) {
           // WAITで協調的に制御を返したプログラムは、RUNAWAYカウンタをリセットする。
@@ -336,19 +517,47 @@ export class PcG815BasicRuntime {
   getSnapshot(): MonitorRuntimeSnapshot {
     const arrays: MonitorRuntimeSnapshot['arrays'] = {};
     for (const [name, array] of this.arrays.entries()) {
-      arrays[name] = {
-        dimensions: [...array.dimensions],
-        data: [...array.data]
-      };
+      if (array.kind === 'number-array') {
+        arrays[name] = {
+          kind: 'number-array',
+          dimensions: [...array.dimensions],
+          data: [...array.data]
+        };
+      } else {
+        arrays[name] = {
+          kind: 'string-array',
+          dimensions: [...array.dimensions],
+          length: array.length,
+          data: [...array.data]
+        };
+      }
+    }
+
+    const variables: MonitorRuntimeSnapshot['variables'] = {};
+    for (const [name, value] of this.variables.entries()) {
+      if (typeof value === 'string') {
+        variables[name] = { type: 'string', value };
+      } else {
+        variables[name] = { type: 'number', value: clampInt(value) };
+      }
     }
 
     return {
       outputQueue: [...this.outputQueue],
       lineBuffer: this.lineBuffer,
-      variables: Object.fromEntries(this.variables.entries()),
+      variables,
       arrays,
       program: [...this.program.entries()],
-      waitingInputVar: this.waitingInputVar,
+      waitingInput:
+        this.pendingInput === null
+          ? null
+          : {
+              variables: this.pendingInput.variables.map((target) =>
+                target.kind === 'scalar-target' ? target.name : target.name
+              ),
+              prompt: this.pendingInput.prompt,
+              channel: this.pendingInput.channel
+            },
       observationProfileId: this.observationProfileId
     };
   }
@@ -363,18 +572,42 @@ export class PcG815BasicRuntime {
     this.dataPool.length = 0;
     this.dataCursor = 0;
     this.dataLineToCursor.clear();
+    this.activeProgram = null;
+    this.suspendedProgram = null;
+    this.pendingInput = null;
 
     this.variables.clear();
     for (const [key, value] of Object.entries(snapshot.variables)) {
-      this.variables.set(key, value);
+      if (typeof value === 'number') {
+        // 旧フォーマット互換。
+        this.variables.set(key, clampInt(value));
+      } else if (value.type === 'string') {
+        this.variables.set(key, value.value);
+      } else {
+        this.variables.set(key, clampInt(value.value));
+      }
     }
 
     this.arrays.clear();
     for (const [name, array] of Object.entries(snapshot.arrays ?? {})) {
-      this.arrays.set(name, {
-        dimensions: [...array.dimensions],
-        data: [...array.data]
-      });
+      if (!array) {
+        continue;
+      }
+      const typed = array as SnapshotArray;
+      if (typed.kind === 'string-array') {
+        this.arrays.set(name, {
+          kind: 'string-array',
+          dimensions: [...typed.dimensions],
+          length: typed.length,
+          data: [...typed.data]
+        });
+      } else {
+        this.arrays.set(name, {
+          kind: 'number-array',
+          dimensions: [...typed.dimensions],
+          data: [...typed.data]
+        });
+      }
     }
 
     this.program.clear();
@@ -382,7 +615,6 @@ export class PcG815BasicRuntime {
       this.program.set(line, statement);
     }
 
-    this.waitingInputVar = snapshot.waitingInputVar;
     this.observationProfileId = snapshot.observationProfileId ?? 'public-observed-v1';
   }
 
@@ -404,7 +636,7 @@ export class PcG815BasicRuntime {
     };
   }
 
-  getVariables(): ReadonlyMap<string, number> {
+  getVariables(): ReadonlyMap<string, ScalarValue> {
     return this.variables;
   }
 
@@ -412,20 +644,34 @@ export class PcG815BasicRuntime {
     return this.program;
   }
 
-  private executeImmediateStatement(statement: StatementNode): void {
-    if (statement.kind === 'RUN') {
-      this.runProgram(10_000, true);
-      return;
-    }
-
-    this.executeStatement(statement, {
+  private executeImmediateLine(parsed: ParsedLine): void {
+    const state: ExecutionState = {
       mode: 'immediate',
-      entries: [],
-      lineToIndex: new Map(),
-      forToNext: new Map(),
+      instructions: [],
+      lineToPc: new Map(),
+      labelToPc: new Map(),
       pc: -1,
       nextPc: 0
-    });
+    };
+
+    for (const statement of parsed.statements) {
+      if (statement.kind === 'RUN') {
+        this.runProgram(10_000, true, statement.target);
+        return;
+      }
+
+      if (statement.kind === 'CONT') {
+        if (!this.resumeStoppedProgram()) {
+          throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+        }
+        return;
+      }
+
+      const result = this.executeStatement(statement, state);
+      if (result.stopProgram || result.suspendProgram) {
+        return;
+      }
+    }
   }
 
   private executeStatement(statement: StatementNode, state: ExecutionState): StatementExecutionResult {
@@ -444,25 +690,22 @@ export class PcG815BasicRuntime {
         this.dataPool.length = 0;
         this.dataCursor = 0;
         this.dataLineToCursor.clear();
+        this.currentUsingFormat = undefined;
         this.pushText('OK\r\n');
         return {};
       case 'LIST':
         this.assertMode(state, ['immediate']);
-        for (const [line, body] of [...this.program.entries()].sort((a, b) => a[0] - b[0])) {
-          this.pushText(`${line} ${body}\r\n`);
-        }
+        this.executeList(statement);
         return {};
+      case 'RUN':
+        this.assertMode(state, ['immediate']);
+        this.runProgram(10_000, true, statement.target);
+        return { stopProgram: true };
       case 'PRINT':
-        {
-          const payload = evaluatePrintItems(statement.items, this.getEvalContext());
-          this.pushText(payload.text);
-          if (!payload.suppressNewline) {
-            this.pushText('\r\n');
-          }
-        }
+        this.executePrint(statement, state.mode);
         return {};
       case 'LET': {
-        const value = this.evaluateNumeric(statement.expression);
+        const value = evaluateExpression(statement.expression, this.getEvalContext());
         this.assignTarget(statement.target, value);
         if (state.mode === 'immediate') {
           this.pushText('OK\r\n');
@@ -470,51 +713,45 @@ export class PcG815BasicRuntime {
         return {};
       }
       case 'INPUT':
-        this.assertMode(state, ['immediate']);
-        this.waitingInputVar = statement.variable;
-        this.pushText('? ');
-        return {};
+        return this.executeInput(statement, state);
       case 'GOTO': {
         this.assertMode(state, ['program']);
-        const target = state.lineToIndex.get(statement.targetLine);
-        if (target === undefined) {
-          missingLine(statement.targetLine);
-        }
-        return { jumpToIndex: target };
+        const targetPc = this.resolveReferencePc(statement.target, state);
+        return { jumpToPc: targetPc };
       }
       case 'GOSUB': {
         this.assertMode(state, ['program']);
-        const target = state.lineToIndex.get(statement.targetLine);
-        if (target === undefined) {
-          missingLine(statement.targetLine);
-        }
+        const targetPc = this.resolveReferencePc(statement.target, state);
         this.gosubStack.push(state.nextPc);
-        return { jumpToIndex: target };
+        return { jumpToPc: targetPc };
       }
       case 'RETURN': {
         this.assertMode(state, ['program']);
+        if (statement.target) {
+          const targetPc = this.resolveReferencePc(statement.target, state);
+          return { jumpToPc: targetPc };
+        }
+
         const resume = this.gosubStack.pop();
         if (resume === undefined) {
           throw new BasicRuntimeError('RETURN_WO_GOSUB', 'RETURN W/O GOSUB');
         }
-        return { jumpToIndex: resume };
+        return { jumpToPc: resume };
       }
       case 'END':
-      case 'STOP':
         this.assertMode(state, ['program']);
         return { stopProgram: true };
-      case 'IF': {
+      case 'STOP':
         this.assertMode(state, ['program']);
-        const cond = this.evaluateNumeric(statement.condition);
-        if (cond === 0) {
-          return {};
+        return { suspendProgram: 'stop', jumpToPc: state.nextPc };
+      case 'CONT':
+        this.assertMode(state, ['immediate']);
+        if (!this.resumeStoppedProgram()) {
+          throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
         }
-        const target = state.lineToIndex.get(statement.targetLine);
-        if (target === undefined) {
-          missingLine(statement.targetLine);
-        }
-        return { jumpToIndex: target };
-      }
+        return { stopProgram: true };
+      case 'IF':
+        return this.executeIf(statement, state);
       case 'CLS':
         this.options.machineAdapter?.clearLcd?.();
         if (state.mode === 'immediate') {
@@ -528,36 +765,28 @@ export class PcG815BasicRuntime {
         this.assertMode(state, ['program']);
         return this.executeNext(statement);
       case 'DIM':
-        for (const decl of statement.declarations) {
-          const dimensions = decl.dimensions.map((expr) => this.evaluateNumeric(expr));
-          this.defineArray(decl.name, dimensions);
-        }
+        this.executeDim(statement);
         return {};
       case 'READ':
-        for (const target of statement.targets) {
-          if (this.dataCursor >= this.dataPool.length) {
-            throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
-          }
-          const value = this.dataPool[this.dataCursor] ?? 0;
-          this.dataCursor += 1;
-          this.assignTarget(target, value);
-        }
+        this.executeRead(statement);
         return {};
       case 'RESTORE':
-        if (statement.line === undefined) {
+        if (statement.target === undefined) {
           this.dataCursor = 0;
           return {};
         }
-        this.dataCursor = this.resolveRestoreCursor(statement.line, state);
+        this.dataCursor = this.resolveRestoreCursor(statement.target, state);
         return {};
       case 'POKE': {
         const address = this.evaluateNumeric(statement.address) & 0xffff;
-        const value = this.evaluateNumeric(statement.value) & 0xff;
-        this.options.machineAdapter?.poke8?.(address, value);
+        statement.values.forEach((valueExpr, index) => {
+          const value = this.evaluateNumeric(valueExpr) & 0xff;
+          this.options.machineAdapter?.poke8?.((address + index) & 0xffff, value);
+        });
         return {};
       }
       case 'OUT': {
-        const port = this.evaluateNumeric(statement.port) & 0xff;
+        const port = statement.port ? this.evaluateNumeric(statement.port) & 0xff : 0x18;
         const value = this.evaluateNumeric(statement.value) & 0xff;
         this.options.machineAdapter?.out8?.(port, value);
         return {};
@@ -568,61 +797,197 @@ export class PcG815BasicRuntime {
           this.evaluateNumeric(statement.k);
         }
         const n = statement.n ? this.evaluateNumeric(statement.n) : 0;
-        const sleepMs = computeBeepDurationMs(j, n);
+        const seconds = 0.125 * (n + 1) * j;
+        const sleepMs = Math.trunc(Math.max(1, Math.min(3, seconds)) * 1000);
         this.waitMilliseconds(sleepMs, state.mode);
         return {};
       }
       case 'WAIT': {
         if (!statement.duration) {
-          this.waitMilliseconds(1000, state.mode);
+          this.printPauseMode = true;
+          this.printWaitTicks = 0;
+          this.options.machineAdapter?.setPrintWait?.(0, true);
           return {};
         }
         const ticks = this.evaluateNumeric(statement.duration);
-        if (ticks <= 0) {
-          return {};
+        if (ticks < 0 || ticks > 0xffff) {
+          throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
         }
-        const sleepMs = Math.max(1, Math.trunc((ticks * 1000) / 64));
-        this.waitMilliseconds(sleepMs, state.mode);
+        this.printPauseMode = false;
+        this.printWaitTicks = ticks;
+        this.options.machineAdapter?.setPrintWait?.(ticks, false);
         return {};
       }
       case 'LOCATE': {
-        const x = this.evaluateNumeric(statement.x);
+        const x = statement.x ? this.evaluateNumeric(statement.x) : 0;
         const y = statement.y ? this.evaluateNumeric(statement.y) : 0;
         if (statement.z) {
           this.evaluateNumeric(statement.z);
         }
-        this.options.machineAdapter?.setTextCursor?.(Math.max(0, x), Math.max(0, y));
+        if (x < 0 || x >= 24 || y < 0 || y >= 4) {
+          throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+        }
+        this.options.machineAdapter?.setTextCursor?.(x, y);
         return {};
       }
+      case 'CLEAR':
+        this.variables.clear();
+        this.arrays.clear();
+        this.dataCursor = 0;
+        this.forStack.length = 0;
+        this.gosubStack.length = 0;
+        this.currentUsingFormat = undefined;
+        return {};
+      case 'DELETE':
+        this.executeDelete(statement);
+        return {};
+      case 'ERASE':
+        for (const name of statement.names) {
+          this.arrays.delete(name);
+        }
+        return {};
+      case 'ON':
+        return this.executeOn(statement, state);
+      case 'RANDOMIZE':
+        this.variables.set('RANDOM_SEED', Date.now() & 0xffff_ffff);
+        return {};
+      case 'RENUM':
+        this.assertMode(state, ['immediate']);
+        this.executeRenum(statement);
+        return {};
+      case 'USING':
+        this.currentUsingFormat = statement.format;
+        return {};
+      case 'MON':
+        return { stopProgram: state.mode === 'program' };
+      case 'OPEN':
+        this.executeOpen(statement);
+        return {};
+      case 'CLOSE':
+        this.executeClose(statement);
+        return {};
+      case 'LOAD':
+        this.executeLoad(statement.path);
+        return {};
+      case 'SAVE':
+        this.executeSave(statement.path);
+        return {};
+      case 'LFILES': {
+        const files = this.options.machineAdapter?.listFiles?.() ?? [];
+        for (const file of files) {
+          this.pushText(`${file}\r\n`);
+        }
+        return {};
+      }
+      case 'LCOPY': {
+        const start = this.evaluateNumeric(statement.start);
+        const end = this.evaluateNumeric(statement.end);
+        this.evaluateNumeric(statement.to);
+        const sorted = [...this.program.entries()].sort((a, b) => a[0] - b[0]);
+        for (const [line, body] of sorted) {
+          if (line >= start && line <= end) {
+            this.options.machineAdapter?.printDeviceWrite?.(`${line} ${body}\r\n`);
+          }
+        }
+        return {};
+      }
+      case 'KILL': {
+        const deleted = this.options.machineAdapter?.deleteFile?.(statement.path);
+        if (deleted === false) {
+          throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+        }
+        return {};
+      }
+      case 'CALL': {
+        const address = this.evaluateNumeric(statement.address) & 0xffff;
+        const args = statement.args.map((arg) => this.evaluateNumeric(arg));
+        this.options.machineAdapter?.callMachine?.(address, args);
+        return {};
+      }
+      case 'GCURSOR':
+        return this.executeGcursor(statement);
+      case 'GPRINT':
+        return this.executeGprint(statement, state.mode);
+      case 'LINE': {
+        const x1 = this.evaluateNumeric(statement.x1);
+        const y1 = this.evaluateNumeric(statement.y1);
+        const x2 = this.evaluateNumeric(statement.x2);
+        const y2 = this.evaluateNumeric(statement.y2);
+        const mode = statement.mode ? this.evaluateNumeric(statement.mode) : 1;
+        const pattern = statement.pattern ? this.evaluateNumeric(statement.pattern) : undefined;
+        this.options.machineAdapter?.drawLine?.(x1, y1, x2, y2, mode, pattern);
+        return {};
+      }
+      case 'PSET': {
+        const x = this.evaluateNumeric(statement.x);
+        const y = this.evaluateNumeric(statement.y);
+        const mode = statement.mode ? this.evaluateNumeric(statement.mode) : 1;
+        this.options.machineAdapter?.drawPoint?.(x, y, mode);
+        return {};
+      }
+      case 'PRESET': {
+        const x = this.evaluateNumeric(statement.x);
+        const y = this.evaluateNumeric(statement.y);
+        this.options.machineAdapter?.drawPoint?.(x, y, 0);
+        return {};
+      }
+      case 'ELSE':
+        return {};
       default:
-        throw new BasicRuntimeError('BAD_STMT', `BAD STMT: ${statement.kind}`);
+        throw new BasicRuntimeError('BAD_STMT', `BAD STMT: ${(statement as StatementNode).kind}`);
     }
+  }
+
+  private executeGcursor(statement: GcursorStatement): StatementExecutionResult {
+    const x = this.evaluateNumeric(statement.x);
+    const y = this.evaluateNumeric(statement.y);
+    this.graphicCursorX = x;
+    this.graphicCursorY = y;
+    this.options.machineAdapter?.setGraphicCursor?.(x, y);
+    return {};
+  }
+
+  private executeGprint(statement: GprintStatement, mode: 'immediate' | 'program'): StatementExecutionResult {
+    const payload = evaluatePrintItems(statement.items as PrintStatement['items'], this.getEvalContext());
+    this.options.machineAdapter?.printGraphicText?.(payload.text);
+    if (!payload.suppressNewline) {
+      this.graphicCursorY += 8;
+      this.options.machineAdapter?.setGraphicCursor?.(this.graphicCursorX, this.graphicCursorY);
+    }
+    this.applyPrintWait(mode);
+    return {};
+  }
+
+  private executeIf(statement: IfStatement, state: ExecutionState): StatementExecutionResult {
+    const cond = this.evaluateNumeric(statement.condition);
+    const branch = cond !== 0 ? statement.thenBranch : statement.elseBranch;
+    if (!branch || branch.length === 0) {
+      return {};
+    }
+
+    for (const child of branch) {
+      const result = this.executeStatement(child, state);
+      if (result.jumpToPc !== undefined || result.stopProgram || result.suspendProgram) {
+        return result;
+      }
+    }
+
+    return {};
   }
 
   private executeFor(statement: ForStatement, state: ExecutionState): StatementExecutionResult {
     const startValue = this.evaluateNumeric(statement.start);
     const endValue = this.evaluateNumeric(statement.end);
     const stepValue = statement.step ? this.evaluateNumeric(statement.step) : 1;
-    const normalizedStep = stepValue === 0 ? 1 : stepValue;
 
     this.variables.set(statement.variable, startValue);
-    const shouldEnter = shouldContinueLoop(startValue, endValue, normalizedStep);
-
-    const nextIndex = state.forToNext.get(state.pc);
-    if (nextIndex === undefined) {
-      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
-    }
-
-    if (!shouldEnter) {
-      return { jumpToIndex: nextIndex + 1 };
-    }
-
     this.forStack.push({
       variable: statement.variable,
       forPc: state.pc,
       endValue,
-      stepValue: normalizedStep
+      stepValue
     });
+
     return {};
   }
 
@@ -631,57 +996,377 @@ export class PcG815BasicRuntime {
       throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
     }
 
-    const frame = this.forStack[this.forStack.length - 1];
+    let frameIndex = this.forStack.length - 1;
+    if (statement.variable) {
+      while (frameIndex >= 0) {
+        const frame = this.forStack[frameIndex];
+        if (frame?.variable === statement.variable) {
+          break;
+        }
+        frameIndex -= 1;
+      }
+
+      if (frameIndex < 0) {
+        throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+      }
+
+      this.forStack.splice(frameIndex + 1);
+    }
+
+    const frame = this.forStack[frameIndex];
     if (!frame) {
       throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
     }
 
-    if (statement.variable && statement.variable !== frame.variable) {
+    const currentRaw = this.variables.get(frame.variable);
+    const current = typeof currentRaw === 'number' ? currentRaw : 0;
+    const nextValue = clampInt(current + frame.stepValue);
+    this.variables.set(frame.variable, nextValue);
+
+    const shouldContinue =
+      frame.stepValue > 0
+        ? nextValue <= frame.endValue
+        : frame.stepValue < 0
+          ? nextValue >= frame.endValue
+          : nextValue === frame.endValue;
+
+    if (shouldContinue) {
+      return { jumpToPc: frame.forPc + 1 };
+    }
+
+    this.forStack.splice(frameIndex, 1);
+    return {};
+  }
+
+  private executeDim(statement: DimStatement): void {
+    for (const decl of statement.declarations) {
+      const dimensions = decl.dimensions.map((expr) => this.evaluateNumeric(expr));
+      const stringLength = decl.stringLength ? this.evaluateNumeric(decl.stringLength) : undefined;
+      this.defineArray(decl.name, dimensions, stringLength);
+    }
+  }
+
+  private executeRead(statement: { targets: AssignmentTarget[] }): void {
+    for (const target of statement.targets) {
+      if (this.dataCursor >= this.dataPool.length) {
+        throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+      }
+      const value = this.dataPool[this.dataCursor] ?? 0;
+      this.dataCursor += 1;
+      this.assignTarget(target, value);
+    }
+  }
+
+  private executeDelete(statement: DeleteStatement): void {
+    const start = statement.start ?? 1;
+    const end = statement.end ?? (statement.start ?? 0xff00);
+    if (start > end) {
       throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
     }
 
-    const current = this.variables.get(frame.variable) ?? 0;
-    const nextValue = current + frame.stepValue;
-    this.variables.set(frame.variable, clampInt(nextValue));
+    for (const line of [...this.program.keys()]) {
+      if (line >= start && line <= end) {
+        this.program.delete(line);
+      }
+    }
+  }
 
-    if (shouldContinueLoop(nextValue, frame.endValue, frame.stepValue)) {
-      return { jumpToIndex: frame.forPc + 1 };
+  private executeOn(statement: OnStatement, state: ExecutionState): StatementExecutionResult {
+    const selector = this.evaluateNumeric(statement.selector);
+    if (selector <= 0 || selector > statement.targets.length) {
+      return {};
     }
 
-    this.forStack.pop();
+    const target = statement.targets[selector - 1];
+    if (!target) {
+      return {};
+    }
+
+    const jumpToPc = this.resolveReferencePc(target, state);
+    if (statement.mode === 'GOSUB') {
+      this.gosubStack.push(state.nextPc);
+    }
+
+    return { jumpToPc };
+  }
+
+  private executeRenum(statement: RenumStatement): void {
+    const newStart = statement.start ? this.evaluateNumeric(statement.start) : 10;
+    const from = statement.from ? this.evaluateNumeric(statement.from) : 0;
+    const step = statement.step ? this.evaluateNumeric(statement.step) : 10;
+
+    if (step <= 0) {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+
+    const sorted = [...this.program.entries()].sort((a, b) => a[0] - b[0]);
+    const mapping = new Map<number, number>();
+
+    let nextLine = newStart;
+    for (const [line] of sorted) {
+      if (line < from) {
+        continue;
+      }
+      mapping.set(line, nextLine);
+      nextLine += step;
+    }
+
+    const rewritten = new Map<number, string>();
+    for (const [line, source] of sorted) {
+      const mappedLine = mapping.get(line) ?? line;
+      rewritten.set(mappedLine, updateNumericReferences(source, mapping));
+    }
+
+    this.program.clear();
+    for (const [line, source] of rewritten.entries()) {
+      this.program.set(line, source);
+    }
+  }
+
+  private executeOpen(statement: {
+    path: string;
+    mode?: 'INPUT' | 'OUTPUT' | 'APPEND';
+    handle?: ExpressionNode;
+  }): void {
+    const basicHandle = statement.handle ? this.evaluateNumeric(statement.handle) : 1;
+    const mode = statement.mode ?? 'INPUT';
+    const adapterHandle = this.options.machineAdapter?.openFile?.(statement.path, mode);
+    if (adapterHandle === undefined) {
+      this.openFileHandles.set(basicHandle, basicHandle);
+      return;
+    }
+    this.openFileHandles.set(basicHandle, adapterHandle);
+  }
+
+  private executeClose(statement: { handles: ExpressionNode[] }): void {
+    for (const handleExpr of statement.handles) {
+      const basicHandle = this.evaluateNumeric(handleExpr);
+      const adapterHandle = this.openFileHandles.get(basicHandle) ?? basicHandle;
+      this.options.machineAdapter?.closeFile?.(adapterHandle);
+      this.openFileHandles.delete(basicHandle);
+    }
+  }
+
+  private executeLoad(path: string): void {
+    const openFile = this.options.machineAdapter?.openFile;
+    const readFileValue = this.options.machineAdapter?.readFileValue;
+    const closeFile = this.options.machineAdapter?.closeFile;
+
+    if (!openFile || !readFileValue) {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+
+    const handle = openFile(path, 'INPUT');
+    try {
+      this.program.clear();
+
+      while (true) {
+        const value = readFileValue(handle);
+        if (value === null) {
+          break;
+        }
+        const line = String(value);
+        const match = line.match(/^(\d+)\s*(.*)$/);
+        if (!match) {
+          continue;
+        }
+        const lineNumber = parseIntSafe(match[1] ?? '0');
+        const source = normalizeProgramLine(match[2] ?? '');
+        if (source.length > 0) {
+          parseStatements(source);
+          this.program.set(lineNumber, source);
+        }
+      }
+    } finally {
+      closeFile?.(handle);
+    }
+  }
+
+  private executeSave(path: string): void {
+    const openFile = this.options.machineAdapter?.openFile;
+    const writeFileValue = this.options.machineAdapter?.writeFileValue;
+    const closeFile = this.options.machineAdapter?.closeFile;
+
+    if (!openFile || !writeFileValue) {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+
+    const handle = openFile(path, 'OUTPUT');
+    try {
+      for (const [line, source] of [...this.program.entries()].sort((a, b) => a[0] - b[0])) {
+        writeFileValue(handle, `${line} ${source}`);
+      }
+    } finally {
+      closeFile?.(handle);
+    }
+  }
+
+  private executePrint(statement: PrintStatement, mode: 'immediate' | 'program'): void {
+    const payload = evaluatePrintItems(statement.items, this.getEvalContext(), statement.usingFormat ?? this.currentUsingFormat);
+    const text = payload.text;
+
+    if (statement.channel) {
+      const handle = this.evaluateNumeric(statement.channel);
+      const adapterHandle = this.openFileHandles.get(handle) ?? handle;
+      this.options.machineAdapter?.writeFileValue?.(adapterHandle, payload.suppressNewline ? text : `${text}\n`);
+    } else if (statement.printer) {
+      this.options.machineAdapter?.printDeviceWrite?.(payload.suppressNewline ? text : `${text}\r\n`);
+    } else {
+      this.pushText(text);
+      if (!payload.suppressNewline) {
+        this.pushText('\r\n');
+      }
+    }
+
+    this.applyPrintWait(mode);
+  }
+
+  private applyPrintWait(mode: 'immediate' | 'program'): void {
+    if (this.printPauseMode) {
+      this.options.machineAdapter?.waitForEnterKey?.();
+      return;
+    }
+
+    if (this.printWaitTicks > 0) {
+      const delayMs = Math.max(1, Math.trunc((this.printWaitTicks * 1000) / 64));
+      this.waitMilliseconds(delayMs, mode);
+    }
+  }
+
+  private executeInput(statement: InputStatement, state: ExecutionState): StatementExecutionResult {
+    if (statement.channel) {
+      const basicHandle = this.evaluateNumeric(statement.channel);
+      const adapterHandle = this.openFileHandles.get(basicHandle) ?? basicHandle;
+      for (const variable of statement.variables) {
+        const value = this.options.machineAdapter?.readFileValue?.(adapterHandle);
+        if (value === null || value === undefined) {
+          this.assignTarget(variable, variable.kind === 'scalar-target' && isStringName(variable.name) ? '' : 0);
+        } else {
+          this.assignTarget(variable, value);
+        }
+      }
+      return {};
+    }
+
+    const prompt = statement.prompt ? `${statement.prompt}` : '?';
+    this.pendingInput = {
+      variables: statement.variables,
+      prompt,
+      mode: state.mode
+    };
+    this.pushText(`${prompt} `);
+
+    if (state.mode === 'program') {
+      return {
+        suspendProgram: 'input',
+        jumpToPc: state.nextPc
+      };
+    }
+
     return {};
+  }
+
+  private consumePendingInput(line: string): void {
+    const pending = this.pendingInput;
+    if (!pending) {
+      return;
+    }
+
+    const values = splitInputValues(line);
+
+    pending.variables.forEach((target, index) => {
+      const raw = values[index] ?? '';
+
+      if (target.kind === 'scalar-target' && isStringName(target.name)) {
+        this.assignTarget(target, raw);
+        return;
+      }
+
+      if (target.kind === 'array-element-target' && isStringName(target.name)) {
+        this.assignTarget(target, raw);
+        return;
+      }
+
+      this.assignTarget(target, parseIntSafe(raw));
+    });
+
+    this.pendingInput = null;
+
+    if (this.suspendedProgram?.reason === 'input') {
+      this.activeProgram = this.suspendedProgram.state;
+      this.suspendedProgram = null;
+      this.pump(Date.now());
+      return;
+    }
+
+    this.pushPrompt();
+  }
+
+  private resolveReferencePc(
+    target: LineReference,
+    state: Pick<ExecutionState, 'lineToPc' | 'labelToPc'>
+  ): number {
+    if (target.kind === 'line-reference-number') {
+      const pc = state.lineToPc.get(target.line);
+      if (pc === undefined) {
+        missingLine(target);
+      }
+      return pc;
+    }
+
+    const pc = state.labelToPc.get(target.label);
+    if (pc === undefined) {
+      missingLine(target);
+    }
+    return pc;
+  }
+
+  private executeList(statement: ListStatement): void {
+    const entries = this.getSortedProgramEntries();
+    let startLine: number | undefined;
+
+    if (statement.target) {
+      if (statement.target.kind === 'line-reference-number') {
+        startLine = statement.target.line;
+      } else {
+        const targetLabel = statement.target.label;
+        const found = entries.find((entry) => entry.parsed.label === targetLabel);
+        if (!found) {
+          missingLine(statement.target);
+        }
+        startLine = found.line;
+      }
+    }
+
+    for (const entry of entries) {
+      if (startLine !== undefined && entry.line < startLine) {
+        continue;
+      }
+      const row = `${entry.line} ${entry.source}\r\n`;
+      if (statement.printer) {
+        this.options.machineAdapter?.printDeviceWrite?.(row);
+      } else {
+        this.pushText(row);
+      }
+    }
+  }
+
+  private resumeStoppedProgram(): boolean {
+    if (!this.suspendedProgram || this.suspendedProgram.reason !== 'stop') {
+      return false;
+    }
+
+    this.activeProgram = this.suspendedProgram.state;
+    this.suspendedProgram = null;
+    this.activeProgramWakeAtMs = 0;
+    this.pump(Date.now());
+    return true;
   }
 
   private getSortedProgramEntries(): ProgramEntry[] {
     return [...this.program.entries()]
       .sort((a, b) => a[0] - b[0])
-      .map(([line, source]) => ({ line, source, statement: parseStatement(source) }));
-  }
-
-  private buildForToNextMap(entries: ProgramEntry[]): Map<number, number> {
-    const result = new Map<number, number>();
-    const stack: number[] = [];
-
-    for (let index = 0; index < entries.length; index += 1) {
-      const statement = entries[index]?.statement;
-      if (!statement) {
-        continue;
-      }
-
-      if (statement.kind === 'FOR') {
-        stack.push(index);
-        continue;
-      }
-
-      if (statement.kind === 'NEXT') {
-        const forIndex = stack.pop();
-        if (forIndex !== undefined) {
-          result.set(forIndex, index);
-        }
-      }
-    }
-
-    return result;
+      .map(([line, source]) => ({ line, source, parsed: parseStatements(source) }));
   }
 
   private buildDataPool(entries: ProgramEntry[]): void {
@@ -689,10 +1374,12 @@ export class PcG815BasicRuntime {
     this.dataLineToCursor.clear();
 
     for (const entry of entries) {
-      if (entry.statement.kind !== 'DATA') {
-        continue;
+      for (const statement of entry.parsed.statements) {
+        if (statement.kind !== 'DATA') {
+          continue;
+        }
+        this.collectData(entry.line, statement);
       }
-      this.collectData(entry.line, entry.statement);
     }
   }
 
@@ -702,17 +1389,29 @@ export class PcG815BasicRuntime {
     }
 
     for (const item of statement.items) {
-      this.dataPool.push(this.evaluateNumeric(item));
+      this.dataPool.push(evaluateExpression(item, this.getEvalContext()));
     }
   }
 
-  private resolveRestoreCursor(targetLine: number, state: ExecutionState): number {
-    if (state.mode === 'program') {
-      if (!state.lineToIndex.has(targetLine)) {
-        missingLine(targetLine);
+  private resolveRestoreCursor(target: LineReference, state: ExecutionState): number {
+    let targetLine: number;
+
+    if (target.kind === 'line-reference-number') {
+      targetLine = target.line;
+      if (state.mode === 'program') {
+        if (!state.lineToPc.has(targetLine)) {
+          missingLine(target);
+        }
+      } else if (!this.program.has(targetLine)) {
+        missingLine(target);
       }
-    } else if (!this.program.has(targetLine)) {
-      missingLine(targetLine);
+    } else {
+      const entries = this.getSortedProgramEntries();
+      const found = entries.find((entry) => entry.parsed.label === target.label);
+      if (!found) {
+        missingLine(target);
+      }
+      targetLine = found.line;
     }
 
     let selected: number | undefined;
@@ -731,7 +1430,7 @@ export class PcG815BasicRuntime {
     return this.dataLineToCursor.get(selected) ?? 0;
   }
 
-  private defineArray(name: string, dimensions: number[]): void {
+  private defineArray(name: string, dimensions: number[], stringLength?: number): void {
     if (dimensions.length === 0) {
       throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
     }
@@ -747,14 +1446,33 @@ export class PcG815BasicRuntime {
       size *= value + 1;
     }
 
+    if (isStringName(name)) {
+      const length = Math.max(0, clampInt(stringLength ?? 16));
+      this.arrays.set(name, {
+        kind: 'string-array',
+        dimensions: normalized,
+        length,
+        data: new Array(size).fill('')
+      });
+      return;
+    }
+
     this.arrays.set(name, {
+      kind: 'number-array',
       dimensions: normalized,
       data: new Array(size).fill(0)
     });
   }
 
-  private assignTarget(target: AssignmentTarget, value: number): void {
+  private assignTarget(target: AssignmentTarget, value: ScalarValue): void {
     if (target.kind === 'scalar-target') {
+      if (isStringName(target.name)) {
+        this.variables.set(target.name, String(value));
+        return;
+      }
+      if (typeof value === 'string') {
+        throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+      }
       this.variables.set(target.name, clampInt(value));
       return;
     }
@@ -766,15 +1484,30 @@ export class PcG815BasicRuntime {
 
     const indices = target.indices.map((index) => this.evaluateNumeric(index));
     const offset = this.toArrayOffset(array, indices);
+
+    if (array.kind === 'string-array') {
+      const raw = String(value);
+      array.data[offset] = raw.slice(0, array.length);
+      return;
+    }
+
+    if (typeof value === 'string') {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+
     array.data[offset] = clampInt(value);
   }
 
-  private readArray(name: string, indices: number[]): number {
+  private readArray(name: string, indices: number[]): ScalarValue {
     const array = this.arrays.get(name);
     if (!array) {
-      return 0;
+      return isStringName(name) ? '' : 0;
     }
+
     const offset = this.toArrayOffset(array, indices);
+    if (array.kind === 'string-array') {
+      return array.data[offset] ?? '';
+    }
     return array.data[offset] ?? 0;
   }
 
@@ -799,14 +1532,6 @@ export class PcG815BasicRuntime {
     if (allowed.includes(state.mode)) {
       return;
     }
-
-    if (state.mode === 'program' && state.pc >= 0) {
-      const entry = state.entries[state.pc];
-      if (entry?.statement.kind === 'INPUT') {
-        throw new BasicRuntimeError('INPUT_IN_RUN', 'INPUT IN RUN');
-      }
-    }
-
     throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
   }
 
@@ -849,6 +1574,7 @@ export class PcG815BasicRuntime {
   private finishProgramSuccess(): void {
     const promptOnComplete = this.activeProgram?.promptOnComplete ?? false;
     this.activeProgram = null;
+    this.suspendedProgram = null;
     this.activeProgramWakeAtMs = 0;
     this.pushText('OK\r\n');
     if (promptOnComplete) {
@@ -859,6 +1585,7 @@ export class PcG815BasicRuntime {
   private finishProgramWithError(error: unknown): void {
     const promptOnComplete = this.activeProgram?.promptOnComplete ?? false;
     this.activeProgram = null;
+    this.suspendedProgram = null;
     this.activeProgramWakeAtMs = 0;
     this.pushText(`ERR ${asDisplayError(error)}\r\n`);
     if (promptOnComplete) {

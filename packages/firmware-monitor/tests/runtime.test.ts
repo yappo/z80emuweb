@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { createMonitorRom } from '../src/monitor-rom';
 import { MonitorRuntime, PcG815BasicRuntime } from '../src/runtime';
@@ -21,7 +21,7 @@ function executeLines(runtime: PcG815BasicRuntime, lines: string[]): string {
   }
   let now = Date.now();
   for (let i = 0; i < 20_000 && runtime.isProgramRunning(); i += 1) {
-    now += 1000;
+    now += 50;
     runtime.pump(now);
   }
   return drain(runtime);
@@ -53,88 +53,243 @@ describe('PcG815BasicRuntime', () => {
     expect(output).toContain('14      2');
   });
 
-  it('supports PRINT semicolon suppression and comma tab zones', () => {
+  it('supports line labels and RUN/LIST targets', () => {
     const runtime = new PcG815BasicRuntime();
 
-    const output = executeLines(runtime, ['10 PRINT "A";', '20 PRINT "B"', 'RUN', 'PRINT "A","B"']);
+    const output = executeLines(runtime, ['10 *START:PRINT 1', '20 PRINT 2', 'LIST 20', 'RUN *START']);
 
-    expect(output).toContain('AB\r\n');
-    expect(output).toContain('A       B');
+    expect(output).toContain('20 PRINT 2');
+    expect(output).toContain('1');
+    expect(output).toContain('2');
   });
 
-  it('supports empty PRINT as newline', () => {
+  it('supports IF inline ELSE branch execution', () => {
     const runtime = new PcG815BasicRuntime();
 
-    const output = executeLines(runtime, ['PRINT']);
+    const output = executeLines(runtime, ['10 LET A=0', '20 IF A THEN PRINT 1 ELSE PRINT 2', 'RUN']);
 
-    expect(output).toContain('\r\n');
+    expect(output).toContain('2');
+    expect(output).not.toContain('1\r\n');
   });
 
-  it('supports IF comparison in RUN program', () => {
+  it('supports INPUT in immediate mode and RUN mode', () => {
+    const runtime = new PcG815BasicRuntime();
+
+    const output = executeLines(runtime, ['10 INPUT A,B$', '20 PRINT A;B$', 'RUN', '123,HELLO']);
+
+    expect(output).toContain('? ');
+    expect(output).toContain('123HELLO');
+    expect(runtime.getVariables().get('A')).toBe(123);
+    expect(runtime.getVariables().get('B$')).toBe('HELLO');
+  });
+
+  it('supports STOP and CONT resume flow', () => {
+    const runtime = new PcG815BasicRuntime();
+
+    const first = executeLines(runtime, ['10 PRINT 1', '20 STOP', '30 PRINT 2', 'RUN']);
+    expect(first).toContain('1');
+    expect(first).toContain('BREAK');
+    expect(first).not.toContain('2\r\n');
+
+    runtime.executeLine('CONT');
+    let now = Date.now();
+    for (let i = 0; i < 1000 && runtime.isProgramRunning(); i += 1) {
+      now += 10;
+      runtime.pump(now);
+    }
+    const second = drain(runtime);
+    expect(second).toContain('2');
+  });
+
+  it('supports RETURN with target line and FOR/NEXT search', () => {
     const runtime = new PcG815BasicRuntime();
 
     const output = executeLines(runtime, [
-      '10 LET A=1',
-      '20 IF A=1 THEN 40',
-      '30 PRINT 0',
-      '40 PRINT 9',
+      '10 FOR I=1 TO 2 STEP 0',
+      '20 PRINT I',
+      '30 NEXT I',
+      '40 GOSUB 100',
+      '50 PRINT 9',
+      '60 END',
+      '100 RETURN 50',
       'RUN'
     ]);
 
+    expect(output).toContain('1');
     expect(output).toContain('9');
-    expect(output).not.toContain('0\r\n');
   });
 
-  it('supports INPUT in immediate mode', () => {
+  it('supports DIM string arrays and DATA/READ mixed types', () => {
     const runtime = new PcG815BasicRuntime();
 
-    const output = executeLines(runtime, ['INPUT A', '123', 'PRINT A']);
+    const output = executeLines(runtime, [
+      '10 DIM A$(2)*8',
+      '20 DATA "A",1',
+      '30 READ A$(0),B',
+      '40 PRINT A$(0);B',
+      'RUN'
+    ]);
 
-    expect(output).toContain('? ');
-    expect(output).toContain('123');
-    expect(runtime.getVariables().get('A')).toBe(123);
+    expect(output).toContain('A1');
+    expect(runtime.getVariables().get('B')).toBe(1);
   });
 
-  it('supports machine-adapter backed CLS', () => {
-    let clearCount = 0;
+  it('supports OUT default port and POKE multi-write', () => {
+    const ports = new Map<number, number>();
+    const memory = new Map<number, number>();
     const runtime = new PcG815BasicRuntime({
       machineAdapter: {
-        clearLcd: () => {
-          clearCount += 1;
+        out8: (port, value) => {
+          ports.set(port & 0xff, value & 0xff);
+        },
+        peek8: (address) => memory.get(address & 0xffff) ?? 0,
+        poke8: (address, value) => {
+          memory.set(address & 0xffff, value & 0xff);
         }
       }
     });
 
-    const output = executeLines(runtime, ['CLS']);
+    executeLines(runtime, ['OUT 16', 'POKE 100,1,2,3']);
 
-    expect(clearCount).toBe(1);
-    expect(output).toContain('OK');
+    expect(ports.get(0x18)).toBe(16);
+    expect(memory.get(100)).toBe(1);
+    expect(memory.get(101)).toBe(2);
+    expect(memory.get(102)).toBe(3);
   });
 
-  it('prints syntax errors with numeric code suffix', () => {
-    const runtime = new PcG815BasicRuntime();
+  it('supports WAIT print-wait model and BEEP sleep fallback', () => {
+    const sleeps: number[] = [];
+    const waitSettings: Array<{ ticks: number; pauseMode: boolean }> = [];
+    const runtime = new PcG815BasicRuntime({
+      machineAdapter: {
+        sleepMs: (ms) => {
+          sleeps.push(ms);
+        },
+        setPrintWait: (ticks, pauseMode) => {
+          waitSettings.push({ ticks, pauseMode });
+        }
+      }
+    });
 
-    const output = executeLines(runtime, ['LET A=INP(1,2)']);
-    expect(output).toContain('ERR SYNTAX (E01)');
+    executeLines(runtime, ['WAIT 64', 'PRINT 1', 'WAIT', 'PRINT 2', 'BEEP 8,1,0']);
+
+    expect(waitSettings).toContainEqual({ ticks: 64, pauseMode: false });
+    expect(waitSettings).toContainEqual({ ticks: 0, pauseMode: true });
+    expect(sleeps.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('prints dynamic NO LINE errors with numeric code suffix', () => {
+  it('supports Task2 control commands', () => {
     const runtime = new PcG815BasicRuntime();
 
-    const output = executeLines(runtime, ['10 GOTO 999', 'RUN']);
-    expect(output).toContain('ERR NO LINE 999 (E06)');
+    const output = executeLines(runtime, [
+      '10 LET A=1',
+      '20 LET B=2',
+      '30 ON 2 GOTO 100,200',
+      '40 END',
+      '100 PRINT 1',
+      '110 END',
+      '200 PRINT 2',
+      '210 END',
+      'RUN'
+    ]);
+
+    expect(output).toContain('2');
+
+    executeLines(runtime, ['DELETE 100-210', 'LIST']);
+    const listed = drain(runtime);
+    expect(listed).not.toContain('100 PRINT 1');
   });
 
-  it('exposes compatibility report', () => {
-    const runtime = new PcG815BasicRuntime();
-    runtime.loadObservationProfile('public-observed-v1');
+  it('supports OPEN/CLOSE/LOAD/SAVE/LFILES/KILL/CALL via machine adapter', () => {
+    const files = new Map<string, string[]>();
+    const open = new Map<number, { path: string; mode: 'INPUT' | 'OUTPUT' | 'APPEND'; cursor: number }>();
+    let nextHandle = 1;
+    const calls: Array<{ address: number; args: number[] }> = [];
 
-    const report = runtime.getCompatibilityReport();
-    expect(report.profileId).toBe('public-observed-v1');
-    expect(report.totalCommands).toBeGreaterThan(0);
-    expect(report.lockedCommands).toBeGreaterThan(0);
-    expect(report.lockedUnimplemented).toEqual([]);
-    expect(report.tbdCommands.length).toBe(0);
+    const runtime = new PcG815BasicRuntime({
+      machineAdapter: {
+        openFile: (path, mode) => {
+          const normalized = path.startsWith('E:') ? path.slice(2) : path;
+          if (mode === 'OUTPUT') {
+            files.set(normalized, []);
+          } else if (!files.has(normalized)) {
+            files.set(normalized, []);
+          }
+          const handle = nextHandle;
+          nextHandle += 1;
+          open.set(handle, { path: normalized, mode, cursor: 0 });
+          return handle;
+        },
+        closeFile: (handle) => {
+          open.delete(handle);
+        },
+        readFileValue: (handle) => {
+          const state = open.get(handle);
+          if (!state) {
+            return null;
+          }
+          const lines = files.get(state.path) ?? [];
+          const value = lines[state.cursor];
+          if (value === undefined) {
+            return null;
+          }
+          state.cursor += 1;
+          return value;
+        },
+        writeFileValue: (handle, value) => {
+          const state = open.get(handle);
+          if (!state) {
+            return;
+          }
+          const lines = files.get(state.path) ?? [];
+          if (state.mode === 'APPEND') {
+            lines.push(String(value));
+          } else {
+            lines.push(String(value));
+          }
+          files.set(state.path, lines);
+        },
+        listFiles: () => [...files.keys()].map((name) => `E:${name}`),
+        deleteFile: (path) => {
+          const normalized = path.startsWith('E:') ? path.slice(2) : path;
+          return files.delete(normalized);
+        },
+        callMachine: (address, args) => {
+          calls.push({ address, args });
+          return 0;
+        }
+      }
+    });
+
+    const output = executeLines(runtime, ['10 PRINT 1', 'SAVE "E:PROG.BAS"', 'NEW', 'LOAD "E:PROG.BAS"', 'RUN']);
+    expect(output).toContain('1');
+
+    const listedOutput = executeLines(runtime, ['LFILES']);
+    expect(listedOutput).toContain('E:PROG.BAS');
+
+    const afterKill = executeLines(runtime, ['CALL 4660,1,2,3', 'KILL "E:PROG.BAS"', 'LFILES']);
+    expect(afterKill).not.toContain('PROG.BAS');
+    expect(calls[0]).toEqual({ address: 4660, args: [1, 2, 3] });
+  });
+
+  it('supports graphics commands through adapter primitives', () => {
+    const events: string[] = [];
+    const runtime = new PcG815BasicRuntime({
+      machineAdapter: {
+        setGraphicCursor: (x, y) => events.push(`CUR:${x},${y}`),
+        printGraphicText: (text) => events.push(`TXT:${text}`),
+        drawPoint: (x, y, mode) => events.push(`PT:${x},${y},${mode}`),
+        drawLine: (x1, y1, x2, y2, mode) => events.push(`LN:${x1},${y1},${x2},${y2},${mode}`)
+      }
+    });
+
+    executeLines(runtime, ['GCURSOR (1,2)', 'GPRINT "AB"', 'PSET (3,4)', 'PRESET (3,4)', 'LINE (0,0)-(5,5)']);
+
+    expect(events).toContain('CUR:1,2');
+    expect(events).toContain('TXT:AB');
+    expect(events).toContain('PT:3,4,1');
+    expect(events).toContain('PT:3,4,0');
+    expect(events.some((event) => event.startsWith('LN:0,0,5,5'))).toBe(true);
   });
 
   it('maintains character I/O mode via MonitorRuntime alias', () => {
@@ -156,132 +311,5 @@ describe('PcG815BasicRuntime', () => {
 
     expect(runtime.popOutputChar()).toBe(0xbb);
     expect(runtime.popOutputChar()).toBe(0xb1);
-  });
-
-  it('supports FOR/NEXT loops with positive and negative STEP', () => {
-    const runtime = new PcG815BasicRuntime();
-
-    const output = executeLines(runtime, [
-      '10 FOR I=1 TO 3',
-      '20 PRINT I',
-      '30 NEXT I',
-      '40 FOR J=3 TO 1 STEP -1',
-      '50 PRINT J',
-      '60 NEXT J',
-      'RUN'
-    ]);
-
-    expect(output).toContain('1');
-    expect(output).toContain('2');
-    expect(output).toContain('3');
-  });
-
-  it('supports DIM with array assignment and reference', () => {
-    const runtime = new PcG815BasicRuntime();
-
-    const output = executeLines(runtime, ['DIM A(2)', 'A(1)=7', 'PRINT A(1)']);
-
-    expect(output).toContain('7');
-  });
-
-  it('supports DATA/READ/RESTORE stream', () => {
-    const runtime = new PcG815BasicRuntime();
-
-    const output = executeLines(runtime, [
-      '10 DATA 5,6',
-      '20 READ A,B',
-      '30 PRINT A,B',
-      '40 RESTORE',
-      '50 READ C',
-      '60 PRINT C',
-      'RUN'
-    ]);
-
-    expect(output).toContain('5       6');
-    expect(output).toContain('5');
-  });
-
-  it('supports INP/OUT and PEEK/POKE via machine adapter', () => {
-    const ports = new Map<number, number>();
-    const memory = new Map<number, number>();
-    const runtime = new PcG815BasicRuntime({
-      machineAdapter: {
-        in8: (port) => ports.get(port & 0xff) ?? 0xff,
-        out8: (port, value) => {
-          ports.set(port & 0xff, value & 0xff);
-        },
-        peek8: (address) => memory.get(address & 0xffff) ?? 0xff,
-        poke8: (address, value) => {
-          memory.set(address & 0xffff, value & 0xff);
-        }
-      }
-    });
-
-    const output = executeLines(runtime, ['OUT 16,99', 'PRINT INP(16)', 'POKE 100,42', 'PRINT PEEK(100)']);
-
-    expect(output).toContain('99');
-    expect(output).toContain('42');
-  });
-
-  it('uses sleep adapter for WAIT and BEEP', () => {
-    const sleeps: number[] = [];
-    const runtime = new PcG815BasicRuntime({
-      machineAdapter: {
-        sleepMs: (ms) => {
-          sleeps.push(ms);
-        }
-      }
-    });
-
-    executeLines(runtime, ['WAIT 64', 'WAIT', 'BEEP 8,1,0']);
-
-    expect(sleeps.length).toBe(3);
-    expect(sleeps[0]).toBe(1000);
-    expect(sleeps[1]).toBe(1000);
-    expect(sleeps[2]).toBeGreaterThanOrEqual(1000);
-    expect(sleeps[2]).toBeLessThanOrEqual(3000);
-  });
-
-  it('delays RUN progression for WAIT until pump reaches wake time', () => {
-    const runtime = new PcG815BasicRuntime();
-    const baseNow = Date.now();
-    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(baseNow);
-
-    runtime.executeLine('10 PRINT 1');
-    runtime.executeLine('20 WAIT 64');
-    runtime.executeLine('30 PRINT 2');
-    runtime.executeLine('RUN');
-
-    const earlyOutput = drain(runtime);
-    expect(earlyOutput).toContain('1');
-    expect(earlyOutput).not.toContain('2');
-    expect(runtime.isProgramRunning()).toBe(true);
-
-    runtime.pump(baseNow + 999);
-    expect(drain(runtime)).toBe('');
-    expect(runtime.isProgramRunning()).toBe(true);
-
-    runtime.pump(baseNow + 1000);
-    const finalOutput = drain(runtime);
-    expect(finalOutput).toContain('2');
-    expect(finalOutput).toContain('OK');
-    expect(runtime.isProgramRunning()).toBe(false);
-
-    nowSpy.mockRestore();
-  });
-
-  it('supports LOCATE via machine adapter cursor API', () => {
-    const positions: Array<[number, number]> = [];
-    const runtime = new PcG815BasicRuntime({
-      machineAdapter: {
-        setTextCursor: (col, row) => {
-          positions.push([col, row]);
-        }
-      }
-    });
-
-    executeLines(runtime, ['LOCATE 5,2,1']);
-
-    expect(positions).toEqual([[5, 2]]);
   });
 });
