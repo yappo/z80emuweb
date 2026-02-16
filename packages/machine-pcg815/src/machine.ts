@@ -950,6 +950,60 @@ export class PCG815Machine implements MachinePCG815, Bus {
     }
   }
 
+  private fillGraphicsArea(x: number, y: number, pattern = 6): void {
+    const sx = Math.trunc(x);
+    const sy = Math.trunc(y);
+    if (sx < 0 || sx >= LCD_WIDTH || sy < 0 || sy >= LCD_HEIGHT) {
+      return;
+    }
+
+    const seedOffset = sy * LCD_WIDTH + sx;
+    const target = this.graphicsPlane[seedOffset] ? 1 : 0;
+    const queue: number[] = [seedOffset];
+    const visited = new Uint8Array(this.graphicsPlane.length);
+
+    const shouldPaint = (px: number, py: number): boolean => {
+      if (pattern <= 1 || pattern >= 6) {
+        return true;
+      }
+      const sum = Math.abs(px + py);
+      return sum % pattern === 0;
+    };
+
+    while (queue.length > 0) {
+      const offset = queue.pop();
+      if (offset === undefined || visited[offset]) {
+        continue;
+      }
+      visited[offset] = 1;
+
+      if ((this.graphicsPlane[offset] ? 1 : 0) !== target) {
+        continue;
+      }
+
+      const px = offset % LCD_WIDTH;
+      const py = Math.trunc(offset / LCD_WIDTH);
+      if (shouldPaint(px, py)) {
+        this.graphicsPlane[offset] = 1;
+      }
+
+      if (px > 0) {
+        queue.push(offset - 1);
+      }
+      if (px + 1 < LCD_WIDTH) {
+        queue.push(offset + 1);
+      }
+      if (py > 0) {
+        queue.push(offset - LCD_WIDTH);
+      }
+      if (py + 1 < LCD_HEIGHT) {
+        queue.push(offset + LCD_WIDTH);
+      }
+    }
+
+    this.dirtyFrame = true;
+  }
+
   private drawGraphicsText(text: string): void {
     for (const ch of text) {
       const code = ch.charCodeAt(0) & 0xff;
@@ -1084,8 +1138,18 @@ export class PCG815Machine implements MachinePCG815, Bus {
       drawPoint: (x: number, y: number, mode = 1) => {
         this.setGraphicsPixel(x, y, mode);
       },
+      paintArea: (x: number, y: number, pattern = 6) => {
+        this.fillGraphicsArea(x, y, pattern);
+      },
       printGraphicText: (text: string) => {
         this.drawGraphicsText(text);
+      },
+      readInkey: () => {
+        const code = this.asciiQueue.shift();
+        if (code === undefined) {
+          return null;
+        }
+        return String.fromCharCode(code & 0xff);
       },
       // 非ブロッキング方針: WAIT/BEEP でメインスレッドを塞がない。
       sleepMs: (_ms: number) => {}

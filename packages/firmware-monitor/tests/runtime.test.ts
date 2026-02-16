@@ -200,6 +200,145 @@ describe('PcG815BasicRuntime', () => {
     expect(listed).not.toContain('100 PRINT 1');
   });
 
+  it('supports Task5 builtin function set', () => {
+    const runtime = new PcG815BasicRuntime({
+      machineAdapter: {
+        readInkey: () => 'K'
+      }
+    });
+
+    const output = executeLines(runtime, [
+      'LET A=ABS(-2)+INT(3.9)+SGN(-1)+LEN("AB")+ASC("Z")+VAL("12")',
+      'PRINT A',
+      'PRINT LEFT$("ABCDE",2);MID$("ABCDE",2,2);RIGHT$("ABCDE",1)',
+      'PRINT CHR$(65);HEX$(255);INKEY$'
+    ]);
+
+    expect(output).toContain('108');
+    expect(output).toContain('ABBCE');
+    expect(output).toContain('AFFK');
+  });
+
+  it('supports Task6 REPEAT/UNTIL and WHILE/WEND loops', () => {
+    const runtime = new PcG815BasicRuntime();
+
+    const output = executeLines(runtime, [
+      '10 LET A=0',
+      '20 REPEAT',
+      '30 LET A=A+1',
+      '40 UNTIL A=3',
+      '50 LET B=0',
+      '60 WHILE B<2',
+      '70 PRINT B',
+      '80 LET B=B+1',
+      '90 WEND',
+      '100 PRINT A',
+      'RUN'
+    ]);
+
+    expect(output).toContain('0');
+    expect(output).toContain('1');
+    expect(output).toContain('3');
+  });
+
+  it('supports Task6 AUTO/BLOAD/BSAVE/FILES/LNINPUT and machine-dependent I/O', () => {
+    const files = new Map<string, Array<string | number>>();
+    const open = new Map<number, { path: string; mode: 'INPUT' | 'OUTPUT' | 'APPEND'; cursor: number }>();
+    const memory = new Map<number, number>([
+      [100, 1],
+      [101, 2],
+      [102, 3]
+    ]);
+    const outEvents: Array<{ port: number; value: number }> = [];
+    const printDevice: string[] = [];
+    let nextHandle = 1;
+
+    const runtime = new PcG815BasicRuntime({
+      machineAdapter: {
+        openFile: (path, mode) => {
+          const normalized = path.startsWith('E:') ? path.slice(2) : path;
+          if (mode === 'OUTPUT') {
+            files.set(normalized, []);
+          } else if (!files.has(normalized)) {
+            files.set(normalized, []);
+          }
+          const handle = nextHandle;
+          nextHandle += 1;
+          open.set(handle, { path: normalized, mode, cursor: 0 });
+          return handle;
+        },
+        closeFile: (handle) => {
+          open.delete(handle);
+        },
+        readFileValue: (handle) => {
+          const state = open.get(handle);
+          if (!state) {
+            return null;
+          }
+          const values = files.get(state.path) ?? [];
+          const value = values[state.cursor];
+          if (value === undefined) {
+            return null;
+          }
+          state.cursor += 1;
+          return value;
+        },
+        writeFileValue: (handle, value) => {
+          const state = open.get(handle);
+          if (!state) {
+            return;
+          }
+          const values = files.get(state.path) ?? [];
+          values.push(value);
+          files.set(state.path, values);
+        },
+        listFiles: () => [...files.keys()].map((name) => `E:${name}`),
+        peek8: (address) => memory.get(address & 0xffff) ?? 0,
+        poke8: (address, value) => {
+          memory.set(address & 0xffff, value & 0xff);
+        },
+        in8: (port) => (port === 0x32 ? 77 : 0xff),
+        out8: (port, value) => {
+          outEvents.push({ port: port & 0xff, value: value & 0xff });
+        },
+        printDeviceWrite: (text) => {
+          printDevice.push(text);
+        }
+      }
+    });
+
+    const autoOutput = executeLines(runtime, ['AUTO 100,10', 'PRINT 1', 'PRINT 2', '.', 'LIST']);
+    expect(autoOutput).toContain('100 PRINT 1');
+    expect(autoOutput).toContain('110 PRINT 2');
+
+    const ioOutput = executeLines(runtime, [
+      'BSAVE "E:BIN.DAT",100,102',
+      'POKE 100,0,0,0',
+      'BLOAD "E:BIN.DAT",100',
+      'PRINT PEEK(100),PEEK(101),PEEK(102)',
+      'FILES',
+      'PASS "SECURE"',
+      'PIOSET 1',
+      'PIOPUT 2',
+      'SPOUT 3',
+      'SPINP A',
+      'PRINT A',
+      'HDCOPY'
+    ]);
+
+    expect(ioOutput).toContain('1       2       3');
+    expect(ioOutput).toContain('E:BIN.DAT');
+    expect(ioOutput).toContain('77');
+    expect(runtime.getVariables().get('PASS$')).toBe('SECURE');
+
+    const lninputOutput = executeLines(runtime, ['10 LNINPUT A$', '20 PRINT A$', 'RUN', 'HELLO,THERE']);
+    expect(lninputOutput).toContain('HELLO,THERE');
+    expect(outEvents).toContainEqual({ port: 0x30, value: 1 });
+    expect(outEvents).toContainEqual({ port: 0x31, value: 2 });
+    expect(outEvents).toContainEqual({ port: 0x32, value: 3 });
+    expect(printDevice.some((line) => line.includes('HDCOPY'))).toBe(true);
+  });
+
   it('supports OPEN/CLOSE/LOAD/SAVE/LFILES/KILL/CALL via machine adapter', () => {
     const files = new Map<string, string[]>();
     const open = new Map<number, { path: string; mode: 'INPUT' | 'OUTPUT' | 'APPEND'; cursor: number }>();

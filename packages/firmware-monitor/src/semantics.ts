@@ -53,14 +53,27 @@ function compareValues(left: ScalarValue, right: ScalarValue): number {
   return ln < rn ? -1 : 1;
 }
 
-function evalBuiltinCall(name: string, args: ScalarValue[]): ScalarValue {
+function requireArity(name: string, args: ScalarValue[], min: number, max = min): void {
+  if (args.length < min || args.length > max) {
+    throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+  }
+}
+
+function toStringValue(value: ScalarValue): string {
+  return String(value);
+}
+
+function evalBuiltinCall(name: string, args: ScalarValue[], machineAdapter?: BasicMachineAdapter): ScalarValue {
   switch (name) {
     case 'ABS':
-      return Math.abs(toNumeric(args[0] ?? 0));
+      requireArity(name, args, 1);
+      return Math.abs(toNumeric(args[0] as ScalarValue));
     case 'INT':
-      return Math.floor(toNumeric(args[0] ?? 0));
+      requireArity(name, args, 1);
+      return Math.floor(toNumeric(args[0] as ScalarValue));
     case 'SGN': {
-      const value = toNumeric(args[0] ?? 0);
+      requireArity(name, args, 1);
+      const value = toNumeric(args[0] as ScalarValue);
       if (value > 0) {
         return 1;
       }
@@ -70,47 +83,84 @@ function evalBuiltinCall(name: string, args: ScalarValue[]): ScalarValue {
       return 0;
     }
     case 'SQR':
-      return clampInt(Math.sqrt(Math.max(0, toNumeric(args[0] ?? 0))));
+      requireArity(name, args, 1);
+      return clampInt(Math.sqrt(Math.max(0, toNumeric(args[0] as ScalarValue))));
     case 'SIN':
-      return clampInt(Math.sin(toNumeric(args[0] ?? 0)));
+      requireArity(name, args, 1);
+      return clampInt(Math.sin(toNumeric(args[0] as ScalarValue)));
     case 'COS':
-      return clampInt(Math.cos(toNumeric(args[0] ?? 0)));
+      requireArity(name, args, 1);
+      return clampInt(Math.cos(toNumeric(args[0] as ScalarValue)));
     case 'TAN':
-      return clampInt(Math.tan(toNumeric(args[0] ?? 0)));
-    case 'RND':
-      return clampInt(Math.random() * (Math.max(1, toNumeric(args[0] ?? 1))));
+      requireArity(name, args, 1);
+      return clampInt(Math.tan(toNumeric(args[0] as ScalarValue)));
+    case 'ATN':
+      requireArity(name, args, 1);
+      return clampInt(Math.atan(toNumeric(args[0] as ScalarValue)));
+    case 'RND': {
+      requireArity(name, args, 0, 1);
+      const max = args.length === 0 ? 32767 : Math.max(1, toNumeric(args[0] as ScalarValue));
+      return clampInt(Math.random() * max);
+    }
     case 'LOG':
     case 'LN':
-      return clampInt(Math.log(Math.max(1, toNumeric(args[0] ?? 1))));
+      requireArity(name, args, 1);
+      return clampInt(Math.log(Math.max(1, toNumeric(args[0] as ScalarValue))));
     case 'EXP':
-      return clampInt(Math.exp(toNumeric(args[0] ?? 0)));
+      requireArity(name, args, 1);
+      return clampInt(Math.exp(toNumeric(args[0] as ScalarValue)));
+    case 'ASC':
+      requireArity(name, args, 1);
+      return toStringValue(args[0] as ScalarValue).charCodeAt(0) || 0;
+    case 'VAL':
+      requireArity(name, args, 1);
+      return parseIntSafeLike(toStringValue(args[0] as ScalarValue));
     case 'LEN':
-      return String(args[0] ?? '').length;
+      requireArity(name, args, 1);
+      return toStringValue(args[0] as ScalarValue).length;
     case 'CHR$':
-      return String.fromCharCode(toNumeric(args[0] ?? 0) & 0xff);
+      requireArity(name, args, 1);
+      return String.fromCharCode(toNumeric(args[0] as ScalarValue) & 0xff);
     case 'STR$':
-      return String(toNumeric(args[0] ?? 0));
+      requireArity(name, args, 1);
+      return String(toNumeric(args[0] as ScalarValue));
     case 'HEX$':
-      return (toNumeric(args[0] ?? 0) >>> 0).toString(16).toUpperCase();
+      requireArity(name, args, 1);
+      return (toNumeric(args[0] as ScalarValue) >>> 0).toString(16).toUpperCase();
+    case 'INKEY$': {
+      requireArity(name, args, 0);
+      return machineAdapter?.readInkey?.() ?? '';
+    }
     case 'LEFT$': {
-      const text = String(args[0] ?? '');
-      const len = Math.max(0, toNumeric(args[1] ?? 0));
+      requireArity(name, args, 2);
+      const text = toStringValue(args[0] as ScalarValue);
+      const len = Math.max(0, toNumeric(args[1] as ScalarValue));
       return text.slice(0, len);
     }
     case 'RIGHT$': {
-      const text = String(args[0] ?? '');
-      const len = Math.max(0, toNumeric(args[1] ?? 0));
+      requireArity(name, args, 2);
+      const text = toStringValue(args[0] as ScalarValue);
+      const len = Math.max(0, toNumeric(args[1] as ScalarValue));
       return text.slice(Math.max(0, text.length - len));
     }
     case 'MID$': {
-      const text = String(args[0] ?? '');
-      const start = Math.max(1, toNumeric(args[1] ?? 1));
-      const length = args.length >= 3 ? Math.max(0, toNumeric(args[2] ?? 0)) : text.length;
+      requireArity(name, args, 2, 3);
+      const text = toStringValue(args[0] as ScalarValue);
+      const start = Math.max(1, toNumeric(args[1] as ScalarValue));
+      const length = args.length >= 3 ? Math.max(0, toNumeric(args[2] as ScalarValue)) : text.length;
       return text.slice(start - 1, start - 1 + length);
     }
     default:
       throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
   }
+}
+
+function parseIntSafeLike(text: string): number {
+  const parsed = Number.parseInt(text.trim(), 10);
+  if (Number.isNaN(parsed)) {
+    return 0;
+  }
+  return clampInt(parsed);
 }
 
 // AST の式を評価して number|string を返す。
@@ -143,7 +193,7 @@ export function evaluateExpression(node: ExpressionNode, contextInput: EvalConte
     }
     case 'function-call-expression': {
       const args = node.args.map((arg) => evaluateExpression(arg, context));
-      return evalBuiltinCall(node.name, args);
+      return evalBuiltinCall(node.name, args, context.machineAdapter);
     }
     case 'unary-expression': {
       if (node.operator === 'NOT') {

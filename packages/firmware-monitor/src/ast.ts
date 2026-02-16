@@ -248,6 +248,99 @@ export interface LocateStatement {
   z?: ExpressionNode;
 }
 
+export interface AutoStatement {
+  kind: 'AUTO';
+  start?: ExpressionNode;
+  step?: ExpressionNode;
+}
+
+export interface BloadStatement {
+  kind: 'BLOAD';
+  path: string;
+  address?: ExpressionNode;
+}
+
+export interface BsaveStatement {
+  kind: 'BSAVE';
+  path: string;
+  start: ExpressionNode;
+  end: ExpressionNode;
+}
+
+export interface FilesStatement {
+  kind: 'FILES';
+}
+
+export interface HdcopyStatement {
+  kind: 'HDCOPY';
+}
+
+export interface PaintStatement {
+  kind: 'PAINT';
+  x: ExpressionNode;
+  y: ExpressionNode;
+  pattern: ExpressionNode;
+}
+
+export interface CircleStatement {
+  kind: 'CIRCLE';
+  x: ExpressionNode;
+  y: ExpressionNode;
+  radius: ExpressionNode;
+  mode?: ExpressionNode;
+  pattern?: ExpressionNode;
+}
+
+export interface PassStatement {
+  kind: 'PASS';
+  value: ExpressionNode;
+}
+
+export interface PiosetStatement {
+  kind: 'PIOSET';
+  value: ExpressionNode;
+}
+
+export interface PioputStatement {
+  kind: 'PIOPUT';
+  value: ExpressionNode;
+}
+
+export interface SpoutStatement {
+  kind: 'SPOUT';
+  value: ExpressionNode;
+}
+
+export interface SpinpStatement {
+  kind: 'SPINP';
+  target?: AssignmentTarget;
+}
+
+export interface RepeatStatement {
+  kind: 'REPEAT';
+}
+
+export interface UntilStatement {
+  kind: 'UNTIL';
+  condition: ExpressionNode;
+}
+
+export interface WhileStatement {
+  kind: 'WHILE';
+  condition: ExpressionNode;
+}
+
+export interface WendStatement {
+  kind: 'WEND';
+}
+
+export interface LninputStatement {
+  kind: 'LNINPUT';
+  variable: AssignmentTarget;
+  prompt?: string;
+  channel?: ExpressionNode;
+}
+
 export interface ClearStatement {
   kind: 'CLEAR';
 }
@@ -412,6 +505,23 @@ export type StatementNode =
   | BeepStatement
   | WaitStatement
   | LocateStatement
+  | AutoStatement
+  | BloadStatement
+  | BsaveStatement
+  | FilesStatement
+  | HdcopyStatement
+  | PaintStatement
+  | CircleStatement
+  | PassStatement
+  | PiosetStatement
+  | PioputStatement
+  | SpoutStatement
+  | SpinpStatement
+  | RepeatStatement
+  | UntilStatement
+  | WhileStatement
+  | WendStatement
+  | LninputStatement
   | ClearStatement
   | DeleteStatement
   | EraseStatement

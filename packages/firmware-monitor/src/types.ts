@@ -62,7 +62,9 @@ export interface BasicMachineAdapter {
   setGraphicCursor?(x: number, y: number): void;
   drawLine?(x1: number, y1: number, x2: number, y2: number, mode?: number, pattern?: number): void;
   drawPoint?(x: number, y: number, mode?: number): void;
+  paintArea?(x: number, y: number, pattern?: number): void;
   printGraphicText?(text: string): void;
+  readInkey?(): string | null;
 }
 
 // 互換確認向けの観測ケース定義。

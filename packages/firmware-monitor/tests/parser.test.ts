@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseStatement, parseStatements } from '../src/parser';
-import { evaluateNumericExpression } from '../src/semantics';
+import { evaluateExpression, evaluateNumericExpression } from '../src/semantics';
 
 describe('parser and semantics', () => {
   it('parses LET with precedence and parentheses', () => {
@@ -75,8 +75,38 @@ describe('parser and semantics', () => {
     expect(outStmt.port).toBeUndefined();
   });
 
+  it('parses builtin numeric and string function calls', () => {
+    const numeric = parseStatement('LET A=ABS(-2)+INT(3.9)+SGN(-5)+VAL("12")');
+    expect(numeric.kind).toBe('LET');
+    if (numeric.kind !== 'LET') {
+      return;
+    }
+    expect(evaluateNumericExpression(numeric.expression, new Map())).toBe(16);
+
+    const stringStmt = parseStatement('LET S$=LEFT$("ABCDE",2)+MID$("ABCDE",2,2)+RIGHT$("ABCDE",1)');
+    expect(stringStmt.kind).toBe('LET');
+    if (stringStmt.kind !== 'LET') {
+      return;
+    }
+    expect(evaluateExpression(stringStmt.expression, new Map())).toBe('ABBCE');
+  });
+
+  it('parses low-priority control and machine statements', () => {
+    expect(parseStatement('AUTO 100,20').kind).toBe('AUTO');
+    expect(parseStatement('BLOAD "E:BIN.DAT",4096').kind).toBe('BLOAD');
+    expect(parseStatement('BSAVE "E:BIN.DAT",4096,4100').kind).toBe('BSAVE');
+    expect(parseStatement('PAINT (1,2),6').kind).toBe('PAINT');
+    expect(parseStatement('CIRCLE (10,10),5,1,6').kind).toBe('CIRCLE');
+    expect(parseStatement('REPEAT').kind).toBe('REPEAT');
+    expect(parseStatement('UNTIL A=1').kind).toBe('UNTIL');
+    expect(parseStatement('WHILE A<5').kind).toBe('WHILE');
+    expect(parseStatement('WEND').kind).toBe('WEND');
+    expect(parseStatement('LNINPUT A$').kind).toBe('LNINPUT');
+  });
+
   it('rejects malformed function argument counts', () => {
     expect(() => parseStatement('LET A=INP(1,2)')).toThrowError(/SYNTAX/);
     expect(() => parseStatement('LET A=PEEK()')).toThrowError(/SYNTAX/);
+    expect(() => parseStatement('LET A=ABS()')).toThrowError(/SYNTAX/);
   });
 });

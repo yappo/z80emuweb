@@ -1,10 +1,14 @@
 import type {
+  AutoStatement,
   ArrayElementReference,
   ArrayElementTarget,
   AssignmentTarget,
   BeepStatement,
+  BloadStatement,
+  BsaveStatement,
   BinaryExpression,
   CallStatement,
+  CircleStatement,
   ClearStatement,
   CloseStatement,
   ClsStatement,
@@ -17,16 +21,19 @@ import type {
   EndStatement,
   EraseStatement,
   ExpressionNode,
+  FilesStatement,
   ForStatement,
   GcursorStatement,
   GosubStatement,
   GotoStatement,
   GprintStatement,
+  HdcopyStatement,
   IfStatement,
   InpCallExpression,
   InputStatement,
   KillStatement,
   LcopyStatement,
+  LninputStatement,
   LineReference,
   LineStatement,
   ListStatement,
@@ -39,8 +46,12 @@ import type {
   OnStatement,
   OpenStatement,
   OutStatement,
+  PaintStatement,
   ParsedLine,
+  PassStatement,
   PeekCallExpression,
+  PioputStatement,
+  PiosetStatement,
   PokeStatement,
   PresetStatement,
   PrintStatement,
@@ -49,15 +60,21 @@ import type {
   ReadStatement,
   RemStatement,
   RenumStatement,
+  RepeatStatement,
   RestoreStatement,
   ReturnStatement,
   RunStatement,
   SaveStatement,
   ScalarTarget,
+  SpinpStatement,
+  SpoutStatement,
   StatementNode,
   StopStatement,
+  UntilStatement,
   UsingStatement,
-  WaitStatement
+  WendStatement,
+  WaitStatement,
+  WhileStatement
 } from './ast';
 import { BasicRuntimeError } from './errors';
 import { isIdentifier, normalizeIdentifier, tokenizeLine, type Token } from './lexer';
@@ -69,6 +86,31 @@ function toInt(text: string): number {
   }
   return parsed;
 }
+
+const BUILTIN_FUNCTION_NAMES = new Set([
+  'ABS',
+  'ASC',
+  'ATN',
+  'CHR$',
+  'COS',
+  'EXP',
+  'HEX$',
+  'INKEY$',
+  'INT',
+  'LEFT$',
+  'LEN',
+  'LN',
+  'LOG',
+  'MID$',
+  'RND',
+  'RIGHT$',
+  'SGN',
+  'SIN',
+  'SQR',
+  'STR$',
+  'TAN',
+  'VAL'
+]);
 
 class Parser {
   private readonly tokens: Token[];
@@ -254,6 +296,61 @@ class Parser {
         case 'LOCATE':
           this.next();
           return this.parseLocate(allowElseTerminator);
+        case 'AUTO':
+          this.next();
+          return this.parseAuto(allowElseTerminator);
+        case 'BLOAD':
+          this.next();
+          return this.parseBload(allowElseTerminator);
+        case 'BSAVE':
+          this.next();
+          return this.parseBsave(allowElseTerminator);
+        case 'FILES':
+          this.next();
+          this.expectStatementTerm(allowElseTerminator);
+          return { kind: 'FILES' } satisfies FilesStatement;
+        case 'HDCOPY':
+          this.next();
+          this.expectStatementTerm(allowElseTerminator);
+          return { kind: 'HDCOPY' } satisfies HdcopyStatement;
+        case 'PAINT':
+          this.next();
+          return this.parsePaint(allowElseTerminator);
+        case 'CIRCLE':
+          this.next();
+          return this.parseCircle(allowElseTerminator);
+        case 'PASS':
+          this.next();
+          return this.parsePass(allowElseTerminator);
+        case 'PIOSET':
+          this.next();
+          return this.parsePioset(allowElseTerminator);
+        case 'PIOPUT':
+          this.next();
+          return this.parsePioput(allowElseTerminator);
+        case 'SPINP':
+          this.next();
+          return this.parseSpinp(allowElseTerminator);
+        case 'SPOUT':
+          this.next();
+          return this.parseSpout(allowElseTerminator);
+        case 'REPEAT':
+          this.next();
+          this.expectStatementTerm(allowElseTerminator);
+          return { kind: 'REPEAT' } satisfies RepeatStatement;
+        case 'UNTIL':
+          this.next();
+          return this.parseUntil(allowElseTerminator);
+        case 'WHILE':
+          this.next();
+          return this.parseWhile(allowElseTerminator);
+        case 'WEND':
+          this.next();
+          this.expectStatementTerm(allowElseTerminator);
+          return { kind: 'WEND' } satisfies WendStatement;
+        case 'LNINPUT':
+          this.next();
+          return this.parseLninput(allowElseTerminator);
         case 'CLEAR':
           this.next();
           this.expectStatementTerm(allowElseTerminator);
@@ -764,6 +861,166 @@ class Parser {
       x: args[0],
       y: args[1],
       z: args[2]
+    };
+  }
+
+  private parseAuto(allowElseTerminator: boolean): AutoStatement {
+    if (this.isStatementTerm(allowElseTerminator)) {
+      return { kind: 'AUTO' };
+    }
+
+    const start = this.parseExpression();
+    let step: ExpressionNode | undefined;
+    if (this.peek().type === 'comma') {
+      this.next();
+      step = this.parseExpression();
+    }
+
+    this.expectStatementTerm(allowElseTerminator);
+    return { kind: 'AUTO', start, step };
+  }
+
+  private parseBload(allowElseTerminator: boolean): BloadStatement {
+    const file = this.next();
+    if (file.type !== 'string') {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+
+    let address: ExpressionNode | undefined;
+    if (this.peek().type === 'comma') {
+      this.next();
+      address = this.parseExpression();
+    }
+
+    this.expectStatementTerm(allowElseTerminator);
+    return {
+      kind: 'BLOAD',
+      path: file.value,
+      address
+    };
+  }
+
+  private parseBsave(allowElseTerminator: boolean): BsaveStatement {
+    const file = this.next();
+    if (file.type !== 'string') {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+    this.expectComma();
+    const start = this.parseExpression();
+    this.expectComma();
+    const end = this.parseExpression();
+    this.expectStatementTerm(allowElseTerminator);
+    return { kind: 'BSAVE', path: file.value, start, end };
+  }
+
+  private parsePaint(allowElseTerminator: boolean): PaintStatement {
+    this.expectLparen();
+    const x = this.parseExpression();
+    this.expectComma();
+    const y = this.parseExpression();
+    this.expectRparen();
+    this.expectComma();
+    const pattern = this.parseExpression();
+    this.expectStatementTerm(allowElseTerminator);
+    return { kind: 'PAINT', x, y, pattern };
+  }
+
+  private parseCircle(allowElseTerminator: boolean): CircleStatement {
+    this.expectLparen();
+    const x = this.parseExpression();
+    this.expectComma();
+    const y = this.parseExpression();
+    this.expectRparen();
+    this.expectComma();
+    const radius = this.parseExpression();
+
+    let mode: ExpressionNode | undefined;
+    let pattern: ExpressionNode | undefined;
+    if (this.peek().type === 'comma') {
+      this.next();
+      mode = this.parseExpression();
+      if (this.peek().type === 'comma') {
+        this.next();
+        pattern = this.parseExpression();
+      }
+    }
+
+    this.expectStatementTerm(allowElseTerminator);
+    return { kind: 'CIRCLE', x, y, radius, mode, pattern };
+  }
+
+  private parsePass(allowElseTerminator: boolean): PassStatement {
+    const value = this.parseExpression();
+    this.expectStatementTerm(allowElseTerminator);
+    return { kind: 'PASS', value };
+  }
+
+  private parsePioset(allowElseTerminator: boolean): PiosetStatement {
+    const value = this.parseExpression();
+    this.expectStatementTerm(allowElseTerminator);
+    return { kind: 'PIOSET', value };
+  }
+
+  private parsePioput(allowElseTerminator: boolean): PioputStatement {
+    const value = this.parseExpression();
+    this.expectStatementTerm(allowElseTerminator);
+    return { kind: 'PIOPUT', value };
+  }
+
+  private parseSpout(allowElseTerminator: boolean): SpoutStatement {
+    const value = this.parseExpression();
+    this.expectStatementTerm(allowElseTerminator);
+    return { kind: 'SPOUT', value };
+  }
+
+  private parseSpinp(allowElseTerminator: boolean): SpinpStatement {
+    if (this.isStatementTerm(allowElseTerminator)) {
+      return { kind: 'SPINP' };
+    }
+
+    const target = this.parseAssignmentTarget();
+    this.expectStatementTerm(allowElseTerminator);
+    return { kind: 'SPINP', target };
+  }
+
+  private parseUntil(allowElseTerminator: boolean): UntilStatement {
+    const condition = this.parseExpression();
+    this.expectStatementTerm(allowElseTerminator);
+    return { kind: 'UNTIL', condition };
+  }
+
+  private parseWhile(allowElseTerminator: boolean): WhileStatement {
+    const condition = this.parseExpression();
+    this.expectStatementTerm(allowElseTerminator);
+    return { kind: 'WHILE', condition };
+  }
+
+  private parseLninput(allowElseTerminator: boolean): LninputStatement {
+    let channel: ExpressionNode | undefined;
+    if (this.peek().type === 'hash') {
+      this.next();
+      channel = this.parseExpression();
+      this.expectComma();
+    }
+
+    let prompt: string | undefined;
+    if (this.peek().type === 'string') {
+      prompt = this.next().value;
+      const sep = this.peek();
+      if (sep.type === 'comma' || sep.type === 'semicolon') {
+        this.next();
+      } else {
+        throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+      }
+    }
+
+    const variable = this.parseAssignmentTarget();
+    this.expectStatementTerm(allowElseTerminator);
+    return {
+      kind: 'LNINPUT',
+      variable,
+      prompt,
+      channel
     };
   }
 
@@ -1316,8 +1573,24 @@ class Parser {
         return this.parsePeekOrInp(name);
       }
 
+      if (token.type === 'keyword' && name === 'INKEY$' && this.peek().type !== 'lparen') {
+        return {
+          kind: 'function-call-expression',
+          name,
+          args: []
+        };
+      }
+
       if (this.peek().type === 'lparen') {
         const args = this.parseRequiredArgumentList();
+        if (BUILTIN_FUNCTION_NAMES.has(name)) {
+          return {
+            kind: 'function-call-expression',
+            name,
+            args
+          };
+        }
+
         if (token.type === 'identifier') {
           return {
             kind: 'array-element-reference',
@@ -1331,6 +1604,10 @@ class Parser {
           name,
           args
         };
+      }
+
+      if (token.type === 'keyword' && BUILTIN_FUNCTION_NAMES.has(name)) {
+        throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
       }
 
       return { kind: 'variable-reference', name };

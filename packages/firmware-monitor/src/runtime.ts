@@ -1,5 +1,6 @@
 import { BUILTIN_COMMAND_SPECS } from './command-registry';
 import type {
+  CircleStatement,
   AssignmentTarget,
   DataStatement,
   DeleteStatement,
@@ -8,15 +9,18 @@ import type {
   ForStatement,
   GcursorStatement,
   GprintStatement,
+  LninputStatement,
   IfStatement,
   InputStatement,
   LineReference,
   ListStatement,
   NextStatement,
   OnStatement,
+  PaintStatement,
   ParsedLine,
   PrintStatement,
   RenumStatement,
+  SpinpStatement,
   StatementNode
 } from './ast';
 import { asDisplayError, BasicRuntimeError } from './errors';
@@ -96,6 +100,14 @@ interface ForFrame {
   stepValue: number;
 }
 
+interface RepeatFrame {
+  repeatPc: number;
+}
+
+interface WhileFrame {
+  whilePc: number;
+}
+
 interface ExecutionState {
   mode: 'immediate' | 'program';
   instructions: ProgramInstruction[];
@@ -126,6 +138,7 @@ interface PendingInput {
   prompt: string;
   mode: 'immediate' | 'program';
   channel?: number;
+  rawLine?: boolean;
 }
 
 interface SuspendedProgramState {
@@ -226,6 +239,10 @@ export class PcG815BasicRuntime {
 
   private readonly forStack: ForFrame[] = [];
 
+  private readonly repeatStack: RepeatFrame[] = [];
+
+  private readonly whileStack: WhileFrame[] = [];
+
   private readonly gosubStack: number[] = [];
 
   private readonly dataPool: ScalarValue[] = [];
@@ -233,6 +250,8 @@ export class PcG815BasicRuntime {
   private readonly dataLineToCursor = new Map<number, number>();
 
   private readonly openFileHandles = new Map<number, number>();
+
+  private readonly virtualBinaryFiles = new Map<string, number[]>();
 
   private dataCursor = 0;
 
@@ -258,6 +277,10 @@ export class PcG815BasicRuntime {
 
   private graphicCursorY = 0;
 
+  private autoLineNext: number | null = null;
+
+  private autoLineStep = 10;
+
   constructor(private readonly options: RuntimeOptions = {}) {
     this.commandSpecs = [...(options.commandSpecs ?? BUILTIN_COMMAND_SPECS)];
     this.observationProfileId = options.defaultProfileId ?? 'public-observed-v1';
@@ -268,6 +291,8 @@ export class PcG815BasicRuntime {
     this.lineBuffer = '';
     this.pendingInput = null;
     this.forStack.length = 0;
+    this.repeatStack.length = 0;
+    this.whileStack.length = 0;
     this.gosubStack.length = 0;
     this.dataPool.length = 0;
     this.dataCursor = 0;
@@ -276,16 +301,20 @@ export class PcG815BasicRuntime {
     this.suspendedProgram = null;
     this.activeProgramWakeAtMs = 0;
     this.openFileHandles.clear();
+    this.virtualBinaryFiles.clear();
     this.printWaitTicks = 0;
     this.printPauseMode = false;
     this.currentUsingFormat = undefined;
     this.graphicCursorX = 0;
     this.graphicCursorY = 0;
+    this.autoLineNext = null;
+    this.autoLineStep = 10;
 
     if (cold) {
       this.variables.clear();
       this.arrays.clear();
       this.program.clear();
+      this.virtualBinaryFiles.clear();
     }
   }
 
@@ -322,7 +351,7 @@ export class PcG815BasicRuntime {
     const line = input.trim();
 
     if (this.pendingInput !== null) {
-      this.consumePendingInput(line);
+      this.consumePendingInput(this.pendingInput.rawLine ? input : line);
       return;
     }
 
@@ -350,6 +379,26 @@ export class PcG815BasicRuntime {
           parseStatements(normalized);
           this.program.set(lineNumber, normalized);
         }
+        this.pushText('OK\r\n');
+      } catch (error) {
+        this.pushText(`ERR ${asDisplayError(error)}\r\n`);
+      }
+      this.pushPrompt();
+      return;
+    }
+
+    if (this.autoLineNext !== null) {
+      if (line === '.') {
+        this.autoLineNext = null;
+        this.pushText('OK\r\n');
+        this.pushPrompt();
+        return;
+      }
+
+      try {
+        parseStatements(line);
+        this.program.set(this.autoLineNext, line);
+        this.autoLineNext += Math.max(1, this.autoLineStep);
         this.pushText('OK\r\n');
       } catch (error) {
         this.pushText(`ERR ${asDisplayError(error)}\r\n`);
@@ -410,6 +459,8 @@ export class PcG815BasicRuntime {
     this.variables.clear();
     this.arrays.clear();
     this.forStack.length = 0;
+    this.repeatStack.length = 0;
+    this.whileStack.length = 0;
     this.gosubStack.length = 0;
     this.currentUsingFormat = undefined;
     this.printWaitTicks = 0;
@@ -568,6 +619,8 @@ export class PcG815BasicRuntime {
 
     this.lineBuffer = snapshot.lineBuffer;
     this.forStack.length = 0;
+    this.repeatStack.length = 0;
+    this.whileStack.length = 0;
     this.gosubStack.length = 0;
     this.dataPool.length = 0;
     this.dataCursor = 0;
@@ -686,11 +739,14 @@ export class PcG815BasicRuntime {
         this.variables.clear();
         this.arrays.clear();
         this.forStack.length = 0;
+        this.repeatStack.length = 0;
+        this.whileStack.length = 0;
         this.gosubStack.length = 0;
         this.dataPool.length = 0;
         this.dataCursor = 0;
         this.dataLineToCursor.clear();
         this.currentUsingFormat = undefined;
+        this.autoLineNext = null;
         this.pushText('OK\r\n');
         return {};
       case 'LIST':
@@ -830,11 +886,105 @@ export class PcG815BasicRuntime {
         this.options.machineAdapter?.setTextCursor?.(x, y);
         return {};
       }
+      case 'AUTO':
+        this.assertMode(state, ['immediate']);
+        this.executeAuto(statement);
+        return {};
+      case 'BLOAD':
+        this.executeBload(statement.path, statement.address);
+        return {};
+      case 'BSAVE':
+        this.executeBsave(statement.path, statement.start, statement.end);
+        return {};
+      case 'FILES': {
+        const files = this.options.machineAdapter?.listFiles?.() ?? [];
+        const virtualFiles = [...this.virtualBinaryFiles.keys()].map((name) => (name.startsWith('E:') ? name : `E:${name}`));
+        const merged = [...files, ...virtualFiles];
+        merged.sort((a, b) => a.localeCompare(b));
+        for (const file of merged) {
+          this.pushText(`${file}\r\n`);
+        }
+        return {};
+      }
+      case 'HDCOPY':
+        this.executeHdcopy();
+        return {};
+      case 'PAINT':
+        this.executePaint(statement);
+        return {};
+      case 'CIRCLE':
+        this.executeCircle(statement);
+        return {};
+      case 'PASS': {
+        const value = evaluateExpression(statement.value, this.getEvalContext());
+        const asText = String(value);
+        this.variables.set('PASS$', asText);
+        return {};
+      }
+      case 'PIOSET': {
+        const value = this.evaluateNumeric(statement.value) & 0xff;
+        this.variables.set('PIOSET', value);
+        this.options.machineAdapter?.out8?.(0x30, value);
+        return {};
+      }
+      case 'PIOPUT': {
+        const value = this.evaluateNumeric(statement.value) & 0xff;
+        this.variables.set('PIOPUT', value);
+        this.options.machineAdapter?.out8?.(0x31, value);
+        return {};
+      }
+      case 'SPOUT': {
+        const value = this.evaluateNumeric(statement.value) & 0xff;
+        this.variables.set('SPOUT', value);
+        this.options.machineAdapter?.out8?.(0x32, value);
+        return {};
+      }
+      case 'SPINP':
+        this.executeSpinp(statement);
+        return {};
+      case 'REPEAT':
+        this.assertMode(state, ['program']);
+        this.repeatStack.push({ repeatPc: state.nextPc });
+        return {};
+      case 'UNTIL': {
+        this.assertMode(state, ['program']);
+        if (this.repeatStack.length === 0) {
+          throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+        }
+        const condition = this.evaluateNumeric(statement.condition);
+        if (condition === 0) {
+          const frame = this.repeatStack[this.repeatStack.length - 1];
+          if (!frame) {
+            throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+          }
+          return { jumpToPc: frame.repeatPc };
+        }
+        this.repeatStack.pop();
+        return {};
+      }
+      case 'WHILE':
+        this.assertMode(state, ['program']);
+        return this.executeWhile(statement, state);
+      case 'WEND': {
+        this.assertMode(state, ['program']);
+        if (this.whileStack.length === 0) {
+          throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+        }
+        const frame = this.whileStack.pop();
+        if (!frame) {
+          throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+        }
+        return { jumpToPc: frame.whilePc };
+      }
+      case 'LNINPUT':
+        return this.executeLninput(statement, state);
       case 'CLEAR':
         this.variables.clear();
         this.arrays.clear();
         this.dataCursor = 0;
         this.forStack.length = 0;
+        this.repeatStack.length = 0;
+        this.whileStack.length = 0;
         this.gosubStack.length = 0;
         this.currentUsingFormat = undefined;
         return {};
@@ -955,6 +1105,226 @@ export class PcG815BasicRuntime {
       this.options.machineAdapter?.setGraphicCursor?.(this.graphicCursorX, this.graphicCursorY);
     }
     this.applyPrintWait(mode);
+    return {};
+  }
+
+  private executeAuto(statement: { start?: ExpressionNode; step?: ExpressionNode }): void {
+    const start = statement.start ? this.evaluateNumeric(statement.start) : 10;
+    const step = statement.step ? this.evaluateNumeric(statement.step) : 10;
+    if (start <= 0 || step <= 0) {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+    this.autoLineNext = start;
+    this.autoLineStep = step;
+  }
+
+  private executeBload(path: string, addressExpr?: ExpressionNode): void {
+    const openFile = this.options.machineAdapter?.openFile;
+    const readFileValue = this.options.machineAdapter?.readFileValue;
+    const closeFile = this.options.machineAdapter?.closeFile;
+    let address = addressExpr ? this.evaluateNumeric(addressExpr) & 0xffff : 0;
+
+    if (!openFile || !readFileValue) {
+      const virtual = this.virtualBinaryFiles.get(path) ?? this.virtualBinaryFiles.get(path.startsWith('E:') ? path.slice(2) : path);
+      if (!virtual) {
+        throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+      }
+      for (const byte of virtual) {
+        this.options.machineAdapter?.poke8?.(address & 0xffff, byte & 0xff);
+        address += 1;
+      }
+      return;
+    }
+
+    const handle = openFile(path, 'INPUT');
+    try {
+      while (true) {
+        const value = readFileValue(handle);
+        if (value === null) {
+          break;
+        }
+        const byte = typeof value === 'number' ? value : parseIntSafe(String(value));
+        this.options.machineAdapter?.poke8?.(address & 0xffff, byte & 0xff);
+        address += 1;
+      }
+    } finally {
+      closeFile?.(handle);
+    }
+  }
+
+  private executeBsave(path: string, startExpr: ExpressionNode, endExpr: ExpressionNode): void {
+    const openFile = this.options.machineAdapter?.openFile;
+    const writeFileValue = this.options.machineAdapter?.writeFileValue;
+    const closeFile = this.options.machineAdapter?.closeFile;
+
+    const start = this.evaluateNumeric(startExpr) & 0xffff;
+    const end = this.evaluateNumeric(endExpr) & 0xffff;
+    if (start > end) {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+
+    if (!openFile || !writeFileValue) {
+      const bytes: number[] = [];
+      for (let addr = start; addr <= end; addr += 1) {
+        const value = this.options.machineAdapter?.peek8?.(addr) ?? 0xff;
+        bytes.push(value & 0xff);
+      }
+      this.virtualBinaryFiles.set(path.startsWith('E:') ? path.slice(2) : path, bytes);
+      return;
+    }
+
+    const handle = openFile(path, 'OUTPUT');
+    try {
+      for (let addr = start; addr <= end; addr += 1) {
+        const value = this.options.machineAdapter?.peek8?.(addr) ?? 0xff;
+        writeFileValue(handle, value & 0xff);
+      }
+    } finally {
+      closeFile?.(handle);
+    }
+  }
+
+  private executeHdcopy(): void {
+    this.options.machineAdapter?.printDeviceWrite?.('[HDCOPY]\r\n');
+  }
+
+  private executePaint(statement: PaintStatement): void {
+    const x = this.evaluateNumeric(statement.x);
+    const y = this.evaluateNumeric(statement.y);
+    const pattern = this.evaluateNumeric(statement.pattern);
+    this.options.machineAdapter?.paintArea?.(x, y, pattern);
+    if (!this.options.machineAdapter?.paintArea) {
+      this.options.machineAdapter?.drawPoint?.(x, y, pattern === 0 ? 0 : 1);
+    }
+  }
+
+  private executeCircle(statement: CircleStatement): void {
+    const cx = this.evaluateNumeric(statement.x);
+    const cy = this.evaluateNumeric(statement.y);
+    const radius = this.evaluateNumeric(statement.radius);
+    const mode = statement.mode ? this.evaluateNumeric(statement.mode) : 1;
+    const pattern = statement.pattern ? this.evaluateNumeric(statement.pattern) : 6;
+
+    if (radius <= 0) {
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+    }
+
+    const shouldPlot = (index: number): boolean => {
+      if (pattern <= 1 || pattern >= 6) {
+        return true;
+      }
+      return index % pattern === 0;
+    };
+
+    let x = radius;
+    let y = 0;
+    let err = 1 - radius;
+    let pointIndex = 0;
+
+    while (x >= y) {
+      const candidates: Array<[number, number]> = [
+        [cx + x, cy + y],
+        [cx + y, cy + x],
+        [cx - y, cy + x],
+        [cx - x, cy + y],
+        [cx - x, cy - y],
+        [cx - y, cy - x],
+        [cx + y, cy - x],
+        [cx + x, cy - y]
+      ];
+
+      for (const [px, py] of candidates) {
+        if (shouldPlot(pointIndex)) {
+          this.options.machineAdapter?.drawPoint?.(px, py, mode);
+        }
+        pointIndex += 1;
+      }
+
+      y += 1;
+      if (err < 0) {
+        err += 2 * y + 1;
+      } else {
+        x -= 1;
+        err += 2 * (y - x) + 1;
+      }
+    }
+  }
+
+  private executeSpinp(statement: SpinpStatement): void {
+    const value = (this.options.machineAdapter?.in8?.(0x32) ?? 0xff) & 0xff;
+    if (statement.target) {
+      this.assignTarget(statement.target, value);
+      return;
+    }
+    this.variables.set('SPINP', value);
+  }
+
+  private executeWhile(
+    statement: { condition: ExpressionNode },
+    state: Pick<ExecutionState, 'instructions' | 'pc'>
+  ): StatementExecutionResult {
+    const condition = this.evaluateNumeric(statement.condition);
+    if (condition !== 0) {
+      this.whileStack.push({ whilePc: state.pc });
+      return {};
+    }
+
+    const wendPc = this.findMatchingWend(state.instructions, state.pc + 1);
+    return { jumpToPc: wendPc + 1 };
+  }
+
+  private findMatchingWend(instructions: ProgramInstruction[], startPc: number): number {
+    let depth = 0;
+    for (let index = startPc; index < instructions.length; index += 1) {
+      const instruction = instructions[index];
+      if (!instruction) {
+        break;
+      }
+
+      if (instruction.statement.kind === 'WHILE') {
+        depth += 1;
+        continue;
+      }
+
+      if (instruction.statement.kind === 'WEND') {
+        if (depth === 0) {
+          return index;
+        }
+        depth -= 1;
+      }
+    }
+
+    throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+  }
+
+  private executeLninput(statement: LninputStatement, state: ExecutionState): StatementExecutionResult {
+    if (statement.channel) {
+      const basicHandle = this.evaluateNumeric(statement.channel);
+      const adapterHandle = this.openFileHandles.get(basicHandle) ?? basicHandle;
+      const value = this.options.machineAdapter?.readFileValue?.(adapterHandle);
+      if (value === null || value === undefined) {
+        this.assignTarget(statement.variable, '');
+      } else {
+        this.assignTarget(statement.variable, String(value));
+      }
+      return {};
+    }
+
+    this.pendingInput = {
+      variables: [statement.variable],
+      prompt: statement.prompt ?? '?',
+      mode: state.mode,
+      rawLine: true
+    };
+    this.pushText(`${this.pendingInput.prompt} `);
+
+    if (state.mode === 'program') {
+      return {
+        suspendProgram: 'input',
+        jumpToPc: state.nextPc
+      };
+    }
+
     return {};
   }
 
@@ -1272,7 +1642,7 @@ export class PcG815BasicRuntime {
       return;
     }
 
-    const values = splitInputValues(line);
+    const values = pending.rawLine ? [line] : splitInputValues(line);
 
     pending.variables.forEach((target, index) => {
       const raw = values[index] ?? '';
