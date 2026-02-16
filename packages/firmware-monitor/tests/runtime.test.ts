@@ -157,25 +157,36 @@ describe('PcG815BasicRuntime', () => {
     expect(memory.get(102)).toBe(3);
   });
 
-  it('supports WAIT print-wait model and BEEP sleep fallback', () => {
+  it('supports WAIT immediate delay/enter-wait and BEEP sleep fallback', () => {
     const sleeps: number[] = [];
-    const waitSettings: Array<{ ticks: number; pauseMode: boolean }> = [];
+    let enterWaitCount = 0;
     const runtime = new PcG815BasicRuntime({
       machineAdapter: {
         sleepMs: (ms) => {
           sleeps.push(ms);
         },
-        setPrintWait: (ticks, pauseMode) => {
-          waitSettings.push({ ticks, pauseMode });
+        waitForEnterKey: () => {
+          enterWaitCount += 1;
         }
       }
     });
 
-    executeLines(runtime, ['WAIT 64', 'PRINT 1', 'WAIT', 'PRINT 2', 'BEEP 8,1,0']);
+    executeLines(runtime, ['WAIT 64', 'WAIT', 'BEEP 8,1,0']);
+    expect(sleeps.some((ms) => ms >= 900 && ms <= 1100)).toBe(true);
+    expect(enterWaitCount).toBe(1);
 
-    expect(waitSettings).toContainEqual({ ticks: 64, pauseMode: false });
-    expect(waitSettings).toContainEqual({ ticks: 0, pauseMode: true });
-    expect(sleeps.length).toBeGreaterThanOrEqual(1);
+    const firstRun = executeLines(runtime, ['10 PRINT 1', '20 WAIT', '30 PRINT 2', 'RUN']);
+    expect(firstRun).toContain('1');
+    expect(firstRun).not.toContain('2\r\n');
+
+    runtime.receiveChar(0x0d);
+    let now = Date.now();
+    for (let i = 0; i < 1000 && runtime.isProgramRunning(); i += 1) {
+      now += 10;
+      runtime.pump(now);
+    }
+    const resumed = drain(runtime);
+    expect(resumed).toContain('2');
   });
 
   it('supports Task2 control commands', () => {

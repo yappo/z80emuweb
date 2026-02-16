@@ -120,7 +120,7 @@ interface ExecutionState {
 interface StatementExecutionResult {
   jumpToPc?: number;
   stopProgram?: boolean;
-  suspendProgram?: 'stop' | 'input';
+  suspendProgram?: 'stop' | 'input' | 'wait-enter';
 }
 
 interface ActiveProgramState {
@@ -142,7 +142,7 @@ interface PendingInput {
 }
 
 interface SuspendedProgramState {
-  reason: 'stop' | 'input';
+  reason: 'stop' | 'input' | 'wait-enter';
   state: ActiveProgramState;
 }
 
@@ -267,10 +267,6 @@ export class PcG815BasicRuntime {
 
   private activeProgramWakeAtMs = 0;
 
-  private printWaitTicks = 0;
-
-  private printPauseMode = false;
-
   private currentUsingFormat: string | undefined;
 
   private graphicCursorX = 0;
@@ -302,8 +298,6 @@ export class PcG815BasicRuntime {
     this.activeProgramWakeAtMs = 0;
     this.openFileHandles.clear();
     this.virtualBinaryFiles.clear();
-    this.printWaitTicks = 0;
-    this.printPauseMode = false;
     this.currentUsingFormat = undefined;
     this.graphicCursorX = 0;
     this.graphicCursorY = 0;
@@ -322,6 +316,14 @@ export class PcG815BasicRuntime {
     const value = charCode & 0xff;
 
     if (value === 0x00) {
+      return;
+    }
+
+    if (this.suspendedProgram?.reason === 'wait-enter') {
+      if (value === 0x0d || value === 0x0a) {
+        this.pushText('\r\n');
+        this.resumeWaitEnterProgram();
+      }
       return;
     }
 
@@ -463,8 +465,6 @@ export class PcG815BasicRuntime {
     this.whileStack.length = 0;
     this.gosubStack.length = 0;
     this.currentUsingFormat = undefined;
-    this.printWaitTicks = 0;
-    this.printPauseMode = false;
     this.buildDataPool(entries);
     this.dataCursor = 0;
 
@@ -860,18 +860,18 @@ export class PcG815BasicRuntime {
       }
       case 'WAIT': {
         if (!statement.duration) {
-          this.printPauseMode = true;
-          this.printWaitTicks = 0;
-          this.options.machineAdapter?.setPrintWait?.(0, true);
+          if (state.mode === 'program') {
+            return { suspendProgram: 'wait-enter', jumpToPc: state.nextPc };
+          }
+          this.options.machineAdapter?.waitForEnterKey?.();
           return {};
         }
         const ticks = this.evaluateNumeric(statement.duration);
-        if (ticks < 0 || ticks > 0xffff) {
+        if (ticks < 0 || ticks > 0xff) {
           throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
         }
-        this.printPauseMode = false;
-        this.printWaitTicks = ticks;
-        this.options.machineAdapter?.setPrintWait?.(ticks, false);
+        const delayMs = Math.max(0, Math.trunc((ticks * 1000) / 64));
+        this.waitMilliseconds(delayMs, state.mode);
         return {};
       }
       case 'LOCATE': {
@@ -1097,14 +1097,13 @@ export class PcG815BasicRuntime {
     return {};
   }
 
-  private executeGprint(statement: GprintStatement, mode: 'immediate' | 'program'): StatementExecutionResult {
+  private executeGprint(statement: GprintStatement, _mode: 'immediate' | 'program'): StatementExecutionResult {
     const payload = evaluatePrintItems(statement.items as PrintStatement['items'], this.getEvalContext());
     this.options.machineAdapter?.printGraphicText?.(payload.text);
     if (!payload.suppressNewline) {
       this.graphicCursorY += 8;
       this.options.machineAdapter?.setGraphicCursor?.(this.graphicCursorX, this.graphicCursorY);
     }
-    this.applyPrintWait(mode);
     return {};
   }
 
@@ -1571,7 +1570,7 @@ export class PcG815BasicRuntime {
     }
   }
 
-  private executePrint(statement: PrintStatement, mode: 'immediate' | 'program'): void {
+  private executePrint(statement: PrintStatement, _mode: 'immediate' | 'program'): void {
     const payload = evaluatePrintItems(statement.items, this.getEvalContext(), statement.usingFormat ?? this.currentUsingFormat);
     const text = payload.text;
 
@@ -1588,19 +1587,6 @@ export class PcG815BasicRuntime {
       }
     }
 
-    this.applyPrintWait(mode);
-  }
-
-  private applyPrintWait(mode: 'immediate' | 'program'): void {
-    if (this.printPauseMode) {
-      this.options.machineAdapter?.waitForEnterKey?.();
-      return;
-    }
-
-    if (this.printWaitTicks > 0) {
-      const delayMs = Math.max(1, Math.trunc((this.printWaitTicks * 1000) / 64));
-      this.waitMilliseconds(delayMs, mode);
-    }
   }
 
   private executeInput(statement: InputStatement, state: ExecutionState): StatementExecutionResult {
@@ -1723,6 +1709,18 @@ export class PcG815BasicRuntime {
 
   private resumeStoppedProgram(): boolean {
     if (!this.suspendedProgram || this.suspendedProgram.reason !== 'stop') {
+      return false;
+    }
+
+    this.activeProgram = this.suspendedProgram.state;
+    this.suspendedProgram = null;
+    this.activeProgramWakeAtMs = 0;
+    this.pump(Date.now());
+    return true;
+  }
+
+  private resumeWaitEnterProgram(): boolean {
+    if (!this.suspendedProgram || this.suspendedProgram.reason !== 'wait-enter') {
       return false;
     }
 

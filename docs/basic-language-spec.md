@@ -61,6 +61,9 @@
 - 入出力: `PRINT/LPRINT`, `INPUT`, `LNINPUT`, `USING`, `WAIT`, `BEEP`, `LOCATE`
 - ファイル: `OPEN`, `CLOSE`, `LOAD`, `SAVE`, `LFILES`, `FILES`, `KILL`, `LCOPY`, `BLOAD`, `BSAVE`
 - 機械: `OUT`, `POKE`, `CALL`, `MON`, `PASS`, `PIOSET`, `PIOPUT`, `SPINP`, `SPOUT`, `HDCOPY`
+- `WAIT` 詳細:
+  - `WAIT n` は `WAIT` 文の時点で停止し、`n` は `0..255`、`64` で約1秒です。
+  - `WAIT`（無引数）は Enter 入力まで停止します（RUN中は一時中断して Enter で再開）。
 
 ## 5. 描画
 
