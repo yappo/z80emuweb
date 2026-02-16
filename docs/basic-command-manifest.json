@@ -506,6 +506,312 @@
         "locate-invalid-args"
       ],
       "notes": "LOCATE x[,y[,z]] is implemented. z is accepted but currently ignored."
+    },
+    {
+      "id": "AUTO",
+      "keyword": "AUTO",
+      "category": "program",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "auto-and-list"
+      ],
+      "negativeCaseIds": [
+        "auto-invalid-args"
+      ],
+      "notes": "AUTO mode assigns sequential line numbers to subsequent non-numbered inputs until '.' terminator."
+    },
+    {
+      "id": "BLOAD",
+      "keyword": "BLOAD",
+      "category": "file",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "binary-and-files"
+      ],
+      "negativeCaseIds": [
+        "bload-invalid-args"
+      ],
+      "notes": "Loads byte stream from virtual/machine file to memory."
+    },
+    {
+      "id": "BSAVE",
+      "keyword": "BSAVE",
+      "category": "file",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "binary-and-files"
+      ],
+      "negativeCaseIds": [
+        "bsave-invalid-range"
+      ],
+      "notes": "Saves memory byte range to virtual/machine file."
+    },
+    {
+      "id": "FILES",
+      "keyword": "FILES",
+      "category": "file",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "binary-and-files"
+      ],
+      "negativeCaseIds": [
+        "files-invalid-args"
+      ],
+      "notes": "Lists file names from adapter and in-runtime virtual binary files."
+    },
+    {
+      "id": "HDCOPY",
+      "keyword": "HDCOPY",
+      "category": "display",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "machine-dependent-pack"
+      ],
+      "negativeCaseIds": [
+        "hdcopy-invalid-args"
+      ],
+      "notes": "Print-device copy command is emulated as printer marker output."
+    },
+    {
+      "id": "PAINT",
+      "keyword": "PAINT",
+      "category": "graphics",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "machine-dependent-pack"
+      ],
+      "negativeCaseIds": [
+        "paint-invalid-args"
+      ],
+      "notes": "PAINT delegates to machine adapter fill when available, with draw-point fallback."
+    },
+    {
+      "id": "CIRCLE",
+      "keyword": "CIRCLE",
+      "category": "graphics",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "machine-dependent-pack"
+      ],
+      "negativeCaseIds": [
+        "circle-invalid-args"
+      ],
+      "notes": "CIRCLE is implemented via midpoint circle plotting over drawPoint."
+    },
+    {
+      "id": "PASS",
+      "keyword": "PASS",
+      "category": "machine",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "machine-dependent-pack"
+      ],
+      "negativeCaseIds": [
+        "pass-invalid-args"
+      ],
+      "notes": "PASS stores latest password text in PASS$ runtime variable."
+    },
+    {
+      "id": "PIOSET",
+      "keyword": "PIOSET",
+      "category": "machine",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "machine-dependent-pack"
+      ],
+      "negativeCaseIds": [
+        "pio-invalid-args"
+      ],
+      "notes": "PIOSET writes value to emulated PIO control port 0x30."
+    },
+    {
+      "id": "PIOPUT",
+      "keyword": "PIOPUT",
+      "category": "machine",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "machine-dependent-pack"
+      ],
+      "negativeCaseIds": [
+        "pio-invalid-args"
+      ],
+      "notes": "PIOPUT writes value to emulated PIO data port 0x31."
+    },
+    {
+      "id": "SPINP",
+      "keyword": "SPINP",
+      "category": "machine",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "machine-dependent-pack"
+      ],
+      "negativeCaseIds": [
+        "spinp-invalid-target"
+      ],
+      "notes": "SPINP reads from emulated SPI port 0x32 into target or SPINP variable."
+    },
+    {
+      "id": "SPOUT",
+      "keyword": "SPOUT",
+      "category": "machine",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "machine-dependent-pack"
+      ],
+      "negativeCaseIds": [
+        "pio-invalid-args"
+      ],
+      "notes": "SPOUT writes value to emulated SPI port 0x32."
+    },
+    {
+      "id": "REPEAT",
+      "keyword": "REPEAT",
+      "category": "control",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "repeat-while-loop"
+      ],
+      "negativeCaseIds": [
+        "repeat-invalid-args"
+      ],
+      "notes": "REPEAT starts loop body for UNTIL condition checks."
+    },
+    {
+      "id": "UNTIL",
+      "keyword": "UNTIL",
+      "category": "control",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "repeat-while-loop"
+      ],
+      "negativeCaseIds": [
+        "until-without-repeat"
+      ],
+      "notes": "UNTIL repeats when condition is false and exits when true."
+    },
+    {
+      "id": "WHILE",
+      "keyword": "WHILE",
+      "category": "control",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "repeat-while-loop"
+      ],
+      "negativeCaseIds": [
+        "while-invalid-args"
+      ],
+      "notes": "WHILE condition is re-evaluated at loop head with matching WEND."
+    },
+    {
+      "id": "WEND",
+      "keyword": "WEND",
+      "category": "control",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "repeat-while-loop"
+      ],
+      "negativeCaseIds": [
+        "wend-without-while"
+      ],
+      "notes": "WEND closes WHILE loop and jumps back to loop head."
+    },
+    {
+      "id": "LNINPUT",
+      "keyword": "LNINPUT",
+      "category": "io",
+      "status": "LOCKED",
+      "confidence": "DERIVED",
+      "implemented": true,
+      "evidence": [
+        "basic.c"
+      ],
+      "positiveCaseIds": [
+        "lninput-reads-raw-line"
+      ],
+      "negativeCaseIds": [
+        "lninput-invalid-args"
+      ],
+      "notes": "LNINPUT reads full raw line (including commas) into target string."
     }
   ]
 }

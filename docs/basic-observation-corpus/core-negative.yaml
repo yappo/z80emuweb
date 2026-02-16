@@ -174,6 +174,118 @@
       "commands": ["LOCATE"],
       "lines": ["LOCATE"],
       "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "builtin-argcount-invalid",
+      "profile": "public-observed-v1",
+      "commands": ["PRINT"],
+      "lines": ["PRINT ABS()"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "auto-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["AUTO"],
+      "lines": ["AUTO -1"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "bsave-invalid-range",
+      "profile": "public-observed-v1",
+      "commands": ["BSAVE"],
+      "lines": ["BSAVE \"E:BIN.DAT\",20,10"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "paint-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["PAINT"],
+      "lines": ["PAINT (1,2)"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "circle-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["CIRCLE"],
+      "lines": ["CIRCLE (10,10),0"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "pio-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["PIOSET", "PIOPUT", "SPOUT"],
+      "lines": ["PIOSET", "PIOPUT", "SPOUT"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "until-without-repeat",
+      "profile": "public-observed-v1",
+      "commands": ["UNTIL"],
+      "lines": ["10 UNTIL 1", "RUN"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "wend-without-while",
+      "profile": "public-observed-v1",
+      "commands": ["WEND"],
+      "lines": ["10 WEND", "RUN"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "lninput-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["LNINPUT"],
+      "lines": ["LNINPUT"],
+      "expect": {"errorContains": ["BAD LET"], "errorCodeContains": ["E04"]}
+    },
+    {
+      "id": "bload-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["BLOAD"],
+      "lines": ["BLOAD"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "files-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["FILES"],
+      "lines": ["FILES 1"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "hdcopy-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["HDCOPY"],
+      "lines": ["HDCOPY 1"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "pass-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["PASS"],
+      "lines": ["PASS"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "spinp-invalid-target",
+      "profile": "public-observed-v1",
+      "commands": ["SPINP"],
+      "lines": ["SPINP 1"],
+      "expect": {"errorContains": ["BAD LET"], "errorCodeContains": ["E04"]}
+    },
+    {
+      "id": "repeat-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["REPEAT"],
+      "lines": ["REPEAT 1"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
+    },
+    {
+      "id": "while-invalid-args",
+      "profile": "public-observed-v1",
+      "commands": ["WHILE"],
+      "lines": ["WHILE"],
+      "expect": {"errorContains": ["SYNTAX"], "errorCodeContains": ["E01"]}
     }
   ]
 }

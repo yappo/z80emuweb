@@ -196,6 +196,88 @@
       "expect": {
         "outputContains": ["2"]
       }
+    },
+    {
+      "id": "builtin-function-pack",
+      "profile": "public-observed-v1",
+      "commands": ["LET", "PRINT"],
+      "lines": [
+        "LET A=ABS(-2)+INT(3.9)+SGN(-1)+VAL(\"12\")",
+        "PRINT A",
+        "PRINT LEFT$(\"ABCDE\",2);MID$(\"ABCDE\",2,2);RIGHT$(\"ABCDE\",1)",
+        "PRINT CHR$(65);HEX$(255)"
+      ],
+      "expect": {
+        "outputContains": ["16", "ABBCE", "AFF"]
+      }
+    },
+    {
+      "id": "auto-and-list",
+      "profile": "public-observed-v1",
+      "commands": ["AUTO", "LIST"],
+      "lines": ["AUTO 100,10", "PRINT 1", "PRINT 2", ".", "LIST"],
+      "expect": {
+        "outputContains": ["100 PRINT 1", "110 PRINT 2"]
+      }
+    },
+    {
+      "id": "repeat-while-loop",
+      "profile": "public-observed-v1",
+      "commands": ["REPEAT", "UNTIL", "WHILE", "WEND"],
+      "lines": [
+        "10 LET A=0",
+        "20 REPEAT",
+        "30 LET A=A+1",
+        "40 UNTIL A=3",
+        "50 LET B=0",
+        "60 WHILE B<2",
+        "70 PRINT B",
+        "80 LET B=B+1",
+        "90 WEND",
+        "100 PRINT A",
+        "RUN"
+      ],
+      "expect": {
+        "outputContains": ["0", "1", "3"]
+      }
+    },
+    {
+      "id": "binary-and-files",
+      "profile": "public-observed-v1",
+      "commands": ["BSAVE", "BLOAD", "FILES"],
+      "lines": ["BSAVE \"E:BIN.DAT\",100,102", "BLOAD \"E:BIN.DAT\",100", "FILES"],
+      "expect": {
+        "outputContains": ["E:BIN.DAT"]
+      }
+    },
+    {
+      "id": "machine-dependent-pack",
+      "profile": "public-observed-v1",
+      "commands": ["PASS", "PIOSET", "PIOPUT", "SPOUT", "SPINP", "HDCOPY", "PAINT", "CIRCLE"],
+      "lines": [
+        "PASS \"SECURE\"",
+        "PIOSET 1",
+        "PIOPUT 2",
+        "SPOUT 3",
+        "SPINP A",
+        "PRINT A",
+        "PAINT (1,2),6",
+        "CIRCLE (10,10),3,1,6",
+        "HDCOPY"
+      ],
+      "expect": {
+        "outputContains": ["255"],
+        "variables": {"PASS$": "SECURE", "A": 255}
+      }
+    },
+    {
+      "id": "lninput-reads-raw-line",
+      "profile": "public-observed-v1",
+      "commands": ["LNINPUT", "PRINT"],
+      "lines": ["10 LNINPUT A$", "20 PRINT A$", "RUN", "HELLO,THERE"],
+      "expect": {
+        "outputContains": ["HELLO,THERE"]
+      }
     }
   ]
 }
