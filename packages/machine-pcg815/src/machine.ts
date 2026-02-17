@@ -57,17 +57,33 @@ const BANKED_ROM_SIZE = BANKED_ROM_REGION.end - BANKED_ROM_REGION.start + 1;
 const TEXT_VRAM_SIZE = LCD_COLS * LCD_ROWS;
 const ICON_VRAM_SIZE = 32;
 
-const PORT_KEYBOARD_ROW_SELECT = getIoPortSpec('kbd-row-select').port;
-const PORT_KEYBOARD_ROW_DATA = getIoPortSpec('kbd-row-data').port;
-const PORT_KEYBOARD_ASCII_FIFO = getIoPortSpec('kbd-ascii-fifo').port;
-const PORT_ROM_BANK_SELECT = getIoPortSpec('bank-rom-select').port;
-const PORT_EXPANSION_CONTROL = getIoPortSpec('bank-expansion-control').port;
-const PORT_RUNTIME_INPUT = getIoPortSpec('runtime-input').port;
-const PORT_RUNTIME_OUTPUT = getIoPortSpec('runtime-output').port;
+const PORT_SYS_10 = getIoPortSpec('sys-10').port;
+const PORT_SYS_11 = getIoPortSpec('sys-11').port;
+const PORT_SYS_12 = getIoPortSpec('sys-12').port;
+const PORT_SYS_13 = getIoPortSpec('sys-13').port;
+const PORT_SYS_14 = getIoPortSpec('sys-14').port;
+const PORT_SYS_15 = getIoPortSpec('sys-15').port;
+const PORT_SYS_16 = getIoPortSpec('sys-16').port;
+const PORT_SYS_17 = getIoPortSpec('sys-17').port;
+const PORT_SYS_18 = getIoPortSpec('sys-18').port;
+const PORT_SYS_19 = getIoPortSpec('sys-19').port;
+const PORT_SYS_1a = getIoPortSpec('sys-1a').port;
+const PORT_SYS_1b = getIoPortSpec('sys-1b').port;
+const PORT_SYS_1c = getIoPortSpec('sys-1c').port;
+const PORT_SYS_1d = getIoPortSpec('sys-1d').port;
+const PORT_SYS_1e = getIoPortSpec('sys-1e').port;
+const PORT_SYS_1f = getIoPortSpec('sys-1f').port;
+const PORT_LCD_COMMAND_DUAL = getIoPortSpec('lcd-command-dual').port;
+const PORT_LCD_DATA_DUAL = getIoPortSpec('lcd-data-dual').port;
+const PORT_LCD_COMMAND_SECONDARY = getIoPortSpec('lcd-command-secondary').port;
+const PORT_LCD_DATA_SECONDARY = getIoPortSpec('lcd-data-secondary').port;
+const PORT_LCD_READ_SECONDARY = getIoPortSpec('lcd-read-secondary').port;
 const PORT_LCD_COMMAND = getIoPortSpec('lcd-command').port;
 const PORT_LCD_DATA = getIoPortSpec('lcd-data').port;
 const PORT_LCD_STATUS = getIoPortSpec('lcd-status').port;
 const PORT_LCD_STATUS_MIRROR = getIoPortSpec('lcd-status-mirror').port;
+const PORT_LCD_STATUS_DUAL = getIoPortSpec('lcd-status-dual').port;
+const PORT_LCD_STATUS_SECONDARY = getIoPortSpec('lcd-status-secondary').port;
 
 const WORKAREA_DISPLAY_START_LINE = getWorkAreaSpec('display-start-line').address;
 
@@ -299,14 +315,28 @@ export class PCG815Machine implements MachinePCG815, Bus {
   private kanaMode = false;
   private kanaComposeBuffer = '';
 
-  private selectedKeyRow = 0;
-  private runtimeSelectedKeyRow = 0;
-
   private lcdCursor = 0;
+  private keyStrobe = 0;
+  private keyShift = 0;
+  private timer = 0;
+  private xinEnabled = 0;
+  private interruptType = 0;
+  private interruptMask = 0;
+  private io3Out = 0;
+  private exRomBank = 0;
+  private romBank = 0;
+  private ramBank = 0;
+  private ioReset = 0;
+  private battChk = 0;
+  private keyBreak = 0;
+  private pin11In = 0;
 
-  private romBankSelect = 0;
-
-  private expansionControl = 0;
+  private lcdX = 0;
+  private lcdY = 0;
+  private lcdX2 = 0;
+  private lcdY2 = 0;
+  private lcdRead = false;
+  private readonly lcdRawVram = new Uint8Array(8 * 0x80);
 
   private dirtyFrame = true;
 
@@ -357,11 +387,27 @@ export class PCG815Machine implements MachinePCG815, Bus {
     this.asciiQueue.length = 0;
     this.kanaMode = false;
     this.kanaComposeBuffer = '';
-    this.selectedKeyRow = 0;
-    this.runtimeSelectedKeyRow = 0;
     this.lcdCursor = 0;
-    this.romBankSelect = 0;
-    this.expansionControl = 0;
+    this.keyStrobe = 0;
+    this.keyShift = 0;
+    this.timer = 0;
+    this.xinEnabled = 0;
+    this.interruptType = 0;
+    this.interruptMask = 0;
+    this.io3Out = 0;
+    this.exRomBank = 0;
+    this.romBank = 0;
+    this.ramBank = 0;
+    this.ioReset = 0;
+    this.battChk = 0;
+    this.keyBreak = 0;
+    this.pin11In = 0;
+    this.lcdX = 0;
+    this.lcdY = 0;
+    this.lcdX2 = 0;
+    this.lcdY2 = 0;
+    this.lcdRead = false;
+    this.lcdRawVram.fill(0);
     this.printWaitTicks = 0;
     this.printPauseMode = false;
     this.graphicCursorX = 0;
@@ -419,12 +465,14 @@ export class PCG815Machine implements MachinePCG815, Bus {
           }
         }
       }
+      this.keyShift = this.pressedCodes.has('ShiftLeft') || this.pressedCodes.has('ShiftRight') ? 1 : 0;
       return;
     }
 
     this.pressedCodes.delete(code);
     const currentRowState = this.keyboardRows[mapping.row] ?? 0xff;
     this.keyboardRows[mapping.row] = currentRowState | rowMask;
+    this.keyShift = this.pressedCodes.has('ShiftLeft') || this.pressedCodes.has('ShiftRight') ? 1 : 0;
   }
 
   getFrameBuffer(): Uint8Array {
@@ -503,6 +551,12 @@ export class PCG815Machine implements MachinePCG815, Bus {
     this.cpu.loadState(state);
   }
 
+  setStackPointer(value: number): void {
+    const state = this.cpu.getState();
+    state.registers.sp = clamp16(value);
+    this.cpu.loadState(state);
+  }
+
   createSnapshot(): SnapshotV1 {
     return {
       version: 1,
@@ -514,13 +568,13 @@ export class PCG815Machine implements MachinePCG815, Bus {
         cursor: this.lcdCursor
       },
       io: {
-        selectedKeyRow: this.selectedKeyRow,
+        selectedKeyRow: this.keyStrobe & 0xff,
         keyboardRows: [...this.keyboardRows],
         asciiQueue: [...this.asciiQueue],
         kanaMode: this.kanaMode,
         kanaComposeBuffer: this.kanaComposeBuffer,
-        romBankSelect: this.romBankSelect,
-        expansionControl: this.expansionControl,
+        romBankSelect: this.romBank & 0x0f,
+        expansionControl: this.ramBank & 0x04,
         runtime: this.runtime.getSnapshot()
       },
       timestampTStates: this.elapsedTStates
@@ -543,7 +597,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
 
     this.lcdCursor = snapshot.vram.cursor & 0x7f;
 
-    this.selectedKeyRow = snapshot.io.selectedKeyRow & 0x07;
+    this.keyStrobe = snapshot.io.selectedKeyRow & 0xffff;
     this.keyboardRows.fill(0xff);
     this.keyboardRows.set(snapshot.io.keyboardRows.map((v) => v & 0xff).slice(0, this.keyboardRows.length));
 
@@ -552,8 +606,8 @@ export class PCG815Machine implements MachinePCG815, Bus {
     this.kanaMode = Boolean(snapshot.io.kanaMode);
     this.kanaComposeBuffer = snapshot.io.kanaComposeBuffer ?? '';
 
-    this.romBankSelect = snapshot.io.romBankSelect & 0xff;
-    this.expansionControl = snapshot.io.expansionControl & 0xff;
+    this.romBank = snapshot.io.romBankSelect & 0x0f;
+    this.ramBank = snapshot.io.expansionControl & 0x04;
 
     this.runtime.loadSnapshot(snapshot.io.runtime);
 
@@ -606,25 +660,52 @@ export class PCG815Machine implements MachinePCG815, Bus {
   in8(port: number): number {
     const portSpec = findIoPortSpec(port);
     if (!portSpec) {
-      return 0xff;
+      return 0x78;
     }
 
-    switch (portSpec.port & 0xff) {
-      case PORT_KEYBOARD_ROW_DATA:
-        return this.keyboardRows[this.selectedKeyRow] ?? 0xff;
-      case PORT_KEYBOARD_ASCII_FIFO:
-        // BASIC RUN中はCPU側モニタへのASCII供給を止め、
-        // キー押下文字がLCDへエコーされるのを防ぐ。
-        if (this.runtime.isProgramRunning()) {
-          return 0x00;
-        }
-        // FIFO は読み出しで消費される。
-        return this.asciiQueue.shift() ?? 0x00;
-      case PORT_LCD_STATUS:
+    const normalized = portSpec.port & 0xff;
+    switch (normalized) {
+      case PORT_SYS_10:
+        return this.readKeyMatrixByStrobe();
+      case PORT_SYS_11:
+      case PORT_SYS_12:
+        return 0x00;
+      case PORT_SYS_13:
+        return (this.keyStrobe & 0x08) !== 0 ? this.keyShift & 0xff : 0x00;
+      case PORT_SYS_14:
+        return this.timer & 0xff;
+      case PORT_SYS_15:
+        return this.xinEnabled & 0xff;
+      case PORT_SYS_16:
+        return this.interruptType & 0xff;
+      case PORT_SYS_17:
+        return this.interruptMask & 0xff;
+      case PORT_SYS_18:
+        return this.io3Out & 0xff;
+      case PORT_SYS_19:
+        return (((this.exRomBank & 0x07) << 4) | (this.romBank & 0x0f)) & 0xff;
+      case PORT_SYS_1a:
+      case PORT_SYS_1c:
+      case PORT_SYS_1e:
+        return 0x00;
+      case PORT_SYS_1b:
+        return this.ramBank & 0xff;
+      case PORT_SYS_1d:
+        return 0x00;
+      case PORT_SYS_1f: {
+        const xinValue = (this.xinEnabled & 0x80) !== 0 ? this.pin11In & 0x04 : 0;
+        const bit1 = (this.pin11In & 0x20) !== 0 ? 0x02 : 0;
+        const bit0 = (this.pin11In & 0x10) !== 0 ? 0x01 : 0;
+        return (this.keyBreak | xinValue | bit1 | bit0) & 0xff;
+      }
+      case PORT_LCD_STATUS_DUAL:
+      case PORT_LCD_STATUS_SECONDARY:
       case PORT_LCD_STATUS_MIRROR:
-        return this.lcdCursor & 0xff;
-      case PORT_RUNTIME_OUTPUT:
-        return this.runtime.popOutputChar();
+        return 0x00;
+      case PORT_LCD_READ_SECONDARY:
+        return this.readLcdData(false);
+      case PORT_LCD_STATUS:
+        return this.readLcdData(true);
       default:
         return portSpec.defaultInValue & 0xff;
     }
@@ -639,24 +720,68 @@ export class PCG815Machine implements MachinePCG815, Bus {
     const byte = clamp8(value);
 
     switch (portSpec.port & 0xff) {
-      case PORT_KEYBOARD_ROW_SELECT:
-        this.selectedKeyRow = byte & 0x07;
+      case PORT_SYS_11:
+        this.keyStrobe = (this.keyStrobe & 0xff00) | byte;
+        if ((byte & 0x10) !== 0) {
+          this.interruptType |= 0x10;
+        }
         return;
-      case PORT_ROM_BANK_SELECT:
-        this.romBankSelect = byte;
+      case PORT_SYS_12:
+        this.keyStrobe = (this.keyStrobe & 0x00ff) | (byte << 8);
         return;
-      case PORT_EXPANSION_CONTROL:
-        this.expansionControl = byte;
+      case PORT_SYS_13:
         return;
-      case PORT_RUNTIME_INPUT:
-        // モニタ実行系への入力チャネル。
-        this.runtime.receiveChar(byte);
+      case PORT_SYS_14:
+        this.timer = 0;
+        return;
+      case PORT_SYS_15:
+        this.xinEnabled = byte & 0x80;
+        return;
+      case PORT_SYS_16:
+        this.interruptType &= ~byte;
+        return;
+      case PORT_SYS_17:
+        this.interruptMask = byte;
+        return;
+      case PORT_SYS_18:
+        this.io3Out = byte & 0xc3;
+        return;
+      case PORT_SYS_19:
+        this.romBank = byte & 0x0f;
+        this.exRomBank = (byte >> 4) & 0x07;
+        return;
+      case PORT_SYS_1a:
+        return;
+      case PORT_SYS_1b:
+        this.ramBank = byte & 0x04;
+        return;
+      case PORT_SYS_1c:
+        this.ioReset = byte;
+        return;
+      case PORT_SYS_1e:
+        this.battChk = byte & 0x03;
+        return;
+      case PORT_SYS_1f:
+        return;
+      case PORT_LCD_COMMAND_DUAL:
+        this.g815LcdCtrl('secondary', byte);
+        this.g815LcdCtrl('primary', byte);
+        return;
+      case PORT_LCD_DATA_DUAL:
+        this.writeLcdData('secondary', byte);
+        this.writeLcdData('primary', byte);
+        return;
+      case PORT_LCD_COMMAND_SECONDARY:
+        this.g815LcdCtrl('secondary', byte);
+        return;
+      case PORT_LCD_DATA_SECONDARY:
+        this.writeLcdData('secondary', byte);
         return;
       case PORT_LCD_COMMAND:
-        this.handleLcdCommand(byte);
+        this.g815LcdCtrl('primary', byte);
         return;
       case PORT_LCD_DATA:
-        this.handleLcdData(byte);
+        this.writeLcdData('primary', byte);
         return;
       default:
         return;
@@ -664,27 +789,104 @@ export class PCG815Machine implements MachinePCG815, Bus {
   }
 
   private runtimeIn8(port: number): number {
-    const normalized = port & 0xff;
-    switch (normalized) {
-      case PORT_KEYBOARD_ROW_DATA:
-        return this.keyboardRows[this.runtimeSelectedKeyRow] ?? 0xff;
-      case PORT_KEYBOARD_ASCII_FIFO:
-        return this.asciiQueue.shift() ?? 0x00;
-      default:
-        return this.in8(normalized);
-    }
+    return this.in8(port);
   }
 
   private runtimeOut8(port: number, value: number): void {
-    const normalized = port & 0xff;
-    const byte = clamp8(value);
-    switch (normalized) {
-      case PORT_KEYBOARD_ROW_SELECT:
-        this.runtimeSelectedKeyRow = byte & 0x07;
-        return;
-      default:
-        this.out8(normalized, byte);
+    this.out8(port, value);
+  }
+
+  private readKeyMatrixByStrobe(): number {
+    let out = 0;
+    for (let row = 0; row < 8; row += 1) {
+      if (((this.keyStrobe >> row) & 0x01) !== 0) {
+        out |= this.keyboardRows[row] ?? 0;
+      }
     }
+    return out & 0xff;
+  }
+
+  private g815LcdCtrl(target: 'primary' | 'secondary', command: number): void {
+    this.lcdRead = false;
+    switch (command & 0xc0) {
+      case 0x00:
+        return;
+      case 0x40:
+        if (target === 'secondary') {
+          this.lcdX2 = command & 0x3f;
+        } else {
+          this.lcdX = command & 0x3f;
+        }
+        return;
+      case 0x80:
+        if (target === 'secondary') {
+          this.lcdY2 = command & 0x07;
+        } else {
+          this.lcdY = command & 0x07;
+        }
+        return;
+      case 0xc0: {
+        const line = (command >> 3) & 0x07;
+        const offset = WORKAREA_DISPLAY_START_LINE - RAM_REGION.start;
+        this.mainRam[offset] = line & 0x1f;
+        this.dirtyFrame = true;
+        return;
+      }
+    }
+  }
+
+  private writeLcdData(target: 'primary' | 'secondary', value: number): void {
+    this.lcdRead = false;
+    if (target === 'secondary') {
+      if (this.lcdX2 < 0x3c && this.lcdY2 < 8) {
+        this.writeRawLcdAt(this.lcdX2, this.lcdY2, value);
+        this.lcdX2 = (this.lcdX2 + 1) & 0xff;
+      }
+      return;
+    }
+
+    const address = 0x3c + this.lcdX;
+    if ((address < 0x49 || address === 0x7b) && this.lcdY < 8) {
+      this.writeRawLcdAt(address, this.lcdY, value);
+      this.lcdX = (this.lcdX + 1) & 0xff;
+    }
+    this.handleLcdData(value);
+  }
+
+  private readLcdData(primary: boolean): number {
+    if (!this.lcdRead) {
+      this.lcdRead = true;
+      return 0x00;
+    }
+
+    if (!primary) {
+      if (this.lcdX2 < 0x3c && this.lcdY2 < 8) {
+        const value = this.readRawLcdAt(this.lcdX2, this.lcdY2);
+        this.lcdX2 = (this.lcdX2 + 1) & 0xff;
+        return value;
+      }
+      return 0x00;
+    }
+
+    const address = 0x3c + this.lcdX;
+    if (address < 0x49 && this.lcdY < 8) {
+      const value = this.readRawLcdAt(address, this.lcdY);
+      this.lcdX = (this.lcdX + 1) & 0xff;
+      return value;
+    }
+    return 0x00;
+  }
+
+  private readRawLcdAt(x: number, y: number): number {
+    const xx = x & 0x7f;
+    const yy = y & 0x07;
+    return this.lcdRawVram[yy * 0x80 + xx] ?? 0x00;
+  }
+
+  private writeRawLcdAt(x: number, y: number, value: number): void {
+    const xx = x & 0x7f;
+    const yy = y & 0x07;
+    this.lcdRawVram[yy * 0x80 + xx] = value & 0xff;
   }
 
   private seedBootstrapInMainRam(): void {

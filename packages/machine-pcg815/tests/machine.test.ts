@@ -275,149 +275,63 @@ describe('PCG815Machine', () => {
 
   it('updates keyboard matrix with active-low semantics', () => {
     const machine = new PCG815Machine();
-    machine.out8(0x10, 0x00); // select row 0
+    machine.out8(0x11, 0x01); // strobe row 0
 
     machine.setKeyState('KeyA', true);
-    expect((machine.in8(0x11) & 0x01) === 0).toBe(true);
+    expect((machine.in8(0x10) & 0x01) === 0).toBe(true);
 
     machine.setKeyState('KeyA', false);
-    expect((machine.in8(0x11) & 0x01) !== 0).toBe(true);
+    expect((machine.in8(0x10) & 0x01) !== 0).toBe(true);
   });
 
-  it('generates ASCII queue from browser key events', () => {
+  it('combines row strobe low/high via ports 0x11/0x12 and reads from 0x10', () => {
     const machine = new PCG815Machine();
+    machine.setKeyState('KeyA', true); // row0 col0
+    machine.setKeyState('KeyI', true); // row1 col0
 
-    machine.setKeyState('KeyP', true);
-    machine.setKeyState('KeyP', false);
+    machine.out8(0x11, 0x01); // row0
+    expect((machine.in8(0x10) & 0x01) === 0).toBe(true);
 
-    const code = machine.in8(0x12);
-    expect(String.fromCharCode(code)).toBe('P');
+    machine.out8(0x11, 0x00);
+    machine.out8(0x12, 0x02); // row1 via upper strobe
+    expect((machine.in8(0x10) & 0x01) === 0).toBe(true);
   });
 
-  it('generates lowercase letters when SHIFT is pressed with A-Z keys', () => {
+  it('implements LCD secondary read with dummy-first behavior on 0x57', () => {
     const machine = new PCG815Machine();
+    machine.out8(0x54, 0x40); // X2=0
+    machine.out8(0x54, 0x80); // Y2=0
+    machine.out8(0x56, 0x41); // write 'A'
+    machine.out8(0x54, 0x40); // X2=0
+    machine.out8(0x54, 0x80); // Y2=0
 
-    machine.setKeyState('ShiftLeft', true);
-    machine.setKeyState('KeyA', true);
-    machine.setKeyState('KeyA', false);
-    machine.setKeyState('ShiftLeft', false);
-
-    expect(machine.in8(0x12)).toBe('a'.charCodeAt(0));
+    expect(machine.in8(0x57)).toBe(0x00);
+    expect(machine.in8(0x57)).toBe(0x41);
   });
 
-  it('maps romaji sequences to half-width katakana when kana mode is enabled', () => {
+  it('writes both LCD regions on port 0x52', () => {
     const machine = new PCG815Machine();
-    machine.setKanaMode(true);
+    machine.out8(0x50, 0x40); // X=0/X2=0
+    machine.out8(0x50, 0x80); // Y=0/Y2=0
+    machine.out8(0x52, 0x5a);
+    machine.out8(0x50, 0x40); // X=0/X2=0
+    machine.out8(0x50, 0x80); // Y=0/Y2=0
 
-    machine.setKeyState('KeyK', true);
-    machine.setKeyState('KeyK', false);
-    expect(machine.in8(0x12)).toBe(0x00); // pending "k"
-
-    machine.setKeyState('KeyA', true);
-    machine.setKeyState('KeyA', false);
-    expect(machine.in8(0x12)).toBe(0xb6); // ｶ
-
-    machine.setKeyState('KeyK', true);
-    machine.setKeyState('KeyK', false);
-    machine.setKeyState('KeyY', true);
-    machine.setKeyState('KeyY', false);
-    machine.setKeyState('KeyA', true);
-    machine.setKeyState('KeyA', false);
-    expect(machine.in8(0x12)).toBe(0xb7); // ｷ
-    expect(machine.in8(0x12)).toBe(0xac); // ｬ
+    expect(machine.in8(0x57)).toBe(0x00);
+    expect(machine.in8(0x57)).toBe(0x5a);
+    expect(machine.in8(0x5b)).toBe(0x5a);
+    expect(machine.in8(0x5b)).toBe(0x00);
   });
 
-  it('passes kana bytes through keyboard fifo -> runtime -> lcd path', () => {
+  it('does not dispatch OUT on 0x10 and 0x1D', () => {
     const machine = new PCG815Machine();
-    machine.setKanaMode(true);
+    machine.out8(0x11, 0x55);
+    expect(machine.in8(0x10)).toBe(0xff);
 
-    machine.setKeyState('KeyS', true);
-    machine.setKeyState('KeyS', false);
-    machine.setKeyState('KeyA', true);
-    machine.setKeyState('KeyA', false);
-
-    const keyboardCode = machine.in8(0x12);
-    expect(keyboardCode).toBe(0xbb);
-
-    machine.out8(0x1c, keyboardCode);
-    const runtimeEchoCode = machine.in8(0x1d);
-    expect(runtimeEchoCode).toBe(0xbb);
-
-    machine.out8(0x5a, runtimeEchoCode);
-
-    const lines = machine.getTextLines();
-    const hasSa = lines.some((line) => [...line].some((ch) => ch.charCodeAt(0) === 0xbb));
-    expect(hasSa).toBe(true);
-  });
-
-  it('handles sokuon and n conversion in romaji kana mode', () => {
-    const machine = new PCG815Machine();
-    machine.setKanaMode(true);
-
-    machine.setKeyState('KeyK', true);
-    machine.setKeyState('KeyK', false);
-    machine.setKeyState('KeyK', true);
-    machine.setKeyState('KeyK', false);
-    machine.setKeyState('KeyO', true);
-    machine.setKeyState('KeyO', false);
-    expect(machine.in8(0x12)).toBe(0xaf); // ｯ
-    expect(machine.in8(0x12)).toBe(0xba); // ｺ
-
-    machine.setKeyState('KeyN', true);
-    machine.setKeyState('KeyN', false);
-    machine.setKeyState('KeyN', true);
-    machine.setKeyState('KeyN', false);
-    expect(machine.in8(0x12)).toBe(0xdd); // ﾝ
-  });
-
-  it('keeps romaji-kana conversion under SHIFT while kana mode is enabled', () => {
-    const machine = new PCG815Machine();
-    machine.setKanaMode(true);
-
-    machine.setKeyState('ShiftLeft', true);
-    machine.setKeyState('KeyK', true);
-    machine.setKeyState('KeyK', false);
-    machine.setKeyState('KeyA', true);
-    machine.setKeyState('KeyA', false);
-    machine.setKeyState('ShiftLeft', false);
-
-    expect(machine.in8(0x12)).toBe(0xb6); // ｶ
-  });
-
-  it('returns to ASCII mapping when kana mode is disabled', () => {
-    const machine = new PCG815Machine();
-    machine.setKanaMode(true);
-    machine.setKanaMode(false);
-
-    machine.setKeyState('KeyA', true);
-    machine.setKeyState('KeyA', false);
-    expect(machine.in8(0x12)).toBe('A'.charCodeAt(0));
-  });
-
-  it('generates ASCII queue from extended key codes (JIS + numpad)', () => {
-    const machine = new PCG815Machine();
-
-    machine.setKeyState('Numpad1', true);
-    machine.setKeyState('Numpad1', false);
-    expect(machine.in8(0x12)).toBe('1'.charCodeAt(0));
-
-    machine.setKeyState('NumpadAdd', true);
-    machine.setKeyState('NumpadAdd', false);
-    expect(machine.in8(0x12)).toBe('+'.charCodeAt(0));
-
-    machine.setKeyState('Tab', true);
-    machine.setKeyState('Tab', false);
-    expect(machine.in8(0x12)).toBe(0x09);
-
-    machine.setKeyState('IntlYen', true);
-    machine.setKeyState('IntlYen', false);
-    expect(machine.in8(0x12)).toBe('\\'.charCodeAt(0));
-
-    machine.setKeyState('ShiftLeft', true);
-    machine.setKeyState('IntlRo', true);
-    machine.setKeyState('IntlRo', false);
-    machine.setKeyState('ShiftLeft', false);
-    expect(machine.in8(0x12)).toBe('_'.charCodeAt(0));
+    machine.out8(0x10, 0xaa); // no-op by spec
+    machine.out8(0x1d, 0xaa); // no-op by spec
+    machine.out8(0x11, 0x55);
+    expect(machine.in8(0x10)).toBe(0xff);
   });
 
   it('renders LCD framebuffer from LCD ports 0x58/0x5A', () => {
@@ -462,24 +376,11 @@ describe('PCG815Machine', () => {
     expect(lines[3]?.startsWith(' ')).toBe(true);
   });
 
-  it('scrolls when writing past the last cell instead of wrapping to top-left', () => {
-    const machine = new PCG815Machine();
-    machine.out8(0x58, 0x01); // clear
-    machine.out8(0x58, 0xdf); // cursor to last text cell (0x80 | 95)
-
-    machine.out8(0x5a, 'A'.charCodeAt(0));
-    machine.out8(0x5a, 'B'.charCodeAt(0));
-
-    const lines = machine.getTextLines();
-    expect(lines[0]?.startsWith('B')).toBe(false);
-    expect(lines[3]?.startsWith('B')).toBe(true);
-  });
-
-  it('returns 0xFF for unknown IN ports and no-op for unknown OUT ports', () => {
+  it('returns 0x78 for unknown IN ports and no-op for unknown OUT ports', () => {
     const machine = new PCG815Machine();
     const before = machine.read8(0x0001);
 
-    expect(machine.in8(0xfe)).toBe(0xff);
+    expect(machine.in8(0xfe)).toBe(0x78);
     machine.out8(0xfe, 0x77);
     expect(machine.read8(0x0001)).toBe(before);
   });
@@ -491,15 +392,12 @@ describe('PCG815Machine', () => {
     machine.out8(0x5a, 'X'.charCodeAt(0));
     machine.out8(0x19, 0x03);
     machine.out8(0x1b, 0x04);
-    machine.setKeyState('Digit1', true);
-    machine.setKeyState('Digit1', false);
 
     const snapshot = machine.createSnapshot();
     const clone = new PCG815Machine();
     clone.loadSnapshot(snapshot);
 
     expect(clone.getTextLines()[0]?.startsWith('X')).toBe(true);
-    expect(clone.in8(0x12)).toBe('1'.charCodeAt(0));
     expect(clone.getKanaMode()).toBe(true);
 
     const cloneSnapshot = clone.createSnapshot();
