@@ -189,7 +189,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 115 GOSUB 9500
 120 IF N>5 THEN 9000
 130 GOSUB 7000
-140 LET SE=INP(18)+INP(17)+PEEK(0)+N
+140 LET SE=INP(18)+INP(16)+PEEK(0)+N
 150 IF SE<>0 THEN 170
 160 LET SE=37+N
 170 GOSUB 2000
@@ -261,21 +261,21 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 1060 RETURN
 1070 RETURN
 1600 LET D=0
-1610 OUT 16,0
-1620 LET R=INP(17)
+1610 OUT 17,1
+1620 LET R=INP(16)
 1630 IF R=254 THEN 1810
 1640 IF R=247 THEN 1830
-1650 OUT 16,2
-1660 LET R=INP(17)
+1650 OUT 17,4
+1660 LET R=INP(16)
 1670 IF R=191 THEN 1850
 1680 IF R=251 THEN 1870
-1690 OUT 16,7
-1700 LET R=INP(17)
+1690 OUT 17,128
+1700 LET R=INP(16)
 1710 IF R=127 THEN 1810
 1720 IF R=223 THEN 1850
 1730 IF R=191 THEN 1870
-1740 OUT 16,6
-1750 LET R=INP(17)
+1740 OUT 17,64
+1750 LET R=INP(16)
 1760 IF R=254 THEN 1830
 1770 RETURN
 1810 LET D=1
@@ -414,8 +414,8 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 7310 RETURN
 7400 LET SP=0
 7410 LET Q=0
-7420 OUT 16,7
-7430 LET R=INP(17)
+7420 OUT 17,128
+7430 LET R=INP(16)
 7440 IF R=239 THEN 7460
 7450 GOTO 7480
 7460 LET Q=1
@@ -880,7 +880,9 @@ async function runBasicProgram(
     for (const line of lines) {
       injectBasicLine(line, { discardOutput: true });
     }
-    injectBasicLine('RUN');
+    machine.runtime.runProgram(10_000, false, undefined, false);
+    machine.tick(40_000);
+    renderLcd();
 
     const timeoutMs = 20_000;
     const start = performance.now();
@@ -902,12 +904,11 @@ async function runBasicProgram(
       await waitForAnimationFrame();
     }
 
-    const text = machine.getTextLines();
-    const errorLine = text.find((line) => line.includes('ERR '));
-    if (errorLine) {
-      setProgramRunStatus('failed', `Failed: ${errorLine}`);
-      appendLog(`BASIC RUN failed ${errorLine}`);
-      return { ok: false, errorLine };
+    const runtimeError = machine.runtime.getLastProgramError();
+    if (runtimeError) {
+      setProgramRunStatus('failed', `Failed: ${runtimeError}`);
+      appendLog(`BASIC RUN failed ${runtimeError}`);
+      return { ok: false, errorLine: runtimeError };
     }
 
     setProgramRunStatus('ok', 'Run OK');

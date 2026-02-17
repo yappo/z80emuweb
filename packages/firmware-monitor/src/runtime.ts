@@ -131,6 +131,7 @@ interface ActiveProgramState {
   steps: number;
   maxSteps: number;
   promptOnComplete: boolean;
+  completionEcho: boolean;
 }
 
 interface PendingInput {
@@ -260,6 +261,7 @@ export class PcG815BasicRuntime {
   private pendingInput: PendingInput | null = null;
 
   private observationProfileId: string;
+  private lastProgramError: string | null = null;
 
   private activeProgram: ActiveProgramState | null = null;
 
@@ -303,6 +305,7 @@ export class PcG815BasicRuntime {
     this.graphicCursorY = 0;
     this.autoLineNext = null;
     this.autoLineStep = 10;
+    this.lastProgramError = null;
 
     if (cold) {
       this.variables.clear();
@@ -421,7 +424,7 @@ export class PcG815BasicRuntime {
     }
   }
 
-  runProgram(maxSteps = 10_000, promptOnComplete = false, target?: LineReference): void {
+  runProgram(maxSteps = 10_000, promptOnComplete = false, target?: LineReference, completionEcho = true): void {
     if (this.activeProgram !== null) {
       return;
     }
@@ -480,11 +483,17 @@ export class PcG815BasicRuntime {
       pc: startPc,
       steps: 0,
       maxSteps,
-      promptOnComplete
+      promptOnComplete,
+      completionEcho
     };
+    this.lastProgramError = null;
     this.suspendedProgram = null;
     this.activeProgramWakeAtMs = 0;
     this.pump(Date.now());
+  }
+
+  getLastProgramError(): string | null {
+    return this.lastProgramError;
   }
 
   pump(nowMs = Date.now()): void {
@@ -1941,10 +1950,14 @@ export class PcG815BasicRuntime {
 
   private finishProgramSuccess(): void {
     const promptOnComplete = this.activeProgram?.promptOnComplete ?? false;
+    const completionEcho = this.activeProgram?.completionEcho ?? true;
     this.activeProgram = null;
     this.suspendedProgram = null;
     this.activeProgramWakeAtMs = 0;
-    this.pushText('OK\r\n');
+    this.lastProgramError = null;
+    if (completionEcho) {
+      this.pushText('OK\r\n');
+    }
     if (promptOnComplete) {
       this.pushPrompt();
     }
@@ -1952,10 +1965,12 @@ export class PcG815BasicRuntime {
 
   private finishProgramWithError(error: unknown): void {
     const promptOnComplete = this.activeProgram?.promptOnComplete ?? false;
+    const rendered = `ERR ${asDisplayError(error)}`;
     this.activeProgram = null;
     this.suspendedProgram = null;
     this.activeProgramWakeAtMs = 0;
-    this.pushText(`ERR ${asDisplayError(error)}\r\n`);
+    this.lastProgramError = rendered;
+    this.pushText(`${rendered}\r\n`);
     if (promptOnComplete) {
       this.pushPrompt();
     }
