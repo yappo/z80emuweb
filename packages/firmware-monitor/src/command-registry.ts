@@ -1,12 +1,12 @@
 import type { StatementNode } from './ast';
 import { BasicRuntimeError } from './errors';
-import type { BasicCommandSpec, BasicMachineAdapter } from './types';
+import type { BasicCommandSpec, BasicMachineAdapter, ScalarValue } from './types';
 
 export type RuntimeMode = 'immediate' | 'program';
 
 export interface CommandExecutionContext {
   readonly mode: RuntimeMode;
-  readonly variables: Map<string, number>;
+  readonly variables: Map<string, ScalarValue>;
   readonly program: Map<number, string>;
   readonly machineAdapter?: BasicMachineAdapter;
   readonly lineToIndex: Map<number, number>;

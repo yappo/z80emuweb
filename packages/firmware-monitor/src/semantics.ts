@@ -1,14 +1,14 @@
 import type { ExpressionNode, PrintStatement } from './ast';
 import { BasicRuntimeError } from './errors';
-import type { BasicMachineAdapter } from './types';
+import type { BasicMachineAdapter, ScalarValue } from './types';
 
 export interface ExpressionEvaluationContext {
-  vars: Map<string, number>;
+  vars: Map<string, ScalarValue>;
   machineAdapter?: BasicMachineAdapter;
-  readArray?: (name: string, indices: number[]) => number;
+  readArray?: (name: string, indices: number[]) => ScalarValue;
 }
 
-type EvalContextInput = Map<string, number> | ExpressionEvaluationContext;
+type EvalContextInput = Map<string, ScalarValue> | ExpressionEvaluationContext;
 
 function clampInt(value: number): number {
   if (!Number.isFinite(value) || Number.isNaN(value)) {
@@ -24,8 +24,147 @@ function normalizeContext(context: EvalContextInput): ExpressionEvaluationContex
   return context;
 }
 
+function toNumeric(value: ScalarValue): number {
+  if (typeof value === 'number') {
+    return clampInt(value);
+  }
+  throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+}
+
+function boolToBasic(value: boolean): number {
+  return value ? -1 : 0;
+}
+
+function compareValues(left: ScalarValue, right: ScalarValue): number {
+  if (typeof left === 'string' || typeof right === 'string') {
+    const l = String(left);
+    const r = String(right);
+    if (l === r) {
+      return 0;
+    }
+    return l < r ? -1 : 1;
+  }
+
+  const ln = clampInt(left);
+  const rn = clampInt(right);
+  if (ln === rn) {
+    return 0;
+  }
+  return ln < rn ? -1 : 1;
+}
+
+function requireArity(name: string, args: ScalarValue[], min: number, max = min): void {
+  if (args.length < min || args.length > max) {
+    throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+  }
+}
+
+function toStringValue(value: ScalarValue): string {
+  return String(value);
+}
+
+function evalBuiltinCall(name: string, args: ScalarValue[], machineAdapter?: BasicMachineAdapter): ScalarValue {
+  switch (name) {
+    case 'ABS':
+      requireArity(name, args, 1);
+      return Math.abs(toNumeric(args[0] as ScalarValue));
+    case 'INT':
+      requireArity(name, args, 1);
+      return Math.floor(toNumeric(args[0] as ScalarValue));
+    case 'SGN': {
+      requireArity(name, args, 1);
+      const value = toNumeric(args[0] as ScalarValue);
+      if (value > 0) {
+        return 1;
+      }
+      if (value < 0) {
+        return -1;
+      }
+      return 0;
+    }
+    case 'SQR':
+      requireArity(name, args, 1);
+      return clampInt(Math.sqrt(Math.max(0, toNumeric(args[0] as ScalarValue))));
+    case 'SIN':
+      requireArity(name, args, 1);
+      return clampInt(Math.sin(toNumeric(args[0] as ScalarValue)));
+    case 'COS':
+      requireArity(name, args, 1);
+      return clampInt(Math.cos(toNumeric(args[0] as ScalarValue)));
+    case 'TAN':
+      requireArity(name, args, 1);
+      return clampInt(Math.tan(toNumeric(args[0] as ScalarValue)));
+    case 'ATN':
+      requireArity(name, args, 1);
+      return clampInt(Math.atan(toNumeric(args[0] as ScalarValue)));
+    case 'RND': {
+      requireArity(name, args, 0, 1);
+      const max = args.length === 0 ? 32767 : Math.max(1, toNumeric(args[0] as ScalarValue));
+      return clampInt(Math.random() * max);
+    }
+    case 'LOG':
+    case 'LN':
+      requireArity(name, args, 1);
+      return clampInt(Math.log(Math.max(1, toNumeric(args[0] as ScalarValue))));
+    case 'EXP':
+      requireArity(name, args, 1);
+      return clampInt(Math.exp(toNumeric(args[0] as ScalarValue)));
+    case 'ASC':
+      requireArity(name, args, 1);
+      return toStringValue(args[0] as ScalarValue).charCodeAt(0) || 0;
+    case 'VAL':
+      requireArity(name, args, 1);
+      return parseIntSafeLike(toStringValue(args[0] as ScalarValue));
+    case 'LEN':
+      requireArity(name, args, 1);
+      return toStringValue(args[0] as ScalarValue).length;
+    case 'CHR$':
+      requireArity(name, args, 1);
+      return String.fromCharCode(toNumeric(args[0] as ScalarValue) & 0xff);
+    case 'STR$':
+      requireArity(name, args, 1);
+      return String(toNumeric(args[0] as ScalarValue));
+    case 'HEX$':
+      requireArity(name, args, 1);
+      return (toNumeric(args[0] as ScalarValue) >>> 0).toString(16).toUpperCase();
+    case 'INKEY$': {
+      requireArity(name, args, 0);
+      return machineAdapter?.readInkey?.() ?? '';
+    }
+    case 'LEFT$': {
+      requireArity(name, args, 2);
+      const text = toStringValue(args[0] as ScalarValue);
+      const len = Math.max(0, toNumeric(args[1] as ScalarValue));
+      return text.slice(0, len);
+    }
+    case 'RIGHT$': {
+      requireArity(name, args, 2);
+      const text = toStringValue(args[0] as ScalarValue);
+      const len = Math.max(0, toNumeric(args[1] as ScalarValue));
+      return text.slice(Math.max(0, text.length - len));
+    }
+    case 'MID$': {
+      requireArity(name, args, 2, 3);
+      const text = toStringValue(args[0] as ScalarValue);
+      const start = Math.max(1, toNumeric(args[1] as ScalarValue));
+      const length = args.length >= 3 ? Math.max(0, toNumeric(args[2] as ScalarValue)) : text.length;
+      return text.slice(start - 1, start - 1 + length);
+    }
+    default:
+      throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
+  }
+}
+
+function parseIntSafeLike(text: string): number {
+  const parsed = Number.parseInt(text.trim(), 10);
+  if (Number.isNaN(parsed)) {
+    return 0;
+  }
+  return clampInt(parsed);
+}
+
 // AST の式を評価して number|string を返す。
-export function evaluateExpression(node: ExpressionNode, contextInput: EvalContextInput): number | string {
+export function evaluateExpression(node: ExpressionNode, contextInput: EvalContextInput): ScalarValue {
   const context = normalizeContext(contextInput);
 
   switch (node.kind) {
@@ -34,10 +173,10 @@ export function evaluateExpression(node: ExpressionNode, contextInput: EvalConte
     case 'string-literal':
       return node.value;
     case 'variable-reference':
-      return clampInt(context.vars.get(node.name) ?? 0);
+      return context.vars.get(node.name) ?? (node.name.endsWith('$') ? '' : 0);
     case 'array-element-reference': {
       const indices = node.indices.map((index) => evaluateNumericExpression(index, context));
-      return clampInt(context.readArray?.(node.name, indices) ?? 0);
+      return context.readArray?.(node.name, indices) ?? (node.name.endsWith('$') ? '' : 0);
     }
     case 'inp-call-expression': {
       const port = evaluateNumericExpression(node.port, context) & 0xff;
@@ -47,44 +186,77 @@ export function evaluateExpression(node: ExpressionNode, contextInput: EvalConte
     case 'peek-call-expression': {
       const address = evaluateNumericExpression(node.address, context) & 0xffff;
       if (node.bank) {
-        // 現在は bank を受理のみし、動作は単一アドレス空間として扱う。
         evaluateNumericExpression(node.bank, context);
       }
       const value = context.machineAdapter?.peek8?.(address) ?? 0xff;
       return clampInt(value);
     }
+    case 'function-call-expression': {
+      const args = node.args.map((arg) => evaluateExpression(arg, context));
+      return evalBuiltinCall(node.name, args, context.machineAdapter);
+    }
     case 'unary-expression': {
-      const raw = evaluateNumericExpression(node.operand, context);
+      if (node.operator === 'NOT') {
+        return clampInt(~toNumeric(evaluateExpression(node.operand, context)));
+      }
+      const raw = toNumeric(evaluateExpression(node.operand, context));
       if (node.operator === '-') {
         return clampInt(-raw);
       }
       return clampInt(raw);
     }
     case 'binary-expression': {
-      const left = evaluateNumericExpression(node.left, context);
-      const right = evaluateNumericExpression(node.right, context);
+      const left = evaluateExpression(node.left, context);
+      const right = evaluateExpression(node.right, context);
 
       switch (node.operator) {
         case '+':
-          return clampInt(left + right);
+          if (typeof left === 'string' || typeof right === 'string') {
+            return `${left}${right}`;
+          }
+          return clampInt(toNumeric(left) + toNumeric(right));
         case '-':
-          return clampInt(left - right);
+          return clampInt(toNumeric(left) - toNumeric(right));
         case '*':
-          return clampInt(left * right);
-        case '/':
-          return right === 0 ? 0 : clampInt(left / right);
+          return clampInt(toNumeric(left) * toNumeric(right));
+        case '/': {
+          const rightNumeric = toNumeric(right);
+          return rightNumeric === 0 ? 0 : clampInt(toNumeric(left) / rightNumeric);
+        }
+        case '\\': {
+          const rightNumeric = toNumeric(right);
+          if (rightNumeric === 0) {
+            return 0;
+          }
+          return clampInt(toNumeric(left) / rightNumeric);
+        }
+        case '^':
+          return clampInt(Math.pow(toNumeric(left), toNumeric(right)));
+        case 'MOD': {
+          const rightNumeric = toNumeric(right);
+          if (rightNumeric === 0) {
+            return 0;
+          }
+          return clampInt(toNumeric(left) % rightNumeric);
+        }
         case '=':
-          return left === right ? 1 : 0;
+          return boolToBasic(compareValues(left, right) === 0);
         case '<>':
-          return left !== right ? 1 : 0;
+          return boolToBasic(compareValues(left, right) !== 0);
         case '<':
-          return left < right ? 1 : 0;
+          return boolToBasic(compareValues(left, right) < 0);
         case '<=':
-          return left <= right ? 1 : 0;
+          return boolToBasic(compareValues(left, right) <= 0);
         case '>':
-          return left > right ? 1 : 0;
+          return boolToBasic(compareValues(left, right) > 0);
         case '>=':
-          return left >= right ? 1 : 0;
+          return boolToBasic(compareValues(left, right) >= 0);
+        case 'AND':
+          return clampInt(toNumeric(left) & toNumeric(right));
+        case 'OR':
+          return clampInt(toNumeric(left) | toNumeric(right));
+        case 'XOR':
+          return clampInt(toNumeric(left) ^ toNumeric(right));
         default:
           return 0;
       }
@@ -96,23 +268,41 @@ export function evaluateExpression(node: ExpressionNode, contextInput: EvalConte
 
 // 数値として解釈できない式は SYNTAX として扱う。
 export function evaluateNumericExpression(node: ExpressionNode, contextInput: EvalContextInput): number {
-  const value = evaluateExpression(node, contextInput);
-  if (typeof value === 'string') {
-    throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
-  }
-  return clampInt(value);
+  return toNumeric(evaluateExpression(node, contextInput));
 }
 
 const PRINT_TAB_WIDTH = 8;
 
-function evaluatePrintValue(node: ExpressionNode, contextInput: EvalContextInput): string {
+function formatWithUsing(value: ScalarValue, usingFormat?: string): string {
+  if (!usingFormat) {
+    return typeof value === 'string' ? value : String(clampInt(value));
+  }
+
+  if (typeof value === 'string') {
+    const ampCount = usingFormat.split('').filter((ch) => ch === '&').length;
+    if (ampCount === 0) {
+      return value;
+    }
+    return value.slice(0, ampCount).padEnd(ampCount, ' ');
+  }
+
+  const digitsBefore = usingFormat.split('').filter((ch) => ch === '#').length;
+  const rendered = String(clampInt(value));
+  if (digitsBefore <= rendered.length) {
+    return rendered;
+  }
+  return rendered.padStart(digitsBefore, ' ');
+}
+
+function evaluatePrintValue(node: ExpressionNode, contextInput: EvalContextInput, usingFormat?: string): string {
   const value = evaluateExpression(node, contextInput);
-  return typeof value === 'string' ? value : String(value);
+  return formatWithUsing(value, usingFormat);
 }
 
 export function evaluatePrintItems(
   items: PrintStatement['items'],
-  contextInput: EvalContextInput
+  contextInput: EvalContextInput,
+  usingFormat?: string
 ): { text: string; suppressNewline: boolean } {
   if (items.length === 0) {
     return { text: '', suppressNewline: false };
@@ -123,7 +313,7 @@ export function evaluatePrintItems(
   let suppressNewline = false;
 
   for (const item of items) {
-    const part = evaluatePrintValue(item.expression, contextInput);
+    const part = evaluatePrintValue(item.expression, contextInput, usingFormat);
     text += part;
     column += part.length;
 

@@ -288,6 +288,8 @@ export class PCG815Machine implements MachinePCG815, Bus {
 
   private readonly frameBuffer = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
 
+  private readonly graphicsPlane = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
+
   private readonly keyboardRows = new Uint8Array(8);
 
   private readonly pressedCodes = new Set<string>();
@@ -310,6 +312,18 @@ export class PCG815Machine implements MachinePCG815, Bus {
 
   private elapsedTStates = 0;
   private wasRuntimeProgramRunning = false;
+
+  private printWaitTicks = 0;
+  private printPauseMode = false;
+
+  private graphicCursorX = 0;
+  private graphicCursorY = 0;
+
+  private readonly printerLines: string[] = [];
+
+  private readonly files = new Map<string, string[]>();
+  private readonly openFiles = new Map<number, { path: string; mode: 'INPUT' | 'OUTPUT' | 'APPEND'; cursor: number }>();
+  private nextFileHandle = 1;
 
   constructor(options?: PCG815MachineOptions) {
     const monitorRom = options?.rom ?? createMonitorRom();
@@ -334,6 +348,8 @@ export class PCG815Machine implements MachinePCG815, Bus {
       this.seedBootstrapInMainRam();
       this.iconVram.fill(0);
       this.textVram.fill(SPACE_CODE);
+      this.graphicsPlane.fill(0);
+      this.files.clear();
     }
 
     this.keyboardRows.fill(0xff);
@@ -346,6 +362,13 @@ export class PCG815Machine implements MachinePCG815, Bus {
     this.lcdCursor = 0;
     this.romBankSelect = 0;
     this.expansionControl = 0;
+    this.printWaitTicks = 0;
+    this.printPauseMode = false;
+    this.graphicCursorX = 0;
+    this.graphicCursorY = 0;
+    this.printerLines.length = 0;
+    this.openFiles.clear();
+    this.nextFileHandle = 1;
 
     this.runtime.reset(cold);
     this.cpu.reset();
@@ -767,6 +790,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
     // 現状は CLS とカーソル設定のみを実装。
     if (command === 0x01) {
       this.textVram.fill(SPACE_CODE);
+      this.graphicsPlane.fill(0);
       this.lcdCursor = 0;
       this.dirtyFrame = true;
       return;
@@ -869,7 +893,157 @@ export class PCG815Machine implements MachinePCG815, Bus {
       }
     }
 
+    for (let index = 0; index < this.graphicsPlane.length; index += 1) {
+      if (this.graphicsPlane[index] !== 0) {
+        this.frameBuffer[index] = 1;
+      }
+    }
+
     this.dirtyFrame = false;
+  }
+
+  private setGraphicsPixel(x: number, y: number, mode = 1): void {
+    const ix = Math.trunc(x);
+    const iy = Math.trunc(y);
+    if (ix < 0 || ix >= LCD_WIDTH || iy < 0 || iy >= LCD_HEIGHT) {
+      return;
+    }
+
+    const offset = iy * LCD_WIDTH + ix;
+    if (mode === 0) {
+      this.graphicsPlane[offset] = 0;
+    } else if (mode === 2) {
+      this.graphicsPlane[offset] = this.graphicsPlane[offset] ? 0 : 1;
+    } else {
+      this.graphicsPlane[offset] = 1;
+    }
+
+    this.dirtyFrame = true;
+  }
+
+  private drawGraphicsLine(x1: number, y1: number, x2: number, y2: number, mode = 1): void {
+    let cx = Math.trunc(x1);
+    let cy = Math.trunc(y1);
+    const tx = Math.trunc(x2);
+    const ty = Math.trunc(y2);
+
+    const dx = Math.abs(tx - cx);
+    const sx = cx < tx ? 1 : -1;
+    const dy = -Math.abs(ty - cy);
+    const sy = cy < ty ? 1 : -1;
+    let err = dx + dy;
+
+    while (true) {
+      this.setGraphicsPixel(cx, cy, mode);
+      if (cx === tx && cy === ty) {
+        break;
+      }
+      const e2 = err * 2;
+      if (e2 >= dy) {
+        err += dy;
+        cx += sx;
+      }
+      if (e2 <= dx) {
+        err += dx;
+        cy += sy;
+      }
+    }
+  }
+
+  private fillGraphicsArea(x: number, y: number, pattern = 6): void {
+    const sx = Math.trunc(x);
+    const sy = Math.trunc(y);
+    if (sx < 0 || sx >= LCD_WIDTH || sy < 0 || sy >= LCD_HEIGHT) {
+      return;
+    }
+
+    const seedOffset = sy * LCD_WIDTH + sx;
+    const target = this.graphicsPlane[seedOffset] ? 1 : 0;
+    const queue: number[] = [seedOffset];
+    const visited = new Uint8Array(this.graphicsPlane.length);
+
+    const shouldPaint = (px: number, py: number): boolean => {
+      if (pattern <= 1 || pattern >= 6) {
+        return true;
+      }
+      const sum = Math.abs(px + py);
+      return sum % pattern === 0;
+    };
+
+    while (queue.length > 0) {
+      const offset = queue.pop();
+      if (offset === undefined || visited[offset]) {
+        continue;
+      }
+      visited[offset] = 1;
+
+      if ((this.graphicsPlane[offset] ? 1 : 0) !== target) {
+        continue;
+      }
+
+      const px = offset % LCD_WIDTH;
+      const py = Math.trunc(offset / LCD_WIDTH);
+      if (shouldPaint(px, py)) {
+        this.graphicsPlane[offset] = 1;
+      }
+
+      if (px > 0) {
+        queue.push(offset - 1);
+      }
+      if (px + 1 < LCD_WIDTH) {
+        queue.push(offset + 1);
+      }
+      if (py > 0) {
+        queue.push(offset - LCD_WIDTH);
+      }
+      if (py + 1 < LCD_HEIGHT) {
+        queue.push(offset + LCD_WIDTH);
+      }
+    }
+
+    this.dirtyFrame = true;
+  }
+
+  private drawGraphicsText(text: string): void {
+    for (const ch of text) {
+      const code = ch.charCodeAt(0) & 0xff;
+      if (code === 0x0d) {
+        this.graphicCursorX = 0;
+        continue;
+      }
+      if (code === 0x0a) {
+        this.graphicCursorX = 0;
+        this.graphicCursorY += LCD_GLYPH_PITCH_Y;
+        continue;
+      }
+
+      const glyph = getGlyphForCode(code);
+      for (let y = 0; y < LCD_GLYPH_HEIGHT; y += 1) {
+        const bits = glyph[y] ?? 0;
+        for (let x = 0; x < LCD_GLYPH_WIDTH; x += 1) {
+          if (((bits >> (LCD_GLYPH_WIDTH - 1 - x)) & 0x01) === 0) {
+            continue;
+          }
+          this.setGraphicsPixel(this.graphicCursorX + x, this.graphicCursorY + y, 1);
+        }
+      }
+
+      this.graphicCursorX += LCD_GLYPH_PITCH_X;
+      if (this.graphicCursorX + LCD_GLYPH_WIDTH >= LCD_WIDTH) {
+        this.graphicCursorX = 0;
+        this.graphicCursorY += LCD_GLYPH_PITCH_Y;
+      }
+      if (this.graphicCursorY + LCD_GLYPH_HEIGHT >= LCD_HEIGHT) {
+        this.graphicCursorY = 0;
+      }
+    }
+  }
+
+  private normalizeFilePath(path: string): string {
+    if (path.startsWith('E:') || path.startsWith('e:')) {
+      return path.slice(2);
+    }
+    return path;
   }
 
   private createBasicMachineAdapter(): BasicMachineAdapter {
@@ -897,6 +1071,86 @@ export class PCG815Machine implements MachinePCG815, Bus {
       out8: (port: number, value: number) => this.runtimeOut8(port, value),
       peek8: (address: number) => this.read8(address),
       poke8: (address: number, value: number) => this.write8(address, value),
+      waitForEnterKey: () => {},
+      setPrintWait: (ticks: number, pauseMode: boolean) => {
+        this.printWaitTicks = Math.max(0, Math.trunc(ticks));
+        this.printPauseMode = pauseMode;
+      },
+      openFile: (path: string, mode: 'INPUT' | 'OUTPUT' | 'APPEND') => {
+        const normalizedPath = this.normalizeFilePath(path);
+        if (mode === 'OUTPUT') {
+          this.files.set(normalizedPath, []);
+        } else if (!this.files.has(normalizedPath)) {
+          this.files.set(normalizedPath, []);
+        }
+
+        const handle = this.nextFileHandle;
+        this.nextFileHandle += 1;
+        this.openFiles.set(handle, { path: normalizedPath, mode, cursor: 0 });
+        return handle;
+      },
+      closeFile: (handle: number) => {
+        this.openFiles.delete(Math.trunc(handle));
+      },
+      readFileValue: (handle: number) => {
+        const state = this.openFiles.get(Math.trunc(handle));
+        if (!state) {
+          return null;
+        }
+        const lines = this.files.get(state.path) ?? [];
+        const value = lines[state.cursor];
+        if (value === undefined) {
+          return null;
+        }
+        state.cursor += 1;
+        return value;
+      },
+      writeFileValue: (handle: number, value: string | number) => {
+        const state = this.openFiles.get(Math.trunc(handle));
+        if (!state) {
+          return;
+        }
+
+        const lines = this.files.get(state.path) ?? [];
+        const text = String(value);
+        if (state.mode === 'APPEND') {
+          lines.push(text);
+        } else if (state.mode === 'OUTPUT') {
+          lines[state.cursor] = text;
+          state.cursor += 1;
+        }
+
+        this.files.set(state.path, lines);
+      },
+      listFiles: () => [...this.files.keys()].sort((a, b) => a.localeCompare(b)).map((path) => `E:${path}`),
+      deleteFile: (path: string) => this.files.delete(this.normalizeFilePath(path)),
+      printDeviceWrite: (text: string) => {
+        this.printerLines.push(text);
+      },
+      callMachine: (_address: number, _args: number[]) => 0,
+      setGraphicCursor: (x: number, y: number) => {
+        this.graphicCursorX = Math.max(0, Math.min(LCD_WIDTH - 1, Math.trunc(x)));
+        this.graphicCursorY = Math.max(0, Math.min(LCD_HEIGHT - 1, Math.trunc(y)));
+      },
+      drawLine: (x1: number, y1: number, x2: number, y2: number, mode = 1) => {
+        this.drawGraphicsLine(x1, y1, x2, y2, mode);
+      },
+      drawPoint: (x: number, y: number, mode = 1) => {
+        this.setGraphicsPixel(x, y, mode);
+      },
+      paintArea: (x: number, y: number, pattern = 6) => {
+        this.fillGraphicsArea(x, y, pattern);
+      },
+      printGraphicText: (text: string) => {
+        this.drawGraphicsText(text);
+      },
+      readInkey: () => {
+        const code = this.asciiQueue.shift();
+        if (code === undefined) {
+          return null;
+        }
+        return String.fromCharCode(code & 0xff);
+      },
       // 非ブロッキング方針: WAIT/BEEP でメインスレッドを塞がない。
       sleepMs: (_ms: number) => {}
     };
