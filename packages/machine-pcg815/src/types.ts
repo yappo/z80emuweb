@@ -35,6 +35,7 @@ export interface MachinePCG815 {
   reset(cold: boolean): void;
   loadProgram(bytes: Uint8Array | readonly number[], origin: number): void;
   setProgramCounter(entry: number): void;
+  setStackPointer(value: number): void;
   getRamRange(): { start: number; end: number };
 }
 

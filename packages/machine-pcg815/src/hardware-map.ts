@@ -26,34 +26,39 @@ export interface MemoryRegionSpec extends EvidenceBoundSpec {
 
 export type IoDirection = 'in' | 'out' | 'inout';
 export type IoBehavior =
-  | 'keyboard-row-select'
-  | 'keyboard-row-data'
-  | 'keyboard-ascii-fifo'
-  | 'interrupt-control'
+  | 'keyboard-matrix'
+  | 'system-control'
   | 'bank-control'
+  | 'battery-control'
   | 'lcd-command'
   | 'lcd-data'
   | 'lcd-status'
-  | 'runtime-channel'
   | 'reserved';
 
 export type IoPortId =
-  | 'kbd-row-select'
-  | 'kbd-row-data'
-  | 'kbd-ascii-fifo'
-  | 'int-ctrl-13'
-  | 'int-ctrl-14'
-  | 'int-ctrl-15'
-  | 'int-ctrl-16'
-  | 'int-ctrl-17'
-  | 'int-ctrl-18'
-  | 'bank-rom-select'
-  | 'int-ctrl-1a'
-  | 'bank-expansion-control'
-  | 'runtime-input'
-  | 'runtime-output'
-  | 'reserved-1e'
-  | 'reserved-1f'
+  | 'sys-10'
+  | 'sys-11'
+  | 'sys-12'
+  | 'sys-13'
+  | 'sys-14'
+  | 'sys-15'
+  | 'sys-16'
+  | 'sys-17'
+  | 'sys-18'
+  | 'sys-19'
+  | 'sys-1a'
+  | 'sys-1b'
+  | 'sys-1c'
+  | 'sys-1d'
+  | 'sys-1e'
+  | 'sys-1f'
+  | 'lcd-command-dual'
+  | 'lcd-status-dual'
+  | 'lcd-data-dual'
+  | 'lcd-command-secondary'
+  | 'lcd-status-secondary'
+  | 'lcd-data-secondary'
+  | 'lcd-read-secondary'
   | 'lcd-command'
   | 'lcd-status-mirror'
   | 'lcd-data'
@@ -140,248 +145,36 @@ export const PCG815_MEMORY_MAP: readonly MemoryRegionSpec[] = [
   }
 ];
 
-// I/O ポートは推定を含むため evidence を必須にしている。
+// I/O ポートは PC-G815 実装範囲のみ定義する。
 export const PCG815_IO_MAP: readonly IoPortSpec[] = [
-  {
-    id: 'kbd-row-select',
-    name: 'Keyboard Row Select',
-    port: 0x10,
-    direction: 'out',
-    behavior: 'keyboard-row-select',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['akiyan-g850-tech', 'ver0-doc-index', 'ver0-root'],
-    notes: 'Row index register for active-low keyboard matrix scan.'
-  },
-  {
-    id: 'kbd-row-data',
-    name: 'Keyboard Row Data',
-    port: 0x11,
-    direction: 'in',
-    behavior: 'keyboard-row-data',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['akiyan-g850-tech', 'ver0-doc-index', 'ver0-root'],
-    notes: 'Returns selected keyboard row bits (active-low).'
-  },
-  {
-    id: 'kbd-ascii-fifo',
-    name: 'Keyboard ASCII FIFO',
-    port: 0x12,
-    direction: 'in',
-    behavior: 'keyboard-ascii-fifo',
-    defaultInValue: 0x00,
-    confidence: 'HYPOTHESIS',
-    status: 'TBD',
-    evidence: ['ver0-js', 'ver0-root'],
-    notes: 'Compatibility helper FIFO used by the monitor runtime.'
-  },
-  {
-    id: 'int-ctrl-13',
-    name: 'Interrupt/Control Reserved',
-    port: 0x13,
-    direction: 'inout',
-    behavior: 'interrupt-control',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['ver0-doc-index', 'mame-pce220-metadata'],
-    notes: 'Reserved placeholder in the 0x10-0x1F control block.'
-  },
-  {
-    id: 'int-ctrl-14',
-    name: 'Interrupt/Control Reserved',
-    port: 0x14,
-    direction: 'inout',
-    behavior: 'interrupt-control',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['ver0-doc-index', 'mame-pce220-metadata'],
-    notes: 'Reserved placeholder in the 0x10-0x1F control block.'
-  },
-  {
-    id: 'int-ctrl-15',
-    name: 'Interrupt/Control Reserved',
-    port: 0x15,
-    direction: 'inout',
-    behavior: 'interrupt-control',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['ver0-doc-index', 'mame-pce220-metadata'],
-    notes: 'Reserved placeholder in the 0x10-0x1F control block.'
-  },
-  {
-    id: 'int-ctrl-16',
-    name: 'Interrupt/Control Reserved',
-    port: 0x16,
-    direction: 'inout',
-    behavior: 'interrupt-control',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['ver0-doc-index', 'mame-pce220-metadata'],
-    notes: 'Reserved placeholder in the 0x10-0x1F control block.'
-  },
-  {
-    id: 'int-ctrl-17',
-    name: 'Interrupt/Control Reserved',
-    port: 0x17,
-    direction: 'inout',
-    behavior: 'interrupt-control',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['ver0-doc-index', 'mame-pce220-metadata'],
-    notes: 'Reserved placeholder in the 0x10-0x1F control block.'
-  },
-  {
-    id: 'int-ctrl-18',
-    name: 'Interrupt/Control Reserved',
-    port: 0x18,
-    direction: 'inout',
-    behavior: 'interrupt-control',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['ver0-doc-index', 'mame-pce220-metadata'],
-    notes: 'Reserved placeholder in the 0x10-0x1F control block.'
-  },
-  {
-    id: 'bank-rom-select',
-    name: 'ROM Bank Select (Candidate)',
-    port: 0x19,
-    direction: 'out',
-    behavior: 'bank-control',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['akiyan-g850-tech', 'mame-pce220-metadata', 'wikipedia-pce220'],
-    notes: 'Candidate register for bank/window control.'
-  },
-  {
-    id: 'int-ctrl-1a',
-    name: 'Interrupt/Control Reserved',
-    port: 0x1a,
-    direction: 'inout',
-    behavior: 'interrupt-control',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['ver0-doc-index', 'mame-pce220-metadata'],
-    notes: 'Reserved placeholder in the 0x10-0x1F control block.'
-  },
-  {
-    id: 'bank-expansion-control',
-    name: 'Expansion RAM Control (Candidate)',
-    port: 0x1b,
-    direction: 'out',
-    behavior: 'bank-control',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['akiyan-g850-tech', 'mame-pce220-metadata', 'wikipedia-pce220'],
-    notes: 'Candidate register for RAM expansion mapping.'
-  },
-  {
-    id: 'runtime-input',
-    name: 'Runtime Input Channel',
-    port: 0x1c,
-    direction: 'out',
-    behavior: 'runtime-channel',
-    defaultInValue: 0xff,
-    confidence: 'HYPOTHESIS',
-    status: 'TBD',
-    evidence: ['ver0-js', 'ver0-root'],
-    notes: 'Emulator helper channel for monitor runtime input.'
-  },
-  {
-    id: 'runtime-output',
-    name: 'Runtime Output Channel',
-    port: 0x1d,
-    direction: 'in',
-    behavior: 'runtime-channel',
-    defaultInValue: 0x00,
-    confidence: 'HYPOTHESIS',
-    status: 'TBD',
-    evidence: ['ver0-js', 'ver0-root'],
-    notes: 'Emulator helper channel for monitor runtime output.'
-  },
-  {
-    id: 'reserved-1e',
-    name: 'Reserved Control',
-    port: 0x1e,
-    direction: 'inout',
-    behavior: 'reserved',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['ver0-doc-index', 'mame-pce220-metadata'],
-    notes: 'Unimplemented control register in 0x10-0x1F block.'
-  },
-  {
-    id: 'reserved-1f',
-    name: 'Reserved Control',
-    port: 0x1f,
-    direction: 'inout',
-    behavior: 'reserved',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['ver0-doc-index', 'mame-pce220-metadata'],
-    notes: 'Unimplemented control register in 0x10-0x1F block.'
-  },
-  {
-    id: 'lcd-command',
-    name: 'LCD Command',
-    port: 0x58,
-    direction: 'out',
-    behavior: 'lcd-command',
-    defaultInValue: 0xff,
-    confidence: 'CONFIRMED',
-    status: 'LOCKED',
-    evidence: ['z88dk-platform-sharp-pc', 'pokecom-basic-samples'],
-    notes: 'LCD command port observed in community BASIC examples.'
-  },
-  {
-    id: 'lcd-status-mirror',
-    name: 'LCD Status (Mirror Candidate)',
-    port: 0x59,
-    direction: 'in',
-    behavior: 'lcd-status',
-    defaultInValue: 0xff,
-    confidence: 'HYPOTHESIS',
-    status: 'TBD',
-    evidence: ['pokecom-basic-samples', 'ver0-doc-index'],
-    notes: 'Mirror/alternate status read candidate.'
-  },
-  {
-    id: 'lcd-data',
-    name: 'LCD Data',
-    port: 0x5a,
-    direction: 'out',
-    behavior: 'lcd-data',
-    defaultInValue: 0xff,
-    confidence: 'CONFIRMED',
-    status: 'LOCKED',
-    evidence: ['z88dk-platform-sharp-pc', 'pokecom-basic-samples'],
-    notes: 'LCD data write port observed in community BASIC examples.'
-  },
-  {
-    id: 'lcd-status',
-    name: 'LCD Status',
-    port: 0x5b,
-    direction: 'in',
-    behavior: 'lcd-status',
-    defaultInValue: 0xff,
-    confidence: 'DERIVED',
-    status: 'TBD',
-    evidence: ['ver0-doc-index', 'mame-pce220-metadata'],
-    notes: 'Status read-back candidate used in compatibility mode.'
-  }
+  { id: 'sys-10', name: 'System Port 0x10', port: 0x10, direction: 'in', behavior: 'keyboard-matrix', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Keyboard matrix read based on key strobe.' },
+  { id: 'sys-11', name: 'System Port 0x11', port: 0x11, direction: 'inout', behavior: 'keyboard-matrix', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Key strobe lower register.' },
+  { id: 'sys-12', name: 'System Port 0x12', port: 0x12, direction: 'inout', behavior: 'keyboard-matrix', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Key strobe upper register.' },
+  { id: 'sys-13', name: 'System Port 0x13', port: 0x13, direction: 'inout', behavior: 'system-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Shift key state read / output no-op.' },
+  { id: 'sys-14', name: 'System Port 0x14', port: 0x14, direction: 'inout', behavior: 'system-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Timer read / clear.' },
+  { id: 'sys-15', name: 'System Port 0x15', port: 0x15, direction: 'inout', behavior: 'system-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Xin enable control (bit7).' },
+  { id: 'sys-16', name: 'System Port 0x16', port: 0x16, direction: 'inout', behavior: 'system-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Interrupt cause read / clear bits on write.' },
+  { id: 'sys-17', name: 'System Port 0x17', port: 0x17, direction: 'inout', behavior: 'system-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Interrupt mask read / write.' },
+  { id: 'sys-18', name: 'System Port 0x18', port: 0x18, direction: 'inout', behavior: 'system-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: '11-pin IF output control.' },
+  { id: 'sys-19', name: 'System Port 0x19', port: 0x19, direction: 'inout', behavior: 'bank-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'ROM/EXROM bank register.' },
+  { id: 'sys-1a', name: 'System Port 0x1A', port: 0x1a, direction: 'inout', behavior: 'system-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'BOOT ROM control (currently no-op).' },
+  { id: 'sys-1b', name: 'System Port 0x1B', port: 0x1b, direction: 'inout', behavior: 'bank-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'RAM bank register.' },
+  { id: 'sys-1c', name: 'System Port 0x1C', port: 0x1c, direction: 'out', behavior: 'system-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'I/O reset value write.' },
+  { id: 'sys-1d', name: 'System Port 0x1D', port: 0x1d, direction: 'in', behavior: 'battery-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Battery status input (returns 0x00 in current implementation).' },
+  { id: 'sys-1e', name: 'System Port 0x1E', port: 0x1e, direction: 'inout', behavior: 'battery-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Battery check mode register.' },
+  { id: 'sys-1f', name: 'System Port 0x1F', port: 0x1f, direction: 'inout', behavior: 'system-control', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: '11-pin IF input / output no-op.' },
+
+  { id: 'lcd-command-dual', name: 'LCD Command (Dual)', port: 0x50, direction: 'out', behavior: 'lcd-command', defaultInValue: 0x78, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Apply command to both LCD areas.' },
+  { id: 'lcd-status-dual', name: 'LCD Status (Dual)', port: 0x51, direction: 'in', behavior: 'lcd-status', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Currently fixed 0x00.' },
+  { id: 'lcd-data-dual', name: 'LCD Data (Dual Write)', port: 0x52, direction: 'out', behavior: 'lcd-data', defaultInValue: 0x78, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Writes through both 0x56 and 0x5A paths.' },
+  { id: 'lcd-command-secondary', name: 'LCD Command (Secondary)', port: 0x54, direction: 'out', behavior: 'lcd-command', defaultInValue: 0x78, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Apply command to secondary LCD area.' },
+  { id: 'lcd-status-secondary', name: 'LCD Status (Secondary)', port: 0x55, direction: 'in', behavior: 'lcd-status', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Currently fixed 0x00.' },
+  { id: 'lcd-data-secondary', name: 'LCD Data (Secondary)', port: 0x56, direction: 'out', behavior: 'lcd-data', defaultInValue: 0x78, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Write data to secondary LCD area.' },
+  { id: 'lcd-read-secondary', name: 'LCD Read (Secondary)', port: 0x57, direction: 'in', behavior: 'lcd-status', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Read data from secondary LCD area with dummy-first behavior.' },
+  { id: 'lcd-command', name: 'LCD Command', port: 0x58, direction: 'out', behavior: 'lcd-command', defaultInValue: 0x78, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Apply command to primary LCD area.' },
+  { id: 'lcd-status-mirror', name: 'LCD Status Mirror', port: 0x59, direction: 'in', behavior: 'lcd-status', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Currently fixed 0x00.' },
+  { id: 'lcd-data', name: 'LCD Data', port: 0x5a, direction: 'out', behavior: 'lcd-data', defaultInValue: 0x78, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'Write data to primary LCD area.' },
+  { id: 'lcd-status', name: 'LCD Status', port: 0x5b, direction: 'in', behavior: 'lcd-status', defaultInValue: 0x00, confidence: 'CONFIRMED', status: 'TBD', evidence: ['ver0-doc-index'], notes: 'LCD data read with dummy-first behavior.' }
 ];
 
 // 実機 RAM 上のワークエリア候補。
@@ -437,7 +230,6 @@ export function findIoPortSpec(port: number): IoPortSpec | undefined {
 }
 
 export function validateHardwareMap(): HardwareMapValidationResult {
-  // 起動時に自己検証し、定義矛盾を早期検知する。
   const errors: string[] = [];
 
   const regions = [...PCG815_MEMORY_MAP].sort((a, b) => a.start - b.start);

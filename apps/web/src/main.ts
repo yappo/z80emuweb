@@ -189,7 +189,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 115 GOSUB 9500
 120 IF N>5 THEN 9000
 130 GOSUB 7000
-140 LET SE=INP(18)+INP(17)+PEEK(0)+N
+140 LET SE=INP(18)+INP(16)+PEEK(0)+N
 150 IF SE<>0 THEN 170
 160 LET SE=37+N
 170 GOSUB 2000
@@ -261,21 +261,21 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 1060 RETURN
 1070 RETURN
 1600 LET D=0
-1610 OUT 16,0
-1620 LET R=INP(17)
+1610 OUT 17,1
+1620 LET R=INP(16)
 1630 IF R=254 THEN 1810
 1640 IF R=247 THEN 1830
-1650 OUT 16,2
-1660 LET R=INP(17)
+1650 OUT 17,4
+1660 LET R=INP(16)
 1670 IF R=191 THEN 1850
 1680 IF R=251 THEN 1870
-1690 OUT 16,7
-1700 LET R=INP(17)
+1690 OUT 17,128
+1700 LET R=INP(16)
 1710 IF R=127 THEN 1810
 1720 IF R=223 THEN 1850
 1730 IF R=191 THEN 1870
-1740 OUT 16,6
-1750 LET R=INP(17)
+1740 OUT 17,64
+1750 LET R=INP(16)
 1760 IF R=254 THEN 1830
 1770 RETURN
 1810 LET D=1
@@ -414,8 +414,8 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 7310 RETURN
 7400 LET SP=0
 7410 LET Q=0
-7420 OUT 16,7
-7430 LET R=INP(17)
+7420 OUT 17,128
+7430 LET R=INP(16)
 7440 IF R=239 THEN 7460
 7450 GOTO 7480
 7460 LET Q=1
@@ -523,32 +523,204 @@ const ASM_SAMPLE = `ORG 0x0200
 ENTRY START
 
 START:
-  LD HL,BUFFER
-  LD B,16
-  XOR A
+  LD A,0x40
+  OUT (0x58),A
+  LD A,0x80
+  OUT (0x58),A
+  LD HL,PROMPT_IN
+  CALL PRINT_STR
 
-SUM_LOOP:
-  ADD A,(HL)
-  INC HL
-  DJNZ SUM_LOOP
+  LD HL,BUFFER
+  XOR A
+  LD (LEN),A
+
+READ_LOOP:
+  PUSH HL
+  CALL READ_KEY
+  POP HL
+  CP 0x0D
+  JR Z,INPUT_DONE
+  CP 0x08
+  JR Z,HANDLE_BS
 
   LD C,A
-  LD A,'S'
-  OUT (0x1C),A
-  LD A,'U'
-  OUT (0x1C),A
-  LD A,'M'
-  OUT (0x1C),A
-  LD A,':'
-  OUT (0x1C),A
-  LD A,' '
-  OUT (0x1C),A
+  LD A,(LEN)
+  CP 24
+  JR NC,READ_LOOP
   LD A,C
-  OUT (0x1C),A
-  HALT
+  LD (HL),A
+  INC HL
+  LD A,(LEN)
+  INC A
+  LD (LEN),A
+  LD A,C
+  OUT (0x5A),A
+  JR READ_LOOP
 
+HANDLE_BS:
+  LD A,(LEN)
+  OR A
+  JR Z,READ_LOOP
+  DEC HL
+  DEC A
+  LD (LEN),A
+  LD A,0x08
+  OUT (0x5A),A
+  JR READ_LOOP
+
+INPUT_DONE:
+  LD A,0x0D
+  OUT (0x5A),A
+  LD A,0x0A
+  OUT (0x5A),A
+  LD HL,PROMPT_OUT
+  CALL PRINT_STR
+
+  LD A,(LEN)
+  OR A
+  JR Z,PRINT_EOL
+  LD B,A
+  LD HL,BUFFER
+  LD E,A
+  LD D,0
+  ADD HL,DE
+  DEC HL
+
+REV_LOOP:
+  LD A,(HL)
+  OUT (0x5A),A
+  DEC HL
+  DJNZ REV_LOOP
+
+PRINT_EOL:
+  LD A,0x0D
+  OUT (0x5A),A
+  LD A,0x0A
+  OUT (0x5A),A
+
+DONE:
+  RET
+
+PRINT_STR:
+  LD A,(HL)
+  OR A
+  RET Z
+  OUT (0x5A),A
+  INC HL
+  JR PRINT_STR
+
+READ_KEY:
+WAIT_CLEAR:
+  CALL SCAN_KEY
+  JR NZ,WAIT_CLEAR
+WAIT_PRESS:
+  CALL SCAN_KEY
+  JR Z,WAIT_PRESS
+  RET
+
+SCAN_KEY:
+  LD A,0x80
+  OUT (0x11),A
+  IN A,(0x10)
+  LD B,0
+  BIT 0,A
+  JR Z,SHIFT_ON
+  BIT 1,A
+  JR NZ,SHIFT_DONE
+SHIFT_ON:
+  LD B,1
+SHIFT_DONE:
+  LD C,0x01
+  LD D,0x00
+
+SCAN_ROW:
+  LD A,C
+  OUT (0x11),A
+  IN A,(0x10)
+  CPL
+  AND 0xFF
+  JR NZ,ROW_HIT
+  INC D
+  SLA C
+  JR NZ,SCAN_ROW
+  XOR A
+  RET
+
+ROW_HIT:
+  LD E,0
+  BIT 0,A
+  JR NZ,COL_FOUND
+  INC E
+  BIT 1,A
+  JR NZ,COL_FOUND
+  INC E
+  BIT 2,A
+  JR NZ,COL_FOUND
+  INC E
+  BIT 3,A
+  JR NZ,COL_FOUND
+  INC E
+  BIT 4,A
+  JR NZ,COL_FOUND
+  INC E
+  BIT 5,A
+  JR NZ,COL_FOUND
+  INC E
+  BIT 6,A
+  JR NZ,COL_FOUND
+  INC E
+  BIT 7,A
+  JR NZ,COL_FOUND
+  XOR A
+  RET
+
+COL_FOUND:
+  LD A,D
+  ADD A,A
+  ADD A,A
+  ADD A,A
+  ADD A,E
+  LD E,A
+  LD D,0
+  LD HL,NORMAL_TABLE
+  LD A,B
+  OR A
+  JR Z,TABLE_OK
+  LD HL,SHIFT_TABLE
+TABLE_OK:
+  ADD HL,DE
+  LD A,(HL)
+  OR A
+  RET
+
+PROMPT_IN:
+  DB "Input Word: ",0
+PROMPT_OUT:
+  DB "Reversed: ",0
+LEN:
+  DB 0
 BUFFER:
-  DB 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16`;
+  DS 24,0
+
+NORMAL_TABLE:
+  DB 0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48
+  DB 0x49,0x4A,0x4B,0x4C,0x4D,0x4E,0x4F,0x50
+  DB 0x51,0x52,0x53,0x54,0x55,0x56,0x57,0x58
+  DB 0x59,0x5A,0x3B,0x27,0x5B,0x5D,0x5C,0x60
+  DB 0x09,0x1B,0x08,0x00,0x00,0x00,0x00,0x00
+  DB 0x37,0x38,0x39,0x2D,0x3D,0x2C,0x2E,0x2F
+  DB 0x00,0x30,0x31,0x32,0x33,0x34,0x35,0x36
+  DB 0x00,0x00,0x0D,0x08,0x20,0x00,0x00,0x00
+
+SHIFT_TABLE:
+  DB 0x61,0x62,0x63,0x64,0x65,0x66,0x67,0x68
+  DB 0x69,0x6A,0x6B,0x6C,0x6D,0x6E,0x6F,0x70
+  DB 0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78
+  DB 0x79,0x7A,0x3A,0x22,0x7B,0x7D,0x7C,0x7E
+  DB 0x09,0x1B,0x08,0x00,0x00,0x00,0x00,0x00
+  DB 0x26,0x2A,0x28,0x5F,0x2B,0x3C,0x3E,0x3F
+  DB 0x00,0x29,0x21,0x40,0x23,0x24,0x25,0x5E
+  DB 0x00,0x00,0x0D,0x08,0x20,0x00,0x00,0x00`;
 let basicRunInFlight = false;
 let basicRunToken = 0;
 let asmRunInFlight = false;
@@ -666,11 +838,17 @@ function resolveKeyboardCode(event: KeyboardEvent): string | undefined {
   return undefined;
 }
 
-function injectBasicLine(line: string): void {
-  for (const ch of line) {
-    machine.out8(0x1c, ch.charCodeAt(0) & 0xff);
+function drainRuntimeOutputQueue(): void {
+  while (machine.runtime.popOutputChar() !== 0) {
+    // Discard pending monitor output bytes.
   }
-  machine.out8(0x1c, 0x0d);
+}
+
+function injectBasicLine(line: string, options?: { discardOutput?: boolean }): void {
+  machine.runtime.executeLine(line);
+  if (options?.discardOutput) {
+    drainRuntimeOutputQueue();
+  }
   machine.tick(40_000);
   renderLcd();
 }
@@ -697,12 +875,14 @@ async function runBasicProgram(
     const lines = normalizeProgramSource(source);
 
     if (resetProgram) {
-      injectBasicLine('NEW');
+      injectBasicLine('NEW', { discardOutput: true });
     }
     for (const line of lines) {
-      injectBasicLine(line);
+      injectBasicLine(line, { discardOutput: true });
     }
-    injectBasicLine('RUN');
+    machine.runtime.runProgram(10_000, true, undefined, true);
+    machine.tick(40_000);
+    renderLcd();
 
     const timeoutMs = 20_000;
     const start = performance.now();
@@ -724,12 +904,11 @@ async function runBasicProgram(
       await waitForAnimationFrame();
     }
 
-    const text = machine.getTextLines();
-    const errorLine = text.find((line) => line.includes('ERR '));
-    if (errorLine) {
-      setProgramRunStatus('failed', `Failed: ${errorLine}`);
-      appendLog(`BASIC RUN failed ${errorLine}`);
-      return { ok: false, errorLine };
+    const runtimeError = machine.runtime.getLastProgramError();
+    if (runtimeError) {
+      setProgramRunStatus('failed', `Failed: ${runtimeError}`);
+      appendLog(`BASIC RUN failed ${runtimeError}`);
+      return { ok: false, errorLine: runtimeError };
     }
 
     setProgramRunStatus('ok', 'Run OK');
@@ -756,6 +935,24 @@ function setEditorMode(mode: EditorMode): void {
 
 function setAsmDumpText(text: string): void {
   asmDumpView.textContent = text;
+}
+
+function isAddressInRange(addr: number, origin: number, size: number): boolean {
+  // TODO: This is a temporary web-runner completion heuristic.
+  // Z80 PC/SP are 16-bit and wrap around naturally; completion should eventually
+  // be driven by a machine/runtime-level execution lifecycle instead of address range checks.
+  const a = addr & 0xffff;
+  const start = origin & 0xffff;
+  const count = Math.max(0, size | 0);
+  if (count === 0) {
+    return false;
+  }
+  const end = start + count;
+  if (end <= 0x10000) {
+    return a >= start && a < end;
+  }
+  const wrappedEnd = end & 0xffff;
+  return a >= start || a < wrappedEnd;
 }
 
 function assembleAsmSource(source: string): { ok: boolean; errorLine?: string; dump: string } {
@@ -792,6 +989,8 @@ function assembleAsmSource(source: string): { ok: boolean; errorLine?: string; d
 }
 
 async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
+  // Current UI behavior: after ASM RUN completion, the machine state may not
+  // return to normal interactive mode automatically. Users should press Reset.
   if (asmRunInFlight) {
     return { ok: false, errorLine: 'RUN ALREADY IN PROGRESS' };
   }
@@ -802,18 +1001,21 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
   appendLog('ASM RUN start');
 
   try {
-    const build: { ok: boolean; errorLine?: string } =
+    const buildResult: { ok: boolean; errorLine?: string } =
       !asmBuildCache || asmBuildCache.source !== source ? assembleAsmSource(source) : { ok: true };
-    if (!build.ok || !asmBuildCache) {
+    if (!buildResult.ok || !asmBuildCache) {
       return {
         ok: false,
-        errorLine: build.errorLine ?? 'ASSEMBLE FAILED'
+        errorLine: buildResult.errorLine ?? 'ASSEMBLE FAILED'
       };
     }
+    const build = asmBuildCache;
 
     machine.reset(true);
-    machine.loadProgram(asmBuildCache.binary, asmBuildCache.origin);
-    machine.setProgramCounter(asmBuildCache.entry);
+    machine.loadProgram(build.binary, build.origin);
+    machine.setStackPointer(0x7ffe);
+    machine.setProgramCounter(build.entry);
+    machine.setImmediateInputToRuntimeEnabled(false);
     renderLcd();
 
     if (!running) {
@@ -829,7 +1031,8 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
         return { ok: false, errorLine: 'STOPPED' };
       }
       const cpu = machine.getCpuState();
-      if (cpu.halted) {
+      const pc = cpu.registers.pc & 0xffff;
+      if (cpu.halted || !isAddressInRange(pc, build.origin, build.binary.length)) {
         break;
       }
       if (performance.now() - start > timeoutMs) {
@@ -849,6 +1052,7 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
     appendLog(`ASM RUN exception ${message}`);
     return { ok: false, errorLine: message };
   } finally {
+    machine.setImmediateInputToRuntimeEnabled(true);
     setAsmRunInFlight(false);
   }
 }
@@ -1196,6 +1400,13 @@ function verifyHealth(elapsedMs: number, litPixels: number): void {
     return;
   }
 
+  // ASM 実行中は入力待ち・表示更新待ちの局面があるため、
+  // STALLED 判定で強制停止させない。
+  if (asmRunInFlight) {
+    lastLitPixels = litPixels;
+    return;
+  }
+
   if (deltaTStates <= 0) {
     fail('STALLED', 'CPU t-state delta is zero');
     return;
@@ -1533,15 +1744,7 @@ window.__pcg815 = {
   },
   getKanaMode: () => machine.getKanaMode(),
   drainAsciiFifo: () => {
-    const out: number[] = [];
-    for (let i = 0; i < 64; i += 1) {
-      const code = machine.in8(0x12);
-      if (code === 0) {
-        break;
-      }
-      out.push(code);
-    }
-    return out;
+    return [];
   },
   tapKey: (code: string) => {
     machine.setKeyState(code, true);

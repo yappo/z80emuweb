@@ -210,6 +210,26 @@ test('assembler tab can assemble and run a simple ORG/ENTRY program', async ({ p
   await expect(page.locator('#basic-editor')).toBeVisible();
 });
 
+test('basic load sample runs on fresh boot', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('button', { name: 'Load Sample' }).click();
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Run OK/i, { timeout: 5_000 });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('owari');
+});
+
 test('basic editor handles syntax error and reset rerun flow', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
@@ -246,13 +266,47 @@ test('sample game button loads maze code and starts running', async ({ page }) =
   await expect(page.locator('#basic-editor')).toHaveValue(/Stage:/);
   await expect(page.locator('#basic-editor')).toHaveValue(/Score:/);
   await expect(page.locator('#basic-editor')).toHaveValue(/OUT 90,80/);
-  await expect(page.locator('#basic-editor')).toHaveValue(/OUT 16,7/);
-  await expect(page.locator('#basic-editor')).toHaveValue(/OUT 16,6/);
+  await expect(page.locator('#basic-editor')).toHaveValue(/OUT 17,128/);
+  await expect(page.locator('#basic-editor')).toHaveValue(/OUT 17,64/);
   await expect(page.locator('#basic-editor')).toHaveValue(/ALL STAGE CLEAR!/);
 
   await page.getByRole('button', { name: 'RUN Program' }).click();
   await expect(page.locator('#basic-run-status')).toContainText(/Running|Run OK/i, { timeout: 5_000 });
   await expect(page.locator('#basic-run-status')).not.toContainText(/Failed:/i);
+});
+
+test('sample game proceeds from PUSH SPACE KEY after pressing Space', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('button', { name: 'Sample Game' }).click();
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Running|Run OK/i, { timeout: 5_000 });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('PUSH SPACE KEY !');
+
+  await page.locator('#lcd').click();
+  await page.keyboard.press('Space');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('Stage:');
 });
 
 test('basic editor can rerun after STOP CPU with WAIT program', async ({ page }) => {
@@ -283,6 +337,25 @@ test('strict URL parameter enables strict boot mode diagnostics', async ({ page 
   await page.goto('/?strict=1&debug=1');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
   await expect(page.locator('#boot-status')).toContainText(/strict=1/i);
+});
+
+test('accepts keyboard input on boot prompt without editor focus', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.locator('#lcd').click();
+  await page.keyboard.press('KeyA');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('> A');
 });
 
 test('kana mode renders half-width katakana on LCD', async ({ page }) => {

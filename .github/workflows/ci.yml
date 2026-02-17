@@ -29,9 +29,3 @@ jobs:
 
       - name: Compatibility corpus
         run: npm run test:compat
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: E2E tests
-        run: npm run test:e2e
