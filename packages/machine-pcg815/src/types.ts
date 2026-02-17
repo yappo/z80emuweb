@@ -33,6 +33,9 @@ export interface MachinePCG815 {
   isRuntimeProgramRunning(): boolean;
   getFrameBuffer(): Uint8Array;
   reset(cold: boolean): void;
+  loadProgram(bytes: Uint8Array | readonly number[], origin: number): void;
+  setProgramCounter(entry: number): void;
+  getRamRange(): { start: number; end: number };
 }
 
 // マシン初期化オプション。

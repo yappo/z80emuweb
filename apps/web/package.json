@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@z80emu/assembler-z80": "file:../../packages/assembler-z80",
     "@z80emu/machine-pcg815": "file:../../packages/machine-pcg815"
   },
   "devDependencies": {
@@ -16,6 +17,6 @@
     "preview": "vite preview",
     "test": "vitest run --config vitest.config.ts",
     "test:e2e": "playwright test",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.e2e.json --noEmit"
   }
 }

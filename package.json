@@ -12,6 +12,7 @@
     "test": "npm run test --workspaces --if-present",
     "test:compat": "npm run test:compat -w @z80emu/firmware-monitor",
     "test:e2e": "npm run test:e2e -w @z80emu/web",
+    "asm": "npm run build -w @z80emu/assembler-z80 && npm run asm -w @z80emu/assembler-z80 --",
     "dev": "npm run dev -w @z80emu/web --",
     "typecheck": "npm run typecheck --workspaces --if-present"
   },

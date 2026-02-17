@@ -208,6 +208,25 @@ describe('PCG815 hardware map metadata', () => {
 });
 
 describe('PCG815Machine', () => {
+  it('exposes RAM range and allows loading program bytes into RAM window', () => {
+    const machine = new PCG815Machine();
+    const range = machine.getRamRange();
+    expect(range).toEqual({ start: 0x0000, end: 0x7fff });
+
+    machine.loadProgram(Uint8Array.from([0x3e, 0x2a, 0x76]), 0x0200);
+    expect(machine.read8(0x0200)).toBe(0x3e);
+    expect(machine.read8(0x0201)).toBe(0x2a);
+    expect(machine.read8(0x0202)).toBe(0x76);
+  });
+
+  it('updates CPU PC with setProgramCounter and validates bounds', () => {
+    const machine = new PCG815Machine();
+    machine.setProgramCounter(0x1234);
+    expect(machine.getCpuState().registers.pc).toBe(0x1234);
+
+    expect(() => machine.setProgramCounter(0x9000)).toThrow(/out of RAM window/i);
+  });
+
   it('boots monitor and shows prompt text', () => {
     const machine = new PCG815Machine({ strictCpuOpcodes: true });
     run(machine, 240_000);

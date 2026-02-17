@@ -9,11 +9,13 @@ import {
   LCD_WIDTH,
   PCG815Machine
 } from '@z80emu/machine-pcg815';
+import { assemble } from '@z80emu/assembler-z80';
 
 import './styles.css';
 
 type BootState = 'BOOTING' | 'READY' | 'FAILED' | 'STALLED';
 type ProgramRunStatus = 'idle' | 'running' | 'ok' | 'failed';
+type EditorMode = 'basic' | 'asm';
 
 interface RunBasicProgramOptions {
   resetProgram?: boolean;
@@ -22,6 +24,19 @@ interface RunBasicProgramOptions {
 interface RunBasicProgramResult {
   ok: boolean;
   errorLine?: string;
+}
+
+interface RunAsmProgramResult {
+  ok: boolean;
+  errorLine?: string;
+}
+
+interface AsmBuildCache {
+  source: string;
+  binary: Uint8Array;
+  origin: number;
+  entry: number;
+  dump: string;
 }
 
 declare global {
@@ -35,6 +50,9 @@ declare global {
       getKanaMode: () => boolean;
       drainAsciiFifo: () => number[];
       tapKey: (code: string) => void;
+      assembleAsm: (source: string) => { ok: boolean; errorLine?: string; dump: string };
+      runAsm: (source: string) => Promise<RunAsmProgramResult>;
+      getAsmDump: () => string;
     };
   }
 }
@@ -44,82 +62,71 @@ const query = new URLSearchParams(window.location.search);
 const debugMode = query.get('debug') === '1';
 const strictMode = query.get('strict') === '1';
 
+function mustQuery<T extends Element>(selector: string): T {
+  const el = document.querySelector<T>(selector);
+  if (!el) {
+    throw new Error(`UI initialization failed: missing required element ${selector}`);
+  }
+  return el;
+}
+
+function mustContext2D(canvas: HTMLCanvasElement, name: string): CanvasRenderingContext2D {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error(`${name} canvas creation failed`);
+  }
+  return ctx;
+}
+
 const machine = new PCG815Machine({ strictCpuOpcodes: strictMode });
 
-const canvas = document.querySelector<HTMLCanvasElement>('#lcd');
-const runToggleButton = document.querySelector<HTMLButtonElement>('#run-toggle');
-const stepButton = document.querySelector<HTMLButtonElement>('#step');
-const resetButton = document.querySelector<HTMLButtonElement>('#reset');
-const kanaToggleButton = document.querySelector<HTMLButtonElement>('#kana-toggle');
-const fontDebugToggleButton = document.querySelector<HTMLButtonElement>('#font-debug-toggle');
-const speedIndicator = document.querySelector<HTMLElement>('#speed-indicator');
-const bootStatus = document.querySelector<HTMLElement>('#boot-status');
-const debugView = document.querySelector<HTMLElement>('#debug-view');
-const logView = document.querySelector<HTMLElement>('#log-view');
-const keyMapList = document.querySelector<HTMLElement>('#keymap-list');
-const basicEditor = document.querySelector<HTMLTextAreaElement>('#basic-editor');
-const basicEditorLines = document.querySelector<HTMLElement>('#basic-editor-lines');
-const basicRunStatus = document.querySelector<HTMLElement>('#basic-run-status');
-const basicRunButton = document.querySelector<HTMLButtonElement>('#basic-run');
-const basicStopButton = document.querySelector<HTMLButtonElement>('#basic-stop');
-const basicNewButton = document.querySelector<HTMLButtonElement>('#basic-new');
-const basicLoadSampleButton = document.querySelector<HTMLButtonElement>('#basic-load-sample');
-const basicLoadGameButton = document.querySelector<HTMLButtonElement>('#basic-load-game');
-const fontDebugPanel = document.querySelector<HTMLElement>('#font-debug-panel');
-const fontDebugMeta = document.querySelector<HTMLElement>('#font-debug-meta');
-const fontDebugCanvas = document.querySelector<HTMLCanvasElement>('#font-debug-canvas');
-const fontKanaCanvas = document.querySelector<HTMLCanvasElement>('#font-kana-canvas');
+const canvas = mustQuery<HTMLCanvasElement>('#lcd');
+const runToggleButton = mustQuery<HTMLButtonElement>('#run-toggle');
+const stepButton = mustQuery<HTMLButtonElement>('#step');
+const resetButton = mustQuery<HTMLButtonElement>('#reset');
+const kanaToggleButton = mustQuery<HTMLButtonElement>('#kana-toggle');
+const fontDebugToggleButton = mustQuery<HTMLButtonElement>('#font-debug-toggle');
+const speedIndicator = mustQuery<HTMLElement>('#speed-indicator');
+const bootStatus = mustQuery<HTMLElement>('#boot-status');
+const debugView = mustQuery<HTMLElement>('#debug-view');
+const logView = mustQuery<HTMLElement>('#log-view');
+const keyMapList = mustQuery<HTMLElement>('#keymap-list');
+const editorTabBasic = mustQuery<HTMLButtonElement>('#editor-tab-basic');
+const editorTabAsm = mustQuery<HTMLButtonElement>('#editor-tab-asm');
+const basicEditorPanel = mustQuery<HTMLElement>('#basic-editor-panel');
+const asmEditorPanel = mustQuery<HTMLElement>('#asm-editor-panel');
+const basicEditor = mustQuery<HTMLTextAreaElement>('#basic-editor');
+const basicEditorLines = mustQuery<HTMLElement>('#basic-editor-lines');
+const basicRunStatus = mustQuery<HTMLElement>('#basic-run-status');
+const basicRunButton = mustQuery<HTMLButtonElement>('#basic-run');
+const basicStopButton = mustQuery<HTMLButtonElement>('#basic-stop');
+const basicNewButton = mustQuery<HTMLButtonElement>('#basic-new');
+const basicLoadSampleButton = mustQuery<HTMLButtonElement>('#basic-load-sample');
+const basicLoadGameButton = mustQuery<HTMLButtonElement>('#basic-load-game');
+const asmEditor = mustQuery<HTMLTextAreaElement>('#asm-editor');
+const asmEditorLines = mustQuery<HTMLElement>('#asm-editor-lines');
+const asmRunStatus = mustQuery<HTMLElement>('#asm-run-status');
+const asmAssembleButton = mustQuery<HTMLButtonElement>('#asm-assemble');
+const asmRunButton = mustQuery<HTMLButtonElement>('#asm-run');
+const asmStopButton = mustQuery<HTMLButtonElement>('#asm-stop');
+const asmNewButton = mustQuery<HTMLButtonElement>('#asm-new');
+const asmLoadSampleButton = mustQuery<HTMLButtonElement>('#asm-load-sample');
+const asmDumpView = mustQuery<HTMLElement>('#asm-dump-view');
+const fontDebugPanel = mustQuery<HTMLElement>('#font-debug-panel');
+const fontDebugMeta = mustQuery<HTMLElement>('#font-debug-meta');
+const fontDebugCanvas = mustQuery<HTMLCanvasElement>('#font-debug-canvas');
+const fontKanaCanvas = mustQuery<HTMLCanvasElement>('#font-kana-canvas');
 
-if (
-  !canvas ||
-  !runToggleButton ||
-  !stepButton ||
-  !resetButton ||
-  !kanaToggleButton ||
-  !fontDebugToggleButton ||
-  !speedIndicator ||
-  !bootStatus ||
-  !debugView ||
-  !logView ||
-  !keyMapList ||
-  !basicEditor ||
-  !basicEditorLines ||
-  !basicRunStatus ||
-  !basicRunButton ||
-  !basicStopButton ||
-  !basicNewButton ||
-  !basicLoadSampleButton ||
-  !basicLoadGameButton ||
-  !fontDebugPanel ||
-  !fontDebugMeta ||
-  !fontDebugCanvas ||
-  !fontKanaCanvas
-) {
-  throw new Error('UI initialization failed: missing required element');
-}
-
-const context = canvas.getContext('2d');
-if (!context) {
-  throw new Error('Canvas2D is not available');
-}
+const context = mustContext2D(canvas, 'Main');
 
 const offscreen = document.createElement('canvas');
 offscreen.width = LCD_WIDTH;
 offscreen.height = LCD_HEIGHT;
-const offCtx = offscreen.getContext('2d');
-if (!offCtx) {
-  throw new Error('Offscreen canvas creation failed');
-}
+const offCtx = mustContext2D(offscreen, 'Offscreen');
 const lcdImage = offCtx.createImageData(LCD_WIDTH, LCD_HEIGHT);
 
-const fontCtx = fontDebugCanvas.getContext('2d');
-if (!fontCtx) {
-  throw new Error('Font debug canvas creation failed');
-}
-const fontKanaCtx = fontKanaCanvas.getContext('2d');
-if (!fontKanaCtx) {
-  throw new Error('Kana zoom canvas creation failed');
-}
+const fontCtx = mustContext2D(fontDebugCanvas, 'Font debug');
+const fontKanaCtx = mustContext2D(fontKanaCanvas, 'Kana zoom');
 
 canvas.width = LCD_WIDTH * SCALE;
 canvas.height = LCD_HEIGHT * SCALE;
@@ -512,8 +519,42 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 9240 LET BL=1
 9250 GOSUB 7600
 9260 GOTO 9190`;
-let programRunInFlight = false;
-let programRunToken = 0;
+const ASM_SAMPLE = `ORG 0x0200
+ENTRY START
+
+START:
+  LD HL,BUFFER
+  LD B,16
+  XOR A
+
+SUM_LOOP:
+  ADD A,(HL)
+  INC HL
+  DJNZ SUM_LOOP
+
+  LD C,A
+  LD A,'S'
+  OUT (0x1C),A
+  LD A,'U'
+  OUT (0x1C),A
+  LD A,'M'
+  OUT (0x1C),A
+  LD A,':'
+  OUT (0x1C),A
+  LD A,' '
+  OUT (0x1C),A
+  LD A,C
+  OUT (0x1C),A
+  HALT
+
+BUFFER:
+  DB 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16`;
+let basicRunInFlight = false;
+let basicRunToken = 0;
+let asmRunInFlight = false;
+let asmRunToken = 0;
+let asmBuildCache: AsmBuildCache | undefined;
+let currentEditorMode: EditorMode = 'basic';
 
 function waitForAnimationFrame(): Promise<void> {
   return new Promise((resolve) => {
@@ -540,14 +581,14 @@ function appendLog(line: string): void {
   logView.textContent = inputLog.join('\n');
 }
 
-function updateEditorLineNumbers(): void {
-  const lineCount = basicEditor.value.split('\n').length;
+function updateEditorLineNumbers(editor: HTMLTextAreaElement, lineView: HTMLElement): void {
+  const lineCount = editor.value.split('\n').length;
   const lines = Array.from({ length: Math.max(1, lineCount) }, (_, idx) => String(idx + 1));
-  basicEditorLines.textContent = lines.join('\n');
+  lineView.textContent = lines.join('\n');
 }
 
-function syncEditorScroll(): void {
-  basicEditorLines.scrollTop = basicEditor.scrollTop;
+function syncEditorScroll(editor: HTMLTextAreaElement, lineView: HTMLElement): void {
+  lineView.scrollTop = editor.scrollTop;
 }
 
 function setProgramRunStatus(state: ProgramRunStatus, detail: string): void {
@@ -555,9 +596,20 @@ function setProgramRunStatus(state: ProgramRunStatus, detail: string): void {
   basicRunStatus.textContent = detail;
 }
 
-function setProgramRunInFlight(inFlight: boolean): void {
-  programRunInFlight = inFlight;
+function setAsmRunStatus(state: ProgramRunStatus, detail: string): void {
+  asmRunStatus.dataset.state = state;
+  asmRunStatus.textContent = detail;
+}
+
+function setBasicRunInFlight(inFlight: boolean): void {
+  basicRunInFlight = inFlight;
   basicRunButton.disabled = inFlight;
+}
+
+function setAsmRunInFlight(inFlight: boolean): void {
+  asmRunInFlight = inFlight;
+  asmRunButton.disabled = inFlight;
+  asmAssembleButton.disabled = inFlight;
 }
 
 function normalizeProgramSource(source: string): string[] {
@@ -627,12 +679,12 @@ async function runBasicProgram(
   source: string,
   options: RunBasicProgramOptions = {}
 ): Promise<RunBasicProgramResult> {
-  if (programRunInFlight) {
+  if (basicRunInFlight) {
     return { ok: false, errorLine: 'RUN ALREADY IN PROGRESS' };
   }
 
-  setProgramRunInFlight(true);
-  const runToken = ++programRunToken;
+  setBasicRunInFlight(true);
+  const runToken = ++basicRunToken;
   setProgramRunStatus('running', 'Running');
   appendLog('BASIC RUN start');
 
@@ -655,7 +707,7 @@ async function runBasicProgram(
     const timeoutMs = 20_000;
     const start = performance.now();
     while (machine.isRuntimeProgramRunning()) {
-      if (programRunToken !== runToken) {
+      if (basicRunToken !== runToken) {
         setProgramRunStatus('idle', 'Stopped');
         appendLog('BASIC RUN stopped');
         return { ok: false, errorLine: 'STOPPED' };
@@ -689,7 +741,115 @@ async function runBasicProgram(
     appendLog(`BASIC RUN exception ${message}`);
     return { ok: false, errorLine: message };
   } finally {
-    setProgramRunInFlight(false);
+    setBasicRunInFlight(false);
+  }
+}
+
+function setEditorMode(mode: EditorMode): void {
+  currentEditorMode = mode;
+  const basicSelected = mode === 'basic';
+  editorTabBasic.setAttribute('aria-selected', basicSelected ? 'true' : 'false');
+  editorTabAsm.setAttribute('aria-selected', basicSelected ? 'false' : 'true');
+  basicEditorPanel.hidden = !basicSelected;
+  asmEditorPanel.hidden = basicSelected;
+}
+
+function setAsmDumpText(text: string): void {
+  asmDumpView.textContent = text;
+}
+
+function assembleAsmSource(source: string): { ok: boolean; errorLine?: string; dump: string } {
+  const result = assemble(source, {
+    filename: 'web-editor.asm'
+  });
+
+  if (!result.ok) {
+    const diagnostics = result.diagnostics
+      .map((diag) => `${diag.file}:${diag.line}:${diag.column}: ${diag.message}`)
+      .join('\n');
+    setAsmDumpText(diagnostics);
+    setAsmRunStatus('failed', 'Assemble failed');
+    asmBuildCache = undefined;
+    appendLog('ASM assemble failed');
+    return {
+      ok: false,
+      errorLine: result.diagnostics[0]?.message ?? 'ASSEMBLE FAILED',
+      dump: diagnostics
+    };
+  }
+
+  asmBuildCache = {
+    source,
+    binary: result.binary,
+    origin: result.origin,
+    entry: result.entry,
+    dump: result.dump
+  };
+  setAsmDumpText(result.dump);
+  setAsmRunStatus('ok', 'Assemble OK');
+  appendLog(`ASM assemble ok (${result.binary.length} bytes)`);
+  return { ok: true, dump: result.dump };
+}
+
+async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
+  if (asmRunInFlight) {
+    return { ok: false, errorLine: 'RUN ALREADY IN PROGRESS' };
+  }
+
+  setAsmRunInFlight(true);
+  const runToken = ++asmRunToken;
+  setAsmRunStatus('running', 'Running');
+  appendLog('ASM RUN start');
+
+  try {
+    const build: { ok: boolean; errorLine?: string } =
+      !asmBuildCache || asmBuildCache.source !== source ? assembleAsmSource(source) : { ok: true };
+    if (!build.ok || !asmBuildCache) {
+      return {
+        ok: false,
+        errorLine: build.errorLine ?? 'ASSEMBLE FAILED'
+      };
+    }
+
+    machine.reset(true);
+    machine.loadProgram(asmBuildCache.binary, asmBuildCache.origin);
+    machine.setProgramCounter(asmBuildCache.entry);
+    renderLcd();
+
+    if (!running) {
+      setRunningState(true);
+    }
+
+    const timeoutMs = 20_000;
+    const start = performance.now();
+    while (true) {
+      if (asmRunToken !== runToken) {
+        setAsmRunStatus('idle', 'Stopped');
+        appendLog('ASM RUN stopped');
+        return { ok: false, errorLine: 'STOPPED' };
+      }
+      const cpu = machine.getCpuState();
+      if (cpu.halted) {
+        break;
+      }
+      if (performance.now() - start > timeoutMs) {
+        setAsmRunStatus('failed', 'Failed: RUN TIMEOUT');
+        appendLog('ASM RUN timeout');
+        return { ok: false, errorLine: 'RUN TIMEOUT' };
+      }
+      await waitForAnimationFrame();
+    }
+
+    setAsmRunStatus('ok', 'Run OK');
+    appendLog('ASM RUN ok');
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    setAsmRunStatus('failed', `Failed: ${message}`);
+    appendLog(`ASM RUN exception ${message}`);
+    return { ok: false, errorLine: message };
+  } finally {
+    setAsmRunInFlight(false);
   }
 }
 
@@ -1149,8 +1309,16 @@ runToggleButton.addEventListener('click', () => {
   toggleRunState();
 });
 
+editorTabBasic.addEventListener('click', () => {
+  setEditorMode('basic');
+});
+
+editorTabAsm.addEventListener('click', () => {
+  setEditorMode('asm');
+});
+
 basicRunButton.addEventListener('click', async () => {
-  if (programRunInFlight) {
+  if (basicRunInFlight) {
     return;
   }
   if (document.activeElement instanceof HTMLElement) {
@@ -1160,7 +1328,7 @@ basicRunButton.addEventListener('click', async () => {
 });
 
 basicStopButton.addEventListener('click', () => {
-  programRunToken += 1;
+  basicRunToken += 1;
   setRunningState(false);
   setProgramRunStatus('idle', 'Stopped');
   appendLog('CPU STOP by editor');
@@ -1174,24 +1342,85 @@ basicNewButton.addEventListener('click', () => {
 
 basicLoadSampleButton.addEventListener('click', () => {
   basicEditor.value = BASIC_SAMPLE;
-  updateEditorLineNumbers();
-  syncEditorScroll();
+  updateEditorLineNumbers(basicEditor, basicEditorLines);
+  syncEditorScroll(basicEditor, basicEditorLines);
   setProgramRunStatus('idle', 'Sample loaded');
 });
 
 basicLoadGameButton.addEventListener('click', () => {
   basicEditor.value = BASIC_SAMPLE_GAME;
-  updateEditorLineNumbers();
-  syncEditorScroll();
+  updateEditorLineNumbers(basicEditor, basicEditorLines);
+  syncEditorScroll(basicEditor, basicEditorLines);
   setProgramRunStatus('idle', 'Sample game loaded (v3)');
 });
 
 basicEditor.addEventListener('input', () => {
-  updateEditorLineNumbers();
+  updateEditorLineNumbers(basicEditor, basicEditorLines);
 });
 
 basicEditor.addEventListener('scroll', () => {
-  syncEditorScroll();
+  syncEditorScroll(basicEditor, basicEditorLines);
+});
+
+asmAssembleButton.addEventListener('click', () => {
+  if (asmRunInFlight) {
+    return;
+  }
+  appendLog('ASM assemble click');
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
+  try {
+    assembleAsmSource(asmEditor.value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    setAsmRunStatus('failed', `Failed: ${message}`);
+    appendLog(`ASM assemble exception ${message}`);
+  }
+});
+
+asmRunButton.addEventListener('click', async () => {
+  if (asmRunInFlight) {
+    return;
+  }
+  if (document.activeElement instanceof HTMLElement) {
+    document.activeElement.blur();
+  }
+  await runAsmProgram(asmEditor.value);
+});
+
+asmStopButton.addEventListener('click', () => {
+  asmRunToken += 1;
+  setRunningState(false);
+  setAsmRunStatus('idle', 'Stopped');
+  appendLog('CPU STOP by asm editor');
+});
+
+asmNewButton.addEventListener('click', () => {
+  asmEditor.value = '';
+  updateEditorLineNumbers(asmEditor, asmEditorLines);
+  syncEditorScroll(asmEditor, asmEditorLines);
+  asmBuildCache = undefined;
+  setAsmDumpText('');
+  setAsmRunStatus('idle', 'Program cleared');
+});
+
+asmLoadSampleButton.addEventListener('click', () => {
+  asmEditor.value = ASM_SAMPLE;
+  updateEditorLineNumbers(asmEditor, asmEditorLines);
+  syncEditorScroll(asmEditor, asmEditorLines);
+  asmBuildCache = undefined;
+  setAsmDumpText('');
+  setAsmRunStatus('idle', 'Sample loaded');
+});
+
+asmEditor.addEventListener('input', () => {
+  asmBuildCache = undefined;
+  updateEditorLineNumbers(asmEditor, asmEditorLines);
+});
+
+asmEditor.addEventListener('scroll', () => {
+  syncEditorScroll(asmEditor, asmEditorLines);
 });
 
 stepButton.addEventListener('click', () => {
@@ -1284,9 +1513,15 @@ updateKanaToggleUi();
 redrawFontDebug();
 updateFontMeta(selectedGlyphCode);
 setProgramRunStatus('idle', 'Idle');
+setAsmRunStatus('idle', 'Idle');
 basicEditor.value = BASIC_SAMPLE;
-updateEditorLineNumbers();
-syncEditorScroll();
+asmEditor.value = ASM_SAMPLE;
+setAsmDumpText('');
+updateEditorLineNumbers(basicEditor, basicEditorLines);
+updateEditorLineNumbers(asmEditor, asmEditorLines);
+syncEditorScroll(basicEditor, basicEditorLines);
+syncEditorScroll(asmEditor, asmEditorLines);
+setEditorMode('basic');
 
 window.__pcg815 = {
   injectBasicLine,
@@ -1311,5 +1546,12 @@ window.__pcg815 = {
   tapKey: (code: string) => {
     machine.setKeyState(code, true);
     machine.setKeyState(code, false);
-  }
+  },
+  assembleAsm: (source: string) => {
+    return assembleAsmSource(source);
+  },
+  runAsm: async (source: string) => {
+    return runAsmProgram(source);
+  },
+  getAsmDump: () => asmDumpView.textContent ?? ''
 };

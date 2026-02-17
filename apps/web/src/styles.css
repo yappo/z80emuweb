@@ -190,6 +190,23 @@ button[data-active='1'] {
   align-content: start;
 }
 
+.editor-tabs {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.editor-tab {
+  border-radius: 999px;
+  padding: 0.32rem 0.72rem;
+  border-bottom-width: 2px;
+}
+
+.editor-tab[aria-selected='true'] {
+  background: linear-gradient(180deg, #d6efcd, #a9c99f);
+  border-color: #5e7a54;
+  color: #203018;
+}
+
 .basic-editor-panel {
   margin: 0;
   padding: 0.65rem;
@@ -198,6 +215,10 @@ button[data-active='1'] {
   background: color-mix(in oklab, var(--panel), white 20%);
   display: grid;
   gap: 0.45rem;
+}
+
+.basic-editor-panel[hidden] {
+  display: none;
 }
 
 .basic-editor-head {
@@ -295,6 +316,12 @@ button[data-active='1'] {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.asm-dump-view {
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre;
 }
 
 .status-panel h2,
