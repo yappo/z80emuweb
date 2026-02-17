@@ -464,6 +464,45 @@ export class PCG815Machine implements MachinePCG815, Bus {
     return this.cpu.getState();
   }
 
+  getRamRange(): { start: number; end: number } {
+    return {
+      start: RAM_REGION.start,
+      end: RAM_REGION.end
+    };
+  }
+
+  loadProgram(bytes: Uint8Array | readonly number[], origin: number): void {
+    const start = clamp16(origin);
+    const end = start + bytes.length - 1;
+    if (bytes.length > 0 && (start < RAM_REGION.start || end > RAM_REGION.end)) {
+      throw new Error(
+        `Program range out of RAM window: ${start.toString(16).padStart(4, '0')}-${end
+          .toString(16)
+          .padStart(4, '0')}`
+      );
+    }
+
+    for (let i = 0; i < bytes.length; i += 1) {
+      const byte = bytes[i] ?? 0;
+      const addr = start + i;
+      this.mainRam[addr - RAM_REGION.start] = byte & 0xff;
+    }
+    this.dirtyFrame = true;
+  }
+
+  setProgramCounter(entry: number): void {
+    const address = clamp16(entry);
+    if (address < RAM_REGION.start || address > RAM_REGION.end) {
+      throw new Error(`Entry address out of RAM window: ${address.toString(16).padStart(4, '0')}`);
+    }
+    const state = this.cpu.getState();
+    state.registers.pc = address;
+    state.halted = false;
+    state.pendingNmi = false;
+    state.pendingIntDataBus = undefined;
+    this.cpu.loadState(state);
+  }
+
   createSnapshot(): SnapshotV1 {
     return {
       version: 1,

@@ -9,7 +9,11 @@ npm install
 npm run dev
 ```
 
-## Browser BASIC Editor
+## Browser Editors（BASIC / ASSEMBLER）
+
+- タブは `BASIC` / `ASSEMBLER` の2つで、初期表示は `BASIC` です。
+
+### BASIC タブ
 
 - 右側の `BASIC Editor` にプログラムを入力し、`RUN Program` で実行します
 - 実行シーケンスは `NEW -> program lines -> RUN`（既定）です
@@ -17,6 +21,14 @@ npm run dev
 - `Load Sample` は `WAIT/IF THEN` を含むカウントアップサンプルを読み込みます
 - `Sample Game` は 迷路探索4x4ゲーム（全5ステージ）を読み込みます
 - スクリーンショットは準備中です
+
+### ASSEMBLER タブ
+
+- `ASSEMBLE` で Z80 アセンブルを実行し、機械語ダンプを表示します
+- `RUN` は直近アセンブル結果を RAM にロードし、`ENTRY` から実行します
+- `STOP CPU` は CPU 実行を停止します
+- `Load Sample` は非ゲームのサンプル（チェックサム計算）を読み込みます
+- 詳細仕様: `docs/assembly-language-spec.md`
 
 ### Sample Game の使い方
 
@@ -37,12 +49,15 @@ npm run dev
 ## ワークスペース構成
 
 - `apps/web`: ViteベースのWebアプリ（Canvas2D UI）
+- `packages/assembler-z80`: Web/CLI共通のZ80アセンブラ
 - `packages/core-z80`: T-state単位で進むZ80コア
 - `packages/machine-pcg815`: マシン層（メモリマップ、LCD、キーボード）
 - `packages/firmware-monitor`: モニタ + 小規模BASICランタイム
 - `docs/hardware-spec.md`: ハード仕様前提とマッピング
 - `docs/z80-cpu-spec-sheet.md`: Z80 CPU 命令・レジスタ・割り込み・I/O 仕様（実装ベース）
 - `docs/basic-language-spec.md`: 現行 BASIC 言語仕様と未実装コマンド一覧
+- `docs/assembly-language-spec.md`: アセンブラ文法・ディレクティブ・出力仕様
+- `docs/z80-assembly-mnemonics.md`: 実装対応ニーモニック一覧
 
 ## ハードウェアマップ方針
 
@@ -58,6 +73,7 @@ npm run dev
 - `npm run test:compat`
 - `npm run test:e2e`
 - `npm run dev`
+- `npm run asm -- -i input.asm -o out.bin --lst out.lst --sym out.sym`
 
 ## 実行時フラグ
 

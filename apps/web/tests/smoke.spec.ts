@@ -23,13 +23,16 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
   await expect(page.getByRole('button', { name: 'Reset' })).toBeVisible();
   await expect(page.getByRole('button', { name: /かな OFF/i })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Fonts' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'BASIC' })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'ASSEMBLER' })).toBeVisible();
   await expect(page.locator('#basic-editor')).toBeVisible();
+  await expect(page.locator('#asm-editor-panel')).toBeHidden();
   await expect(page.getByRole('button', { name: 'RUN Program' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'STOP CPU' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'NEW' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Load Sample' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Sample Game' })).toBeVisible();
-  await expect(page.locator('.basic-editor-hint')).toContainText(/Editor focus:/i);
+  await expect(page.locator('#basic-editor-panel .basic-editor-hint')).toContainText(/Editor focus:/i);
   await page.locator('#basic-editor').click();
   await page.keyboard.type('30 PRINT 654');
   await expect(page.locator('#basic-editor')).toHaveValue(/30 PRINT 654/);
@@ -186,6 +189,25 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
 
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
+});
+
+test('assembler tab can assemble and run a simple ORG/ENTRY program', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('tab', { name: 'ASSEMBLER' }).click();
+  await expect(page.locator('#asm-editor')).toBeVisible();
+
+  await page.locator('#asm-editor').fill('ORG 0x0200\nENTRY START\nSTART: LD A,1\nHALT');
+  await page.locator('#asm-assemble').click();
+  await expect(page.locator('#asm-run-status')).toContainText(/Assemble OK/i, { timeout: 5_000 });
+  await expect(page.locator('#asm-dump-view')).toContainText(/0200:/i);
+
+  await page.locator('#asm-run').click();
+  await expect(page.locator('#asm-run-status')).toContainText(/Run OK/i, { timeout: 5_000 });
+
+  await page.getByRole('tab', { name: 'BASIC' }).click();
+  await expect(page.locator('#basic-editor')).toBeVisible();
 });
 
 test('basic editor handles syntax error and reset rerun flow', async ({ page }) => {

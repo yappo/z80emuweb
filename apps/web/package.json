@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@z80emu/assembler-z80": "file:../../packages/assembler-z80",
     "@z80emu/machine-pcg815": "file:../../packages/machine-pcg815"
   },
   "devDependencies": {
