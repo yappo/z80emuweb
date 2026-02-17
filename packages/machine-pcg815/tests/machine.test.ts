@@ -358,6 +358,15 @@ describe('PCG815Machine', () => {
     expect(lines[0]?.startsWith(' ')).toBe(true);
   });
 
+  it('flushes BASIC runtime PRINT output onto LCD text layer', () => {
+    const machine = new PCG815Machine();
+    machine.runtime.executeLine('PRINT "detekonai"');
+    machine.tick(1);
+
+    const lines = machine.getTextLines().join('\n');
+    expect(lines).toContain('detekonai');
+  });
+
   it('scrolls upward on line-feed at the last row instead of wrapping to top', () => {
     const machine = new PCG815Machine();
     machine.out8(0x58, 0x01);

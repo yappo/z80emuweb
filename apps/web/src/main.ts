@@ -838,8 +838,17 @@ function resolveKeyboardCode(event: KeyboardEvent): string | undefined {
   return undefined;
 }
 
-function injectBasicLine(line: string): void {
+function drainRuntimeOutputQueue(): void {
+  while (machine.runtime.popOutputChar() !== 0) {
+    // Discard pending monitor output bytes.
+  }
+}
+
+function injectBasicLine(line: string, options?: { discardOutput?: boolean }): void {
   machine.runtime.executeLine(line);
+  if (options?.discardOutput) {
+    drainRuntimeOutputQueue();
+  }
   machine.tick(40_000);
   renderLcd();
 }
@@ -866,10 +875,10 @@ async function runBasicProgram(
     const lines = normalizeProgramSource(source);
 
     if (resetProgram) {
-      injectBasicLine('NEW');
+      injectBasicLine('NEW', { discardOutput: true });
     }
     for (const line of lines) {
-      injectBasicLine(line);
+      injectBasicLine(line, { discardOutput: true });
     }
     injectBasicLine('RUN');
 

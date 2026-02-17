@@ -429,6 +429,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
     this.cpu.stepTState(clamped);
     this.elapsedTStates += clamped;
     this.runtime.pump();
+    this.flushRuntimeOutputToLcd();
     const isRunning = this.runtime.isProgramRunning();
     if (!wasRunning && isRunning) {
       // RUN開始時にタイプ済み文字を捨てる（終了後の遅延エコー防止）。
@@ -439,6 +440,17 @@ export class PCG815Machine implements MachinePCG815, Bus {
       this.asciiQueue.length = 0;
     }
     this.wasRuntimeProgramRunning = isRunning;
+  }
+
+  private flushRuntimeOutputToLcd(): void {
+    // Runtime PRINT queue is exposed as bytes; consume and mirror into LCD text layer.
+    while (true) {
+      const code = this.runtime.popOutputChar();
+      if (code === 0) {
+        break;
+      }
+      this.handleLcdData(code & 0xff);
+    }
   }
 
   setKeyState(code: string, pressed: boolean): void {
