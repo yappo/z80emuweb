@@ -62,108 +62,71 @@ const query = new URLSearchParams(window.location.search);
 const debugMode = query.get('debug') === '1';
 const strictMode = query.get('strict') === '1';
 
+function mustQuery<T extends Element>(selector: string): T {
+  const el = document.querySelector<T>(selector);
+  if (!el) {
+    throw new Error(`UI initialization failed: missing required element ${selector}`);
+  }
+  return el;
+}
+
+function mustContext2D(canvas: HTMLCanvasElement, name: string): CanvasRenderingContext2D {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error(`${name} canvas creation failed`);
+  }
+  return ctx;
+}
+
 const machine = new PCG815Machine({ strictCpuOpcodes: strictMode });
 
-const canvas = document.querySelector<HTMLCanvasElement>('#lcd');
-const runToggleButton = document.querySelector<HTMLButtonElement>('#run-toggle');
-const stepButton = document.querySelector<HTMLButtonElement>('#step');
-const resetButton = document.querySelector<HTMLButtonElement>('#reset');
-const kanaToggleButton = document.querySelector<HTMLButtonElement>('#kana-toggle');
-const fontDebugToggleButton = document.querySelector<HTMLButtonElement>('#font-debug-toggle');
-const speedIndicator = document.querySelector<HTMLElement>('#speed-indicator');
-const bootStatus = document.querySelector<HTMLElement>('#boot-status');
-const debugView = document.querySelector<HTMLElement>('#debug-view');
-const logView = document.querySelector<HTMLElement>('#log-view');
-const keyMapList = document.querySelector<HTMLElement>('#keymap-list');
-const editorTabBasic = document.querySelector<HTMLButtonElement>('#editor-tab-basic');
-const editorTabAsm = document.querySelector<HTMLButtonElement>('#editor-tab-asm');
-const basicEditorPanel = document.querySelector<HTMLElement>('#basic-editor-panel');
-const asmEditorPanel = document.querySelector<HTMLElement>('#asm-editor-panel');
-const basicEditor = document.querySelector<HTMLTextAreaElement>('#basic-editor');
-const basicEditorLines = document.querySelector<HTMLElement>('#basic-editor-lines');
-const basicRunStatus = document.querySelector<HTMLElement>('#basic-run-status');
-const basicRunButton = document.querySelector<HTMLButtonElement>('#basic-run');
-const basicStopButton = document.querySelector<HTMLButtonElement>('#basic-stop');
-const basicNewButton = document.querySelector<HTMLButtonElement>('#basic-new');
-const basicLoadSampleButton = document.querySelector<HTMLButtonElement>('#basic-load-sample');
-const basicLoadGameButton = document.querySelector<HTMLButtonElement>('#basic-load-game');
-const asmEditor = document.querySelector<HTMLTextAreaElement>('#asm-editor');
-const asmEditorLines = document.querySelector<HTMLElement>('#asm-editor-lines');
-const asmRunStatus = document.querySelector<HTMLElement>('#asm-run-status');
-const asmAssembleButton = document.querySelector<HTMLButtonElement>('#asm-assemble');
-const asmRunButton = document.querySelector<HTMLButtonElement>('#asm-run');
-const asmStopButton = document.querySelector<HTMLButtonElement>('#asm-stop');
-const asmNewButton = document.querySelector<HTMLButtonElement>('#asm-new');
-const asmLoadSampleButton = document.querySelector<HTMLButtonElement>('#asm-load-sample');
-const asmDumpView = document.querySelector<HTMLElement>('#asm-dump-view');
-const fontDebugPanel = document.querySelector<HTMLElement>('#font-debug-panel');
-const fontDebugMeta = document.querySelector<HTMLElement>('#font-debug-meta');
-const fontDebugCanvas = document.querySelector<HTMLCanvasElement>('#font-debug-canvas');
-const fontKanaCanvas = document.querySelector<HTMLCanvasElement>('#font-kana-canvas');
+const canvas = mustQuery<HTMLCanvasElement>('#lcd');
+const runToggleButton = mustQuery<HTMLButtonElement>('#run-toggle');
+const stepButton = mustQuery<HTMLButtonElement>('#step');
+const resetButton = mustQuery<HTMLButtonElement>('#reset');
+const kanaToggleButton = mustQuery<HTMLButtonElement>('#kana-toggle');
+const fontDebugToggleButton = mustQuery<HTMLButtonElement>('#font-debug-toggle');
+const speedIndicator = mustQuery<HTMLElement>('#speed-indicator');
+const bootStatus = mustQuery<HTMLElement>('#boot-status');
+const debugView = mustQuery<HTMLElement>('#debug-view');
+const logView = mustQuery<HTMLElement>('#log-view');
+const keyMapList = mustQuery<HTMLElement>('#keymap-list');
+const editorTabBasic = mustQuery<HTMLButtonElement>('#editor-tab-basic');
+const editorTabAsm = mustQuery<HTMLButtonElement>('#editor-tab-asm');
+const basicEditorPanel = mustQuery<HTMLElement>('#basic-editor-panel');
+const asmEditorPanel = mustQuery<HTMLElement>('#asm-editor-panel');
+const basicEditor = mustQuery<HTMLTextAreaElement>('#basic-editor');
+const basicEditorLines = mustQuery<HTMLElement>('#basic-editor-lines');
+const basicRunStatus = mustQuery<HTMLElement>('#basic-run-status');
+const basicRunButton = mustQuery<HTMLButtonElement>('#basic-run');
+const basicStopButton = mustQuery<HTMLButtonElement>('#basic-stop');
+const basicNewButton = mustQuery<HTMLButtonElement>('#basic-new');
+const basicLoadSampleButton = mustQuery<HTMLButtonElement>('#basic-load-sample');
+const basicLoadGameButton = mustQuery<HTMLButtonElement>('#basic-load-game');
+const asmEditor = mustQuery<HTMLTextAreaElement>('#asm-editor');
+const asmEditorLines = mustQuery<HTMLElement>('#asm-editor-lines');
+const asmRunStatus = mustQuery<HTMLElement>('#asm-run-status');
+const asmAssembleButton = mustQuery<HTMLButtonElement>('#asm-assemble');
+const asmRunButton = mustQuery<HTMLButtonElement>('#asm-run');
+const asmStopButton = mustQuery<HTMLButtonElement>('#asm-stop');
+const asmNewButton = mustQuery<HTMLButtonElement>('#asm-new');
+const asmLoadSampleButton = mustQuery<HTMLButtonElement>('#asm-load-sample');
+const asmDumpView = mustQuery<HTMLElement>('#asm-dump-view');
+const fontDebugPanel = mustQuery<HTMLElement>('#font-debug-panel');
+const fontDebugMeta = mustQuery<HTMLElement>('#font-debug-meta');
+const fontDebugCanvas = mustQuery<HTMLCanvasElement>('#font-debug-canvas');
+const fontKanaCanvas = mustQuery<HTMLCanvasElement>('#font-kana-canvas');
 
-if (
-  !canvas ||
-  !runToggleButton ||
-  !stepButton ||
-  !resetButton ||
-  !kanaToggleButton ||
-  !fontDebugToggleButton ||
-  !speedIndicator ||
-  !bootStatus ||
-  !debugView ||
-  !logView ||
-  !keyMapList ||
-  !editorTabBasic ||
-  !editorTabAsm ||
-  !basicEditorPanel ||
-  !asmEditorPanel ||
-  !basicEditor ||
-  !basicEditorLines ||
-  !basicRunStatus ||
-  !basicRunButton ||
-  !basicStopButton ||
-  !basicNewButton ||
-  !basicLoadSampleButton ||
-  !basicLoadGameButton ||
-  !asmEditor ||
-  !asmEditorLines ||
-  !asmRunStatus ||
-  !asmAssembleButton ||
-  !asmRunButton ||
-  !asmStopButton ||
-  !asmNewButton ||
-  !asmLoadSampleButton ||
-  !asmDumpView ||
-  !fontDebugPanel ||
-  !fontDebugMeta ||
-  !fontDebugCanvas ||
-  !fontKanaCanvas
-) {
-  throw new Error('UI initialization failed: missing required element');
-}
-
-const context = canvas.getContext('2d');
-if (!context) {
-  throw new Error('Canvas2D is not available');
-}
+const context = mustContext2D(canvas, 'Main');
 
 const offscreen = document.createElement('canvas');
 offscreen.width = LCD_WIDTH;
 offscreen.height = LCD_HEIGHT;
-const offCtx = offscreen.getContext('2d');
-if (!offCtx) {
-  throw new Error('Offscreen canvas creation failed');
-}
+const offCtx = mustContext2D(offscreen, 'Offscreen');
 const lcdImage = offCtx.createImageData(LCD_WIDTH, LCD_HEIGHT);
 
-const fontCtx = fontDebugCanvas.getContext('2d');
-if (!fontCtx) {
-  throw new Error('Font debug canvas creation failed');
-}
-const fontKanaCtx = fontKanaCanvas.getContext('2d');
-if (!fontKanaCtx) {
-  throw new Error('Kana zoom canvas creation failed');
-}
+const fontCtx = mustContext2D(fontDebugCanvas, 'Font debug');
+const fontKanaCtx = mustContext2D(fontKanaCanvas, 'Kana zoom');
 
 canvas.width = LCD_WIDTH * SCALE;
 canvas.height = LCD_HEIGHT * SCALE;
@@ -839,7 +802,8 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
   appendLog('ASM RUN start');
 
   try {
-    const build = !asmBuildCache || asmBuildCache.source !== source ? assembleAsmSource(source) : { ok: true };
+    const build: { ok: boolean; errorLine?: string } =
+      !asmBuildCache || asmBuildCache.source !== source ? assembleAsmSource(source) : { ok: true };
     if (!build.ok || !asmBuildCache) {
       return {
         ok: false,
