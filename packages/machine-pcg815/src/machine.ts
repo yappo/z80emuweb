@@ -345,6 +345,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
 
   private printWaitTicks = 0;
   private printPauseMode = false;
+  private immediateInputToRuntimeEnabled = true;
 
   private graphicCursorX = 0;
   private graphicCursorY = 0;
@@ -469,12 +470,15 @@ export class PCG815Machine implements MachinePCG815, Bus {
 
       // 押下エッジでのみ ASCII キューへ投入し、オートリピートの暴走を防ぐ。
       if (firstPress) {
-        // BASIC RUN中はASCIIキューに積まない（終了後エコー抑止）。
-        if (!this.runtime.isProgramRunning()) {
-          const asciiCodes = this.resolveAsciiCodes(mapping.code, mapping.normal, mapping.shifted);
-          if (asciiCodes.length > 0) {
-            this.asciiQueue.push(...asciiCodes);
+        const asciiCodes = this.resolveAsciiCodes(mapping.code, mapping.normal, mapping.shifted);
+        if (!this.runtime.isProgramRunning() && this.immediateInputToRuntimeEnabled) {
+          // Immediate mode input goes directly into runtime line editor.
+          for (const ascii of asciiCodes) {
+            this.runtime.receiveChar(ascii & 0xff);
           }
+        } else if (asciiCodes.length > 0) {
+          // Program execution uses INKEY$ path via FIFO.
+          this.asciiQueue.push(...asciiCodes);
         }
       }
       this.keyShift = this.pressedCodes.has('ShiftLeft') || this.pressedCodes.has('ShiftRight') ? 1 : 0;
@@ -497,6 +501,10 @@ export class PCG815Machine implements MachinePCG815, Bus {
   setKanaMode(enabled: boolean): void {
     this.kanaMode = Boolean(enabled);
     this.kanaComposeBuffer = '';
+  }
+
+  setImmediateInputToRuntimeEnabled(enabled: boolean): void {
+    this.immediateInputToRuntimeEnabled = Boolean(enabled);
   }
 
   getKanaMode(): boolean {

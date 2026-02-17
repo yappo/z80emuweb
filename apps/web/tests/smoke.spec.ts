@@ -339,6 +339,25 @@ test('strict URL parameter enables strict boot mode diagnostics', async ({ page 
   await expect(page.locator('#boot-status')).toContainText(/strict=1/i);
 });
 
+test('accepts keyboard input on boot prompt without editor focus', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.locator('#lcd').click();
+  await page.keyboard.press('KeyA');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('> A');
+});
+
 test('kana mode renders half-width katakana on LCD', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });

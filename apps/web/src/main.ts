@@ -1015,6 +1015,7 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
     machine.loadProgram(build.binary, build.origin);
     machine.setStackPointer(0x7ffe);
     machine.setProgramCounter(build.entry);
+    machine.setImmediateInputToRuntimeEnabled(false);
     renderLcd();
 
     if (!running) {
@@ -1051,6 +1052,7 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
     appendLog(`ASM RUN exception ${message}`);
     return { ok: false, errorLine: message };
   } finally {
+    machine.setImmediateInputToRuntimeEnabled(true);
     setAsmRunInFlight(false);
   }
 }
