@@ -880,7 +880,7 @@ async function runBasicProgram(
     for (const line of lines) {
       injectBasicLine(line, { discardOutput: true });
     }
-    machine.runtime.runProgram(10_000, false, undefined, false);
+    machine.runtime.runProgram(10_000, true, undefined, true);
     machine.tick(40_000);
     renderLcd();
 
