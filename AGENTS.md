@@ -10,7 +10,7 @@
    - 必要に応じて不具合再現/修正確認コマンドを実行して正常に動作することを確認する
 5. コミットメッセージは `type: summary` 形式（英語・命令形）を必須とします。`type` は `fix|refactor|test|docs|chore`。例: `fix: validate required -d option in mergepos`
 6. PRは `gh` コマンドで作成し、本文は次のテンプレートを必須とします。
-   - `gh pr create --base master --head <branch> --title \"<title>\" --body-file <file>`
+   - `gh pr create --base main --head <branch> --title \"<title>\" --body-file <file>`
 7. PR作成後は GitHub Actions の CI を確認し、**必須ジョブが全て成功してから** merge します。失敗していたら gh コマンドで CI のログを確認し原因を調査しコミットを再度行います (`gh run view <run-id> --log-failed`)
    - `gh pr checks <pr-number> --watch`
    - `gh pr merge <pr-number> --merge --delete-branch`
