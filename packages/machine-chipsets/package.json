@@ -1,13 +1,11 @@
 {
-  "name": "@z80emu/machine-pcg815",
+  "name": "@z80emu/machine-chipsets",
   "version": "0.1.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "dependencies": {
-    "@z80emu/core-z80": "file:../core-z80",
-    "@z80emu/firmware-monitor": "file:../firmware-monitor",
-    "@z80emu/machine-chipsets": "file:../machine-chipsets"
+    "@z80emu/core-z80": "file:../core-z80"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

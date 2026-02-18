@@ -50,10 +50,12 @@ npm run dev
 
 - `apps/web`: ViteベースのWebアプリ（Canvas2D UI）
 - `packages/assembler-z80`: Web/CLI共通のZ80アセンブラ
-- `packages/core-z80`: T-state単位で進むZ80コア
+- `packages/core-z80`: pin入出力 + T-state 単位で進むZ80コア
+- `packages/machine-chipsets`: CPU pin とマシンデバイスを接続する中間層
 - `packages/machine-pcg815`: マシン層（メモリマップ、LCD、キーボード）
 - `packages/firmware-monitor`: モニタ + 小規模BASICランタイム
 - `docs/hardware-spec.md`: ハード仕様前提とマッピング
+- `docs/hardware-layer-overview.md`: 端末 - chipset - CPU の接続レイヤー概要
 - `docs/z80-cpu-spec-sheet.md`: Z80 CPU 命令・レジスタ・割り込み・I/O 仕様（実装ベース）
 - `docs/basic-language-spec.md`: 現行 BASIC 言語仕様と未実装コマンド一覧
 - `docs/assembly-language-spec.md`: アセンブラ文法・ディレクティブ・出力仕様

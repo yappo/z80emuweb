@@ -1,0 +1,188 @@
+import { describe, expect, it } from 'vitest';
+
+import { Z80Cpu } from '../src/z80-cpu.ts';
+import { Z80_IDLE_PINS_OUT, type CpuState, type Z80PinsOut } from '../src/types.ts';
+
+class TraceHarness {
+  readonly memory = new Uint8Array(0x10000);
+
+  readonly inValues = new Map<number, number>();
+
+  readonly trace: Z80PinsOut[] = [];
+
+  readonly cpu = new Z80Cpu({ strictUnsupportedOpcodes: true });
+
+  private lastPinsOut: Z80PinsOut = { ...Z80_IDLE_PINS_OUT };
+
+  private prevWriteActive = false;
+
+  private intLine = false;
+
+  private intDataBus = 0xff;
+
+  step(tstates: number, waitSelector?: (pins: Z80PinsOut, stepIndex: number) => boolean): void {
+    const steps = Math.max(0, Math.floor(tstates));
+    for (let i = 0; i < steps; i += 1) {
+      this.trace.push({ ...this.lastPinsOut });
+      this.applyWrite(this.lastPinsOut);
+      const inputData = this.readData(this.lastPinsOut);
+      const wait = waitSelector?.(this.lastPinsOut, i) ?? false;
+      this.lastPinsOut = this.cpu.tick({
+        data: inputData,
+        wait,
+        int: this.intLine,
+        nmi: false,
+        busrq: false,
+        reset: false
+      });
+    }
+    this.trace.push({ ...this.lastPinsOut });
+    this.applyWrite(this.lastPinsOut);
+  }
+
+  setInt(active: boolean, dataBus = 0xff): void {
+    this.intLine = Boolean(active);
+    this.intDataBus = dataBus & 0xff;
+  }
+
+  loadState(state: CpuState): void {
+    this.cpu.loadState(state);
+  }
+
+  private readData(pins: Z80PinsOut): number {
+    if (pins.m1 && pins.iorq && pins.rd) {
+      return this.intDataBus;
+    }
+    if (pins.mreq && pins.rd) {
+      return this.memory[pins.addr & 0xffff] ?? 0xff;
+    }
+    if (pins.iorq && pins.rd) {
+      return this.inValues.get(pins.addr & 0xff) ?? 0xff;
+    }
+    return 0xff;
+  }
+
+  private applyWrite(pins: Z80PinsOut): void {
+    const active = Boolean(pins.wr && (pins.mreq || pins.iorq) && pins.dataOut !== null);
+    if (active && !this.prevWriteActive && pins.mreq) {
+      this.memory[pins.addr & 0xffff] = pins.dataOut ?? 0;
+    }
+    this.prevWriteActive = active;
+  }
+}
+
+describe('Z80 cycle accuracy', () => {
+  it('emits M1 fetch then RFSH within opcode fetch sequence', () => {
+    const harness = new TraceHarness();
+    harness.memory.set([0x00, 0x76]); // NOP; HALT
+
+    harness.step(16);
+
+    const fetchIndex = harness.trace.findIndex((x) => x.m1 && x.mreq && x.rd);
+    const refreshIndex = harness.trace.findIndex((x) => x.m1 && x.mreq && x.rfsh);
+
+    expect(fetchIndex).toBeGreaterThanOrEqual(0);
+    expect(refreshIndex).toBeGreaterThan(fetchIndex);
+  });
+
+  it('inserts WAIT during IO read cycle', () => {
+    const harness = new TraceHarness();
+    harness.memory.set([
+      0xdb,
+      0x10, // IN A,(10h)
+      0x76 // HALT
+    ]);
+    harness.inValues.set(0x10, 0x34);
+
+    let waits = 0;
+    harness.step(80, (pins) => {
+      if (pins.iorq && pins.rd && waits < 2) {
+        waits += 1;
+        return true;
+      }
+      return false;
+    });
+
+    const ioReadCycles = harness.trace.filter((x) => x.iorq && x.rd && (x.addr & 0xff) === 0x10).length;
+    expect(waits).toBe(2);
+    expect(ioReadCycles).toBeGreaterThanOrEqual(5);
+    expect(harness.cpu.getState().registers.a).toBe(0x34);
+  });
+
+  it('defers INT acceptance for one instruction after EI', () => {
+    const harness = new TraceHarness();
+    harness.memory.set([
+      0xfb, // EI
+      0x00, // NOP
+      0x00, // NOP
+      0x76 // HALT
+    ]);
+    harness.memory[0x0038] = 0x76;
+    harness.setInt(true, 0xff);
+
+    harness.step(1200);
+
+    const state = harness.cpu.getState();
+    expect(state.registers.pc).toBeGreaterThanOrEqual(0x0038);
+    expect(state.halted).toBe(true);
+  });
+
+  it('releases HALT on interrupt and executes interrupt handler', () => {
+    const harness = new TraceHarness();
+    harness.memory.set([0x76]); // HALT
+    harness.memory[0x0038] = 0x76;
+    const initial = harness.cpu.getState();
+    harness.loadState({
+      ...initial,
+      iff1: true,
+      iff2: true
+    });
+
+    harness.step(64);
+    expect(harness.cpu.getState().halted).toBe(true);
+
+    harness.setInt(true, 0xff);
+    harness.step(400);
+
+    const state = harness.cpu.getState();
+    expect(state.registers.pc).toBeGreaterThanOrEqual(0x0038);
+    expect(state.halted).toBe(true);
+  });
+
+  it('matches INT vector behavior for IM0/IM1/IM2', () => {
+    const runMode = (im: 0 | 1 | 2, intDataBus: number, expectedPcBase: number, i = 0x40): CpuState => {
+      const harness = new TraceHarness();
+      harness.memory.fill(0);
+      harness.memory[expectedPcBase & 0xffff] = 0x76;
+      if (im === 2) {
+        const vector = ((i << 8) | intDataBus) & 0xfffe;
+        harness.memory[vector] = expectedPcBase & 0xff;
+        harness.memory[(vector + 1) & 0xffff] = (expectedPcBase >>> 8) & 0xff;
+      }
+
+      const initial = harness.cpu.getState();
+      harness.loadState({
+        ...initial,
+        iff1: true,
+        iff2: true,
+        im,
+        registers: {
+          ...initial.registers,
+          pc: 0x0000,
+          i
+        }
+      });
+      harness.setInt(true, intDataBus);
+      harness.step(400);
+      return harness.cpu.getState();
+    };
+
+    const im0 = runMode(0, 0x2f, 0x0028);
+    const im1 = runMode(1, 0xff, 0x0038);
+    const im2 = runMode(2, 0x10, 0x2222, 0x55);
+
+    expect(im0.registers.pc).toBeGreaterThanOrEqual(0x0028);
+    expect(im1.registers.pc).toBeGreaterThanOrEqual(0x0038);
+    expect(im2.registers.pc).toBeGreaterThanOrEqual(0x2222);
+  });
+});

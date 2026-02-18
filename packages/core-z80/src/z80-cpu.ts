@@ -9,12 +9,28 @@ import {
   FLAG_Z,
   parity8
 } from './flags';
-import type { Bus, Cpu, CpuRegisters, CpuShadowRegisters, CpuState, InterruptMode } from './types';
+import {
+  Z80_IDLE_PINS_OUT,
+  type CpuRegisters,
+  type CpuShadowRegisters,
+  type CpuState,
+  type InterruptMode,
+  type Z80Core,
+  type Z80PinsIn,
+  type Z80PinsOut
+} from './types';
 
 type IndexMode = 'HL' | 'IX' | 'IY';
-type TStateOp = () => void;
 type RotateOp = 'RLC' | 'RL' | 'RRC' | 'RR' | 'SLA' | 'SRA' | 'SLL' | 'SRL';
 type Alu8Op = 'ADD' | 'ADC' | 'SUB' | 'SBC' | 'AND' | 'XOR' | 'OR' | 'CP';
+type TStateOp = (input: Z80PinsIn) => void;
+type PinsProducer = Z80PinsOut | (() => Z80PinsOut);
+
+interface TStateStep {
+  pins: PinsProducer;
+  waitable?: boolean;
+  action?: TStateOp;
+}
 
 export interface Z80CpuOptions {
   strictUnsupportedOpcodes?: boolean;
@@ -61,13 +77,24 @@ function overflowSub8(left: number, right: number, result: number): boolean {
   return (((left ^ right) & (left ^ result) & 0x80) !== 0);
 }
 
-export class Z80Cpu implements Cpu {
-  private readonly bus: Bus;
+function normalizePinsIn(input: Z80PinsIn): Z80PinsIn {
+  return {
+    data: clamp8(input.data),
+    wait: Boolean(input.wait),
+    int: Boolean(input.int),
+    nmi: Boolean(input.nmi),
+    busrq: Boolean(input.busrq),
+    reset: Boolean(input.reset)
+  };
+}
 
+export class Z80Cpu implements Z80Core {
   private readonly options: Z80CpuOptions;
 
   // 1 T-state ごとに消費するマイクロオペレーション列。
-  private readonly queue: TStateOp[] = [];
+  private readonly queue: TStateStep[] = [];
+
+  private pinsOut: Z80PinsOut = { ...Z80_IDLE_PINS_OUT };
 
   private readonly regs: CpuRegisters = {
     a: 0,
@@ -105,21 +132,25 @@ export class Z80Cpu implements Cpu {
 
   private halted = false;
 
+  private pendingInt = false;
+
   private pendingIntDataBus: number | undefined;
 
   private pendingNmi = false;
+
+  private prevNmi = false;
 
   private deferInterruptAcceptance = false;
 
   private tstates = 0;
 
-  constructor(bus: Bus, options?: Z80CpuOptions) {
-    this.bus = bus;
+  constructor(options?: Z80CpuOptions) {
     this.options = options ?? {};
   }
 
   reset(): void {
     this.queue.length = 0;
+    this.pinsOut = { ...Z80_IDLE_PINS_OUT };
     this.regs.a = 0;
     this.regs.f = 0;
     this.regs.b = 0;
@@ -146,34 +177,56 @@ export class Z80Cpu implements Cpu {
     this.iff2 = false;
     this.im = 1;
     this.halted = false;
+    this.pendingInt = false;
     this.pendingIntDataBus = undefined;
     this.pendingNmi = false;
+    this.prevNmi = false;
     this.deferInterruptAcceptance = false;
     this.tstates = 0;
   }
 
-  stepTState(count: number): void {
-    for (let i = 0; i < count; i += 1) {
-      // 命令デコードは queue が空になったタイミングでのみ行う。
-      if (this.queue.length === 0) {
-        this.scheduleNextInstruction();
-      }
-      const next = this.queue.shift();
-      if (next === undefined) {
-        this.tstates += 1;
-        continue;
-      }
-      next();
-      this.tstates += 1;
+  tick(input: Z80PinsIn): Z80PinsOut {
+    const sampledInput = normalizePinsIn(input);
+
+    if (sampledInput.reset) {
+      this.reset();
+      return this.getPinsOut();
     }
+
+    if (sampledInput.nmi && !this.prevNmi) {
+      this.pendingNmi = true;
+    }
+    this.prevNmi = sampledInput.nmi;
+
+    if (sampledInput.int) {
+      this.pendingInt = true;
+      this.pendingIntDataBus = sampledInput.data;
+    }
+
+    if (this.queue.length === 0) {
+      this.scheduleNextInstruction();
+    }
+
+    const step = this.queue[0];
+    if (!step) {
+      this.pinsOut = this.composePinsOut(() => ({ ...Z80_IDLE_PINS_OUT }), sampledInput);
+      this.tstates += 1;
+      return this.getPinsOut();
+    }
+
+    const waitActive = Boolean(step.waitable) && sampledInput.wait;
+    this.pinsOut = this.composePinsOut(step.pins, sampledInput);
+    if (!waitActive) {
+      step.action?.(sampledInput);
+      this.queue.shift();
+    }
+
+    this.tstates += 1;
+    return this.getPinsOut();
   }
 
-  raiseInt(dataBus = 0xff): void {
-    this.pendingIntDataBus = clamp8(dataBus);
-  }
-
-  raiseNmi(): void {
-    this.pendingNmi = true;
+  getPinsOut(): Z80PinsOut {
+    return { ...this.pinsOut };
   }
 
   getState(): CpuState {
@@ -185,6 +238,7 @@ export class Z80Cpu implements Cpu {
       im: this.im,
       halted: this.halted,
       pendingNmi: this.pendingNmi,
+      pendingInt: this.pendingInt,
       pendingIntDataBus: this.pendingIntDataBus,
       tstates: this.tstates,
       queueDepth: this.queue.length
@@ -220,73 +274,124 @@ export class Z80Cpu implements Cpu {
     this.im = state.im;
     this.halted = state.halted;
     this.pendingNmi = state.pendingNmi;
+    this.pendingInt = state.pendingInt ?? state.pendingIntDataBus !== undefined;
     this.pendingIntDataBus = state.pendingIntDataBus;
+    this.prevNmi = false;
     this.deferInterruptAcceptance = false;
     this.tstates = state.tstates;
+    this.pinsOut = { ...Z80_IDLE_PINS_OUT, halt: this.halted };
+  }
+
+  private composePinsOut(producer: PinsProducer, input: Z80PinsIn): Z80PinsOut {
+    const raw = typeof producer === 'function' ? producer() : producer;
+    const addr = clamp16(raw.addr);
+    const dataOut = raw.dataOut === null ? null : clamp8(raw.dataOut ?? 0);
+    return {
+      addr,
+      dataOut,
+      m1: Boolean(raw.m1),
+      mreq: Boolean(raw.mreq),
+      iorq: Boolean(raw.iorq),
+      rd: Boolean(raw.rd),
+      wr: Boolean(raw.wr),
+      rfsh: Boolean(raw.rfsh),
+      halt: this.halted,
+      busak: Boolean(input.busrq)
+    };
+  }
+
+  private pins(partial: Partial<Z80PinsOut>): Z80PinsOut {
+    return {
+      ...Z80_IDLE_PINS_OUT,
+      ...partial,
+      addr: clamp16(partial.addr ?? 0),
+      dataOut: partial.dataOut === null || partial.dataOut === undefined ? null : clamp8(partial.dataOut),
+      halt: Boolean(partial.halt ?? false),
+      busak: Boolean(partial.busak ?? false)
+    };
+  }
+
+  private enqueueStep(pins: PinsProducer, action?: TStateOp, waitable = false): void {
+    this.queue.push({ pins, action, waitable });
   }
 
   private enqueueInternal(action?: () => void): void {
-    this.queue.push(() => {
+    this.enqueueStep(() => this.pins({}), () => {
       action?.();
     });
   }
 
   private enqueueIdle(count: number): void {
     for (let i = 0; i < count; i += 1) {
-      this.queue.push(() => undefined);
+      this.enqueueStep(() => this.pins({}));
     }
   }
 
   private enqueueReadPc(target: (value: number) => void): void {
-    this.enqueueIdle(2);
-    this.queue.push(() => {
-      const value = this.bus.read8(this.regs.pc);
+    this.enqueueReadMem(() => this.regs.pc, (value) => {
       this.regs.pc = clamp16(this.regs.pc + 1);
-      target(clamp8(value));
+      target(value);
     });
   }
 
   private enqueueReadMem(addr: () => number, target: (value: number) => void): void {
-    this.enqueueIdle(2);
-    this.queue.push(() => {
-      const value = this.bus.read8(clamp16(addr()));
-      target(clamp8(value));
+    this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, rd: true }));
+    this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, rd: true }), undefined, true);
+    this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, rd: true }), (input) => {
+      target(clamp8(input.data));
     });
   }
 
   private enqueueWriteMem(addr: () => number, value: () => number): void {
-    this.enqueueIdle(2);
-    this.queue.push(() => {
-      this.bus.write8(clamp16(addr()), clamp8(value()));
-    });
+    this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, dataOut: clamp8(value()) }));
+    this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, wr: true, dataOut: clamp8(value()) }), undefined, true);
+    this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, wr: true, dataOut: clamp8(value()) }));
   }
 
   private enqueueReadIo(port: () => number, target: (value: number) => void): void {
-    this.enqueueIdle(3);
-    this.queue.push(() => {
-      const value = this.bus.in8(clamp8(port()));
-      target(clamp8(value));
+    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, rd: true }));
+    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, rd: true }), undefined, true);
+    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, rd: true }), (input) => {
+      target(clamp8(input.data));
     });
+    this.enqueueStep(() => this.pins({}));
   }
 
   private enqueueWriteIo(port: () => number, value: () => number): void {
-    this.enqueueIdle(3);
-    this.queue.push(() => {
-      this.bus.out8(clamp8(port()), clamp8(value()));
-    });
+    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, dataOut: clamp8(value()) }));
+    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, wr: true, dataOut: clamp8(value()) }), undefined, true);
+    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, wr: true, dataOut: clamp8(value()) }));
+    this.enqueueStep(() => this.pins({}));
   }
 
   private enqueueFetchOpcode(target: (opcode: number) => void): void {
-    this.enqueueIdle(3);
-    this.queue.push(() => {
-      const pc = this.regs.pc;
-      const opcode = this.bus.read8(pc);
-      this.bus.onM1?.(pc);
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }));
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }), undefined, true);
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }), (input) => {
+      const opcode = clamp8(input.data);
       // R レジスタは命令フェッチごとに下位 7bit を進める。
       this.bumpR();
       this.regs.pc = clamp16(this.regs.pc + 1);
-      target(clamp8(opcode));
+      target(opcode);
     });
+    this.enqueueStep(() =>
+      this.pins({
+        addr: ((this.regs.i << 8) | (this.regs.r & 0x7f)) & 0xffff,
+        m1: true,
+        mreq: true,
+        rfsh: true
+      })
+    );
+    this.enqueueStep(() => this.pins({}));
+  }
+
+  private enqueueIntAckFetch(target: (value: number) => void): void {
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true, rd: true }));
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true, rd: true }), undefined, true);
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true, rd: true }), (input) => {
+      target(clamp8(input.data));
+    });
+    this.enqueueStep(() => this.pins({}));
   }
 
   private enqueuePushWord(value: () => number): void {
@@ -337,7 +442,7 @@ export class Z80Cpu implements Cpu {
       this.deferInterruptAcceptance = false;
     }
 
-    if (!interruptDeferred && this.pendingIntDataBus !== undefined && this.iff1) {
+    if (!interruptDeferred && this.pendingInt && this.iff1) {
       this.scheduleMaskableInterrupt();
       return;
     }
@@ -353,7 +458,7 @@ export class Z80Cpu implements Cpu {
   }
 
   private scheduleHaltCycle(): void {
-    const intPending = this.pendingNmi || (this.pendingIntDataBus !== undefined && this.iff1);
+    const intPending = this.pendingNmi || (this.pendingInt && this.iff1);
     if (intPending) {
       this.halted = false;
       this.scheduleNextInstruction();
@@ -375,29 +480,38 @@ export class Z80Cpu implements Cpu {
   }
 
   private scheduleMaskableInterrupt(): void {
-    const dataBus = this.pendingIntDataBus ?? 0xff;
+    let dataBus = this.pendingIntDataBus ?? 0xff;
+    this.pendingInt = false;
     this.pendingIntDataBus = undefined;
     this.halted = false;
     this.iff1 = false;
     this.iff2 = false;
 
-    this.enqueueIdle(7);
+    this.enqueueIntAckFetch((sampled) => {
+      dataBus = sampled;
+    });
     this.enqueuePushWord(() => this.regs.pc);
-    this.enqueueInternal(() => {
-      // IM2 は (I:dataBus) ベクタ参照、それ以外は IM0/IM1 の固定挙動へ。
-      if (this.im === 2) {
-        const vector = ((this.regs.i << 8) | dataBus) & 0xfffe;
-        const low = this.bus.read8(vector);
-        const high = this.bus.read8((vector + 1) & 0xffff);
-        this.regs.pc = ((high << 8) | low) & 0xffff;
-        return;
-      }
 
+    if (this.im === 2) {
+      let low = 0;
+      let high = 0;
+      this.enqueueReadMem(() => ((this.regs.i << 8) | dataBus) & 0xfffe, (value) => {
+        low = value;
+      });
+      this.enqueueReadMem(() => ((((this.regs.i << 8) | dataBus) & 0xfffe) + 1) & 0xffff, (value) => {
+        high = value;
+      });
+      this.enqueueInternal(() => {
+        this.regs.pc = ((high << 8) | low) & 0xffff;
+      });
+      return;
+    }
+
+    this.enqueueInternal(() => {
       if (this.im === 0) {
         this.regs.pc = dataBus & 0x38;
         return;
       }
-
       this.regs.pc = 0x0038;
     });
   }

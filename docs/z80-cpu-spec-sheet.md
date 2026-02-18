@@ -3,21 +3,22 @@
 この文書は `packages/core-z80/src/z80-cpu.ts` を一次情報として整理した、
 実装理解向けの Z80 CPU スペックシートです。
 
-- 目的: 実装を読み解くために、命令・レジスタ・バス・割り込みを人間向けに整理する
+- 目的: 実装を読み解くために、命令・レジスタ・pin・割り込みを人間向けに整理する
 - 記載方針: 著作物の引用ではなく、本実装の事実と一般的な用語で説明する
 - 対象: 現在このリポジトリで実装済みの Z80 命令セット
 
 ## 1. CPU コア概要
 
-`Z80Cpu` は **T-state 単位のマイクロオペレーションキュー**で命令を進行させます。
+`Z80Cpu` は **pin 入出力 + T-state 単位のマイクロオペレーションキュー**で命令を進行させます。
 
-- `stepTState(count)`
+- `tick(input)`
   - `queue` が空なら `scheduleNextInstruction()` で次命令をデコード
   - 1 T-state ごとに `queue` 先頭の処理を 1 つ実行
+  - その T-state の pin 出力（`addr/mreq/rd/wr/iorq/m1/rfsh`）を返す
 - 命令フェッチ
-  - `enqueueFetchOpcode()` で `bus.read8(PC)` を実行
-  - `onM1?(pc)` コールバックを発火
-  - `R` レジスタ下位 7bit をインクリメント
+  - `M1` サイクルで `m1+mreq+rd` を出力し、`input.data` を opcode として取り込む
+  - フェッチ境界で `R` レジスタ下位 7bit をインクリメント
+  - フェッチ終端で `rfsh` を出力する
 - 予約/未定義 opcode
   - 現在は各 opcode 空間で例外なくデコードされる
   - 予約/未定義のものは NOP 相当として継続
@@ -48,15 +49,15 @@
 - `N=0x02`: 減算フラグ
 - `C=0x01`: キャリー
 
-## 3. バス・入出力仕様
+## 3. pin・入出力仕様
 
-### 3.1 メモリ/IO バスインターフェース
+### 3.1 CPU pin インターフェース
 
-`Bus` インターフェース:
+入力 (`Z80PinsIn`):
+- `data`, `wait`, `int`, `nmi`, `busrq`, `reset`
 
-- `read8(addr)` / `write8(addr, value)`
-- `in8(port)` / `out8(port, value)`
-- `onM1?(pc)`（命令フェッチ境界通知）
+出力 (`Z80PinsOut`):
+- `addr`, `dataOut`, `m1`, `mreq`, `iorq`, `rd`, `wr`, `rfsh`, `halt`, `busak`
 
 ### 3.2 アドレス幅
 
@@ -74,10 +75,8 @@
 
 ### 4.1 外部割り込み入力
 
-- `raiseNmi()`
-  - NMI 保留を立てる
-- `raiseInt(dataBus=0xFF)`
-  - maskable INT 保留を立て、データバス値を保持
+- `tick()` の入力 pin (`nmi`, `int`) から受理する
+- INT ACK サイクル時のベクタ値は `input.data` を使用する
 
 ### 4.2 優先順位と受理条件
 
@@ -250,9 +249,9 @@
 ## 8. 割り込み・バスと命令実行の関係
 
 - `HALT` 中でも NMI/INT は監視され、受理時に HALT を解除
-- 命令フェッチ（M1 相当）ごとに `onM1` コールバックが呼ばれる
-- `IN/OUT` は CPU コアがポート番号を 8bit に正規化してバスへ渡す
-- `raiseInt(dataBus)` の `dataBus` は IM0/IM2 でベクタ決定に利用される
+- 命令フェッチ（M1）で `m1+mreq+rd`、直後に `rfsh` が出力される
+- `IN/OUT` は `iorq/rd/wr` pin と `addr` で表現される
+- INT ACK 時の `input.data` は IM0/IM2 のベクタ決定に利用される
 
 ## 9. 未実装命令の現況（2026-02-14時点）
 
