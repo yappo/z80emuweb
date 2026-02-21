@@ -267,9 +267,15 @@ CPU への割り込み送信経路（現状）:
 - `0x1B` の入出力:
   - IN: `ramBank`
   - OUT: `ramBank = value & 0x04`
-- 実装上の位置づけ:
-  - これらは「バンク選択レジスタ」として値は保持される。
-  - 実メモリ窓への完全な切替再現は未完了で、将来拡張対象。
+- メモリ窓への反映（現行実装）:
+  - `read8/write8` は毎回アクティブバンク窓を参照する。
+  - `0x0000-0x7FFF` は `0x1B` bit2 で RAM bank0/1 を切り替える。
+  - `0x8000-0xBFFF` は `0x19` high3bit で EXROM bank0..7 を切り替える。
+  - `0xC000-0xFFFF` は `0x19` low4bit で banked ROM bank0..15 を切り替える。
+- ROM初期配置ポリシー（`seedRomWindows`）:
+  - 互換ブートイメージを 16KiB 単位で `system bank0 -> banked bank0 -> system bank1 -> banked bank1 ...` の順で配置する。
+  - イメージ未充足分の bank は `0x00` で埋める。
+  - bank 数は現行MVPとして `RAM=2`, `EXROM=8`, `banked ROM=16` 固定。
 ## 5. IN/OUT命令の使い方（ASM中心）
 
 ### 5.1 命令の使い分け
@@ -402,7 +408,7 @@ OUT (0x16),A      ; 読んだビットをクリア
 - 方向: `INOUT`
 - 入力時: `((exRomBank & 0x07) << 4) | (romBank & 0x0F)`
 - 出力時: `romBank = value & 0x0F`, `exRomBank = (value >> 4) & 0x07`
-- 注意点: レジスタは更新されるが、バンク切替の実機等価性は未完了
+- 注意点: OUT直後から `0x8000-0xBFFF` / `0xC000-0xFFFF` の参照窓が切り替わる
 - 例: `LD A,0x21` / `OUT (0x19),A`
 
 #### `0x1A`
@@ -418,7 +424,7 @@ OUT (0x16),A      ; 読んだビットをクリア
 - 方向: `INOUT`
 - 入力時: `ramBank`
 - 出力時: `ramBank = value & 0x04`
-- 注意点: 有効ビットは bit2 のみ
+- 注意点: bit2=0 で RAM bank0、bit2=1 で RAM bank1 を参照する
 - 例: `LD A,0x04` / `OUT (0x1B),A`
 
 #### `0x1C`
@@ -542,7 +548,7 @@ OUT (0x16),A      ; 読んだビットをクリア
 - `0x1A`（BOOT ROM 制御）, `0x1F` OUT は no-op。
 - `0x1D` は IN 固定 `0x00`、OUT dispatch なし。
 - `0x14` タイマは現状更新源がなく、実質 0 固定。
-- `0x19/0x1B` の bank レジスタは保持されるが、実機レベルのメモリ切替再現は未完了。
+- `0x19/0x1B` はメモリ窓切替まで実装済み。bank 数と初期配置規則はMVP固定（`RAM=2`, `EXROM=8`, `banked ROM=16`）。
 - `0x5A` と `0x5B` のアドレス境界が非対称（`0x7B` 特例は write のみ）。
 - `0x5A`/`0x52` は raw VRAM 書込みに加えて表示バッファ更新処理も実行するため、純粋な LCD データ書き込みと完全一致しない（プロジェクト独自の表示互換）。
 - LCD の表示反映は現状 `0x58/0x5A/0x5B` 群主導で、実機等価の再現としては未完了。

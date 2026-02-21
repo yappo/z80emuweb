@@ -53,9 +53,9 @@
 
 | 開始 | 終了 | 領域 | 書込可否 | 信頼度 | 根拠 | ステータス | 備考 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `0x0000` | `0x7FFF` | メインRAM / 拡張窓 | Yes | `DERIVED` | `ashitani-g850-general`, `akiyan-g850-tech`, `mame-pce220-metadata` | `TBD` | 現行実装では互換ブート用イメージをここへ初期配置 |
-| `0x8000` | `0xBFFF` | システムROM / 拡張窓 | No | `DERIVED` | `ashitani-g850-general`, `akiyan-g850-tech`, `mame-pce220-metadata` | `TBD` | 初期モデルでは読み取り専用 |
-| `0xC000` | `0xFFFF` | バンクROM窓 | No | `DERIVED` | `ashitani-g850-general`, `akiyan-g850-tech`, `mame-pce220-metadata` | `TBD` | `0x19` / `0x1B` によるバンク制御候補 |
+| `0x0000` | `0x7FFF` | メインRAM / 拡張窓 | Yes | `DERIVED` | `ashitani-g850-general`, `akiyan-g850-tech`, `mame-pce220-metadata` | `LOCKED` | `0x1B` bit2 で RAM bank0/1 を切替 |
+| `0x8000` | `0xBFFF` | システムROM / 拡張窓 | No | `DERIVED` | `ashitani-g850-general`, `akiyan-g850-tech`, `mame-pce220-metadata` | `LOCKED` | `0x19` high3bit で EXROM bank0..7 を切替 |
+| `0xC000` | `0xFFFF` | バンクROM窓 | No | `DERIVED` | `ashitani-g850-general`, `akiyan-g850-tech`, `mame-pce220-metadata` | `LOCKED` | `0x19` low4bit で banked ROM bank0..15 を切替 |
 
 ## I/O
 
@@ -64,8 +64,8 @@
 | `0x10` | OUT | キーボード行選択 | `DERIVED` | `akiyan-g850-tech`, `ver0-doc-index`, `ver0-root` | `TBD` | アクティブロー行列スキャナ選択 |
 | `0x11` | IN | キーボード行データ | `DERIVED` | `akiyan-g850-tech`, `ver0-doc-index`, `ver0-root` | `TBD` | 選択行のビット値を返す |
 | `0x12` | IN | キーボードASCII FIFO | `HYPOTHESIS` | `ver0-js`, `ver0-root` | `TBD` | モニタランタイム用の互換補助FIFO |
-| `0x19` | OUT | ROMバンク選択（候補） | `DERIVED` | `akiyan-g850-tech`, `mame-pce220-metadata`, `wikipedia-pce220` | `TBD` | 暫定バンクレジスタ |
-| `0x1B` | OUT | 拡張RAM制御（候補） | `DERIVED` | `akiyan-g850-tech`, `mame-pce220-metadata`, `wikipedia-pce220` | `TBD` | 暫定拡張レジスタ |
+| `0x19` | INOUT | ROM/EXROM バンク選択 | `DERIVED` | `akiyan-g850-tech`, `mame-pce220-metadata`, `wikipedia-pce220` | `LOCKED` | low4=banked ROM, high3=EXROM を切替 |
+| `0x1B` | INOUT | 拡張RAMバンク制御 | `DERIVED` | `akiyan-g850-tech`, `mame-pce220-metadata`, `wikipedia-pce220` | `LOCKED` | bit2 で RAM bank0/1 を切替 |
 | `0x1C` | OUT | ランタイム入力チャネル | `HYPOTHESIS` | `ver0-js`, `ver0-root` | `TBD` | エミュレータ補助チャネル |
 | `0x1D` | IN | ランタイム出力チャネル | `HYPOTHESIS` | `ver0-js`, `ver0-root` | `TBD` | エミュレータ補助チャネル |
 | `0x58` | OUT | LCDコマンド | `CONFIRMED` | `z88dk-platform-sharp-pc`, `pokecom-basic-samples` | `LOCKED` | コミュニティBASIC利用例で観測 |
