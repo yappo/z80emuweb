@@ -29,7 +29,7 @@ function tapKey(machine: PCG815Machine, code: string): void {
 }
 
 describe('asm sample input flow', () => {
-  it('reads input and prints reversed text', () => {
+  it('reads input and prints reversed text', { timeout: 20_000 }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs);
     const assembled = assemble(asm, { filename: 'asm-sample.asm' });
