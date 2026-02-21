@@ -20,6 +20,8 @@ class TraceHarness {
 
   private intDataBus = 0xff;
 
+  private nmiLine = false;
+
   step(tstates: number, waitSelector?: (pins: Z80PinsOut, stepIndex: number) => boolean): void {
     const steps = Math.max(0, Math.floor(tstates));
     for (let i = 0; i < steps; i += 1) {
@@ -31,7 +33,7 @@ class TraceHarness {
         data: inputData,
         wait,
         int: this.intLine,
-        nmi: false,
+        nmi: this.nmiLine,
         busrq: false,
         reset: false
       });
@@ -43,6 +45,10 @@ class TraceHarness {
   setInt(active: boolean, dataBus = 0xff): void {
     this.intLine = Boolean(active);
     this.intDataBus = dataBus & 0xff;
+  }
+
+  setNmi(active: boolean): void {
+    this.nmiLine = Boolean(active);
   }
 
   loadState(state: CpuState): void {
@@ -147,6 +153,50 @@ describe('Z80 cycle accuracy', () => {
     const state = harness.cpu.getState();
     expect(state.registers.pc).toBeGreaterThanOrEqual(0x0038);
     expect(state.halted).toBe(true);
+  });
+
+  it('releases HALT on NMI and executes NMI handler at 0x0066', () => {
+    const harness = new TraceHarness();
+    harness.memory.set([0x76]); // HALT
+    harness.memory[0x0066] = 0x76; // HALT at NMI vector
+
+    harness.step(64);
+    expect(harness.cpu.getState().halted).toBe(true);
+
+    // NMI is edge-triggered; keep high for one step, then lower.
+    harness.setNmi(true);
+    harness.step(1);
+    harness.setNmi(false);
+    harness.step(400);
+
+    const state = harness.cpu.getState();
+    expect(state.registers.pc).toBeGreaterThanOrEqual(0x0066);
+    expect(state.halted).toBe(true);
+  });
+
+  it('prioritizes NMI over INT when both are asserted together', () => {
+    const harness = new TraceHarness();
+    harness.memory.fill(0);
+    harness.memory[0x0066] = 0x76; // NMI vector
+    harness.memory[0x0038] = 0x00; // IM1 vector marker
+
+    const initial = harness.cpu.getState();
+    harness.loadState({
+      ...initial,
+      iff1: true,
+      iff2: true,
+      im: 1
+    });
+
+    harness.setInt(true, 0xff);
+    harness.setNmi(true);
+    harness.step(1);
+    harness.setNmi(false);
+    harness.step(400);
+
+    const state = harness.cpu.getState();
+    expect(state.registers.pc).toBeGreaterThanOrEqual(0x0066);
+    expect(state.registers.pc).toBeLessThan(0x0100);
   });
 
   it('matches INT vector behavior for IM0/IM1/IM2', () => {
