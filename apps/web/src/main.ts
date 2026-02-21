@@ -39,6 +39,12 @@ interface AsmBuildCache {
   dump: string;
 }
 
+interface CompatRouteStats {
+  executeLineCalls: number;
+  runProgramCalls: number;
+  rejectedCalls: number;
+}
+
 declare global {
   interface Window {
     __pcg815?: {
@@ -50,6 +56,7 @@ declare global {
       setKanaMode: (enabled: boolean) => void;
       getKanaMode: () => boolean;
       drainAsciiFifo: () => number[];
+      getCompatRouteStats: () => CompatRouteStats;
       tapKey: (code: string) => void;
       assembleAsm: (source: string) => { ok: boolean; errorLine?: string; dump: string };
       runAsm: (source: string) => Promise<RunAsmProgramResult>;
@@ -729,6 +736,11 @@ let asmRunInFlight = false;
 let asmRunToken = 0;
 let asmBuildCache: AsmBuildCache | undefined;
 let currentEditorMode: EditorMode = 'basic';
+const compatRouteStats: CompatRouteStats = {
+  executeLineCalls: 0,
+  runProgramCalls: 0,
+  rejectedCalls: 0
+};
 
 function waitForAnimationFrame(): Promise<void> {
   return new Promise((resolve) => {
@@ -846,6 +858,26 @@ function drainRuntimeOutputQueue(): void {
   }
 }
 
+function assertCompatBackend(operation: string): void {
+  if (machine.getExecutionBackend() === 'ts-compat') {
+    return;
+  }
+  compatRouteStats.rejectedCalls += 1;
+  throw new Error(`compat route blocked in backend=${machine.getExecutionBackend()}: ${operation}`);
+}
+
+function executeCompatImmediateLine(line: string): void {
+  assertCompatBackend('executeLine');
+  compatRouteStats.executeLineCalls += 1;
+  machine.runtime.executeLine(line);
+}
+
+function runCompatStoredProgram(): void {
+  assertCompatBackend('runProgram');
+  compatRouteStats.runProgramCalls += 1;
+  machine.runtime.runProgram(10_000, true, undefined, true);
+}
+
 function sendLineViaFirmwareConsole(line: string): void {
   for (const ch of line) {
     machine.runtime.receiveChar(ch.charCodeAt(0) & 0xff);
@@ -855,7 +887,7 @@ function sendLineViaFirmwareConsole(line: string): void {
 
 function injectBasicLine(line: string, options?: { discardOutput?: boolean }): void {
   if (machine.getExecutionBackend() === 'ts-compat') {
-    machine.runtime.executeLine(line);
+    executeCompatImmediateLine(line);
   } else {
     sendLineViaFirmwareConsole(line);
   }
@@ -894,7 +926,7 @@ async function runBasicProgram(
       injectBasicLine(line, { discardOutput: true });
     }
     if (machine.getExecutionBackend() === 'ts-compat') {
-      machine.runtime.runProgram(10_000, true, undefined, true);
+      runCompatStoredProgram();
     } else {
       injectBasicLine('RUN');
     }
@@ -1758,6 +1790,7 @@ window.__pcg815 = {
   },
   getKanaMode: () => machine.getKanaMode(),
   drainAsciiFifo: () => machine.drainAsciiQueue(),
+  getCompatRouteStats: () => ({ ...compatRouteStats }),
   tapKey: (code: string) => {
     machine.setImmediateInputToRuntimeEnabled(false);
     machine.setKeyState(code, true);
