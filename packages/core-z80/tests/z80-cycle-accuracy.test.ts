@@ -21,6 +21,7 @@ class TraceHarness {
   private intDataBus = 0xff;
 
   private nmiLine = false;
+  private busrqLine = false;
 
   step(tstates: number, waitSelector?: (pins: Z80PinsOut, stepIndex: number) => boolean): void {
     const steps = Math.max(0, Math.floor(tstates));
@@ -34,7 +35,7 @@ class TraceHarness {
         wait,
         int: this.intLine,
         nmi: this.nmiLine,
-        busrq: false,
+        busrq: this.busrqLine,
         reset: false
       });
     }
@@ -49,6 +50,10 @@ class TraceHarness {
 
   setNmi(active: boolean): void {
     this.nmiLine = Boolean(active);
+  }
+
+  setBusrq(active: boolean): void {
+    this.busrqLine = Boolean(active);
   }
 
   loadState(state: CpuState): void {
@@ -155,6 +160,19 @@ describe('Z80 cycle accuracy', () => {
     expect(state.halted).toBe(true);
   });
 
+  it('keeps M1 fetch and RFSH cycles while HALTed', () => {
+    const harness = new TraceHarness();
+    harness.memory.set([0x76]); // HALT
+
+    harness.step(64);
+
+    const haltFetchCycles = harness.trace.filter((x) => x.halt && x.m1 && x.mreq && x.rd).length;
+    const haltRefreshCycles = harness.trace.filter((x) => x.halt && x.m1 && x.mreq && x.rfsh).length;
+
+    expect(haltFetchCycles).toBeGreaterThan(0);
+    expect(haltRefreshCycles).toBeGreaterThan(0);
+  });
+
   it('releases HALT on NMI and executes NMI handler at 0x0066', () => {
     const harness = new TraceHarness();
     harness.memory.set([0x76]); // HALT
@@ -227,12 +245,36 @@ describe('Z80 cycle accuracy', () => {
       return harness.cpu.getState();
     };
 
-    const im0 = runMode(0, 0x2f, 0x0028);
+    const im0 = runMode(0, 0xc7, 0x0000);
     const im1 = runMode(1, 0xff, 0x0038);
     const im2 = runMode(2, 0x10, 0x2222, 0x55);
 
-    expect(im0.registers.pc).toBeGreaterThanOrEqual(0x0028);
+    expect(im0.registers.pc).toBeGreaterThanOrEqual(0x0000);
+    expect(im0.registers.pc).toBeLessThan(0x0010);
     expect(im1.registers.pc).toBeGreaterThanOrEqual(0x0038);
     expect(im2.registers.pc).toBeGreaterThanOrEqual(0x2222);
+  });
+
+  it('asserts BUSAK and pauses instruction progress while BUSRQ is active', () => {
+    const harness = new TraceHarness();
+    harness.memory.set([
+      0x00, // NOP
+      0x00, // NOP
+      0x76 // HALT
+    ]);
+
+    harness.step(6);
+    const pcBeforeHold = harness.cpu.getState().registers.pc;
+    harness.setBusrq(true);
+    harness.step(20);
+    const pcDuringHold = harness.cpu.getState().registers.pc;
+
+    expect(harness.trace.some((x) => x.busak)).toBe(true);
+    expect(pcDuringHold).toBe(pcBeforeHold);
+
+    harness.setBusrq(false);
+    harness.step(40);
+    const pcAfterRelease = harness.cpu.getState().registers.pc;
+    expect(pcAfterRelease).toBeGreaterThan(pcDuringHold);
   });
 });

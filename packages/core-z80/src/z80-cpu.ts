@@ -203,6 +203,13 @@ export class Z80Cpu implements Z80Core {
       this.pendingIntDataBus = sampledInput.data;
     }
 
+    // BUSRQ 中は CPU がバスを解放し、内部マイクロステップ進行を停止する。
+    if (sampledInput.busrq) {
+      this.pinsOut = this.composePinsOut(() => this.pins({}), sampledInput);
+      this.tstates += 1;
+      return this.getPinsOut();
+    }
+
     if (this.queue.length === 0) {
       this.scheduleNextInstruction();
     }
@@ -464,7 +471,28 @@ export class Z80Cpu implements Z80Core {
       this.scheduleNextInstruction();
       return;
     }
-    this.enqueueIdle(4);
+    this.enqueueHaltBusCycle();
+  }
+
+  private enqueueHaltBusCycle(): void {
+    // HALT 中は内部的に NOP フェッチ相当の M1/RFSH サイクルを繰り返す。
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }));
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }), undefined, true);
+    this.enqueueStep(
+      () => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }),
+      () => {
+        this.bumpR();
+      }
+    );
+    this.enqueueStep(() =>
+      this.pins({
+        addr: ((this.regs.i << 8) | (this.regs.r & 0x7f)) & 0xffff,
+        m1: true,
+        mreq: true,
+        rfsh: true
+      })
+    );
+    this.enqueueStep(() => this.pins({}));
   }
 
   private scheduleNmi(): void {
@@ -490,6 +518,15 @@ export class Z80Cpu implements Z80Core {
     this.enqueueIntAckFetch((sampled) => {
       dataBus = sampled;
     });
+
+    if (this.im === 0) {
+      // IM0 は ACK 時に供給された opcode をそのまま実行する。
+      this.enqueueInternal(() => {
+        this.decodeOpcode(dataBus, 'HL');
+      });
+      return;
+    }
+
     this.enqueuePushWord(() => this.regs.pc);
 
     if (this.im === 2) {
