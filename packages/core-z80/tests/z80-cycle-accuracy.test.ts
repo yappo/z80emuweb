@@ -314,4 +314,45 @@ describe('Z80 cycle accuracy', () => {
     const pcAfterRelease = harness.cpu.getState().registers.pc;
     expect(pcAfterRelease).toBeGreaterThan(pcDuringHold);
   });
+
+  it('keeps bus control lines inactive while BUSAK is asserted', () => {
+    const harness = new TraceHarness();
+    harness.memory.set([0x00, 0x76]); // NOP; HALT
+
+    harness.step(8);
+    harness.setBusrq(true);
+    harness.step(24);
+
+    const busakCycles = harness.trace.filter((x) => x.busak);
+    expect(busakCycles.length).toBeGreaterThan(0);
+    expect(
+      busakCycles.every(
+        (x) => !x.m1 && !x.mreq && !x.iorq && !x.rd && !x.wr && !x.rfsh && x.dataOut === null
+      )
+    ).toBe(true);
+  });
+
+  it('does not start INT ACK while BUSRQ is active and resumes after release', () => {
+    const harness = new TraceHarness();
+    harness.memory.fill(0x00);
+    harness.memory[0x0038] = 0x76; // IM1 vector
+    const initial = harness.cpu.getState();
+    harness.loadState({
+      ...initial,
+      iff1: true,
+      iff2: true,
+      im: 1
+    });
+
+    harness.setBusrq(true);
+    harness.setInt(true, 0xff);
+    harness.step(80);
+    const ackDuringHold = harness.trace.some((x) => x.busak && x.m1 && x.iorq && x.rd);
+    expect(ackDuringHold).toBe(false);
+
+    harness.setBusrq(false);
+    harness.step(200);
+    const ackAfterRelease = harness.trace.some((x) => x.m1 && x.iorq && x.rd);
+    expect(ackAfterRelease).toBe(true);
+  });
 });
