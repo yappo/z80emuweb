@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { FLAG_C } from '../src/flags.ts';
-import { hasTimingDefinition, type OpcodeSpace } from '../src/timing-definitions.ts';
+import { hasTimingDefinition, Z80_TIMING_DEFINITION_TABLE, type OpcodeSpace } from '../src/timing-definitions.ts';
 import { Z80Cpu } from '../src/z80-cpu.ts';
 import { Z80_IDLE_PINS_OUT, type Z80PinsOut } from '../src/types.ts';
 
@@ -421,6 +421,7 @@ describe('Z80Cpu', () => {
   it('has timing definitions for all opcodes in all opcode spaces', () => {
     const spaces: OpcodeSpace[] = ['base', 'cb', 'ed', 'dd', 'fd', 'ddcb', 'fdcb'];
     for (const space of spaces) {
+      expect(Z80_TIMING_DEFINITION_TABLE[space]).toHaveLength(0x100);
       for (let opcode = 0; opcode <= 0xff; opcode += 1) {
         expect(hasTimingDefinition(space, opcode)).toBe(true);
       }

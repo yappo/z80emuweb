@@ -1,20 +1,108 @@
 export type OpcodeSpace = 'base' | 'cb' | 'ed' | 'dd' | 'fd' | 'ddcb' | 'fdcb';
 
-// Phase 1: opcode 空間ごとに「timing 定義が存在するか」を固定するレジストリ。
-// 詳細な M/T ステート列は次段で各 opcode 個別定義へ置換する。
-const FULLY_DEFINED_SPACE = Object.freeze(Array.from({ length: 0x100 }, (_v, opcode) => opcode));
+export type BusCycleKind = 'fetchOpcode' | 'intAck' | 'memRead' | 'memWrite' | 'ioRead' | 'ioWrite' | 'haltFetch';
 
-export const Z80_TIMING_DEFINITION_TABLE: Readonly<Record<OpcodeSpace, readonly number[]>> = Object.freeze({
-  base: FULLY_DEFINED_SPACE,
-  cb: FULLY_DEFINED_SPACE,
-  ed: FULLY_DEFINED_SPACE,
-  dd: FULLY_DEFINED_SPACE,
-  fd: FULLY_DEFINED_SPACE,
-  ddcb: FULLY_DEFINED_SPACE,
-  fdcb: FULLY_DEFINED_SPACE
+export interface BusCycleTimingTemplate {
+  tStates: number;
+  waitSamplePhases: readonly number[];
+  idleTailTStates: number;
+}
+
+export interface OpcodeTimingDefinition {
+  space: OpcodeSpace;
+  opcode: number;
+  mnemonicTag: string;
+  cycles: Readonly<Record<BusCycleKind, BusCycleTimingTemplate>>;
+}
+
+const READ_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
+  tStates: 3,
+  waitSamplePhases: Object.freeze([2]),
+  idleTailTStates: 0
+});
+
+const WRITE_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
+  tStates: 3,
+  waitSamplePhases: Object.freeze([2]),
+  idleTailTStates: 0
+});
+
+const IO_READ_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
+  tStates: 3,
+  waitSamplePhases: Object.freeze([2]),
+  idleTailTStates: 1
+});
+
+const IO_WRITE_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
+  tStates: 3,
+  waitSamplePhases: Object.freeze([2]),
+  idleTailTStates: 1
+});
+
+const FETCH_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
+  tStates: 5,
+  waitSamplePhases: Object.freeze([2]),
+  idleTailTStates: 0
+});
+
+const INT_ACK_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
+  tStates: 4,
+  waitSamplePhases: Object.freeze([2]),
+  idleTailTStates: 0
+});
+
+const HALT_FETCH_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
+  tStates: 5,
+  waitSamplePhases: Object.freeze([2]),
+  idleTailTStates: 0
+});
+
+const DEFAULT_CYCLE_SET: Readonly<Record<BusCycleKind, BusCycleTimingTemplate>> = Object.freeze({
+  fetchOpcode: FETCH_CYCLE_TEMPLATE,
+  intAck: INT_ACK_CYCLE_TEMPLATE,
+  memRead: READ_CYCLE_TEMPLATE,
+  memWrite: WRITE_CYCLE_TEMPLATE,
+  ioRead: IO_READ_CYCLE_TEMPLATE,
+  ioWrite: IO_WRITE_CYCLE_TEMPLATE,
+  haltFetch: HALT_FETCH_CYCLE_TEMPLATE
+});
+
+function makeMnemonicTag(space: OpcodeSpace, opcode: number): string {
+  return `${space.toUpperCase()}_${opcode.toString(16).padStart(2, '0').toUpperCase()}`;
+}
+
+function buildSpaceDefinitions(space: OpcodeSpace): readonly OpcodeTimingDefinition[] {
+  return Object.freeze(
+    Array.from({ length: 0x100 }, (_unused, opcode) =>
+      Object.freeze({
+        space,
+        opcode,
+        mnemonicTag: makeMnemonicTag(space, opcode),
+        cycles: DEFAULT_CYCLE_SET
+      })
+    )
+  );
+}
+
+export const Z80_TIMING_DEFINITION_TABLE: Readonly<Record<OpcodeSpace, readonly OpcodeTimingDefinition[]>> = Object.freeze({
+  base: buildSpaceDefinitions('base'),
+  cb: buildSpaceDefinitions('cb'),
+  ed: buildSpaceDefinitions('ed'),
+  dd: buildSpaceDefinitions('dd'),
+  fd: buildSpaceDefinitions('fd'),
+  ddcb: buildSpaceDefinitions('ddcb'),
+  fdcb: buildSpaceDefinitions('fdcb')
 });
 
 export function hasTimingDefinition(space: OpcodeSpace, opcode: number): boolean {
+  return getTimingDefinition(space, opcode) !== undefined;
+}
+
+export function getTimingDefinition(space: OpcodeSpace, opcode: number): OpcodeTimingDefinition {
   const clamped = opcode & 0xff;
-  return Z80_TIMING_DEFINITION_TABLE[space].includes(clamped);
+  const definition = Z80_TIMING_DEFINITION_TABLE[space][clamped];
+  if (!definition) {
+    throw new Error(`Missing timing definition: ${space} opcode=0x${clamped.toString(16).padStart(2, '0')}`);
+  }
+  return definition;
 }

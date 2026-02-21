@@ -19,6 +19,7 @@ import {
   type Z80PinsIn,
   type Z80PinsOut
 } from './types';
+import { getTimingDefinition, type BusCycleKind, type OpcodeSpace, type OpcodeTimingDefinition } from './timing-definitions';
 
 type IndexMode = 'HL' | 'IX' | 'IY';
 type RotateOp = 'RLC' | 'RL' | 'RRC' | 'RR' | 'SLA' | 'SRA' | 'SLL' | 'SRL';
@@ -144,6 +145,8 @@ export class Z80Cpu implements Z80Core {
 
   private tstates = 0;
 
+  private activeTiming: OpcodeTimingDefinition = getTimingDefinition('base', 0x00);
+
   constructor(options?: Z80CpuOptions) {
     this.options = options ?? {};
   }
@@ -183,6 +186,7 @@ export class Z80Cpu implements Z80Core {
     this.prevNmi = false;
     this.deferInterruptAcceptance = false;
     this.tstates = 0;
+    this.activeTiming = getTimingDefinition('base', 0x00);
   }
 
   tick(input: Z80PinsIn): Z80PinsOut {
@@ -287,6 +291,7 @@ export class Z80Cpu implements Z80Core {
     this.deferInterruptAcceptance = false;
     this.tstates = state.tstates;
     this.pinsOut = { ...Z80_IDLE_PINS_OUT, halt: this.halted };
+    this.activeTiming = getTimingDefinition('base', 0x00);
   }
 
   private composePinsOut(producer: PinsProducer, input: Z80PinsIn): Z80PinsOut {
@@ -342,38 +347,65 @@ export class Z80Cpu implements Z80Core {
   }
 
   private enqueueReadMem(addr: () => number, target: (value: number) => void): void {
+    const cycle = this.getCycleTiming('memRead');
     this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, rd: true }));
-    this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, rd: true }), undefined, true);
+    this.enqueueStep(
+      () => this.pins({ addr: clamp16(addr()), mreq: true, rd: true }),
+      undefined,
+      cycle.waitSamplePhases.includes(2)
+    );
     this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, rd: true }), (input) => {
       target(clamp8(input.data));
     });
+    this.enqueueIdle(cycle.idleTailTStates);
   }
 
   private enqueueWriteMem(addr: () => number, value: () => number): void {
+    const cycle = this.getCycleTiming('memWrite');
     this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, dataOut: clamp8(value()) }));
-    this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, wr: true, dataOut: clamp8(value()) }), undefined, true);
+    this.enqueueStep(
+      () => this.pins({ addr: clamp16(addr()), mreq: true, wr: true, dataOut: clamp8(value()) }),
+      undefined,
+      cycle.waitSamplePhases.includes(2)
+    );
     this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, wr: true, dataOut: clamp8(value()) }));
+    this.enqueueIdle(cycle.idleTailTStates);
   }
 
   private enqueueReadIo(port: () => number, target: (value: number) => void): void {
+    const cycle = this.getCycleTiming('ioRead');
     this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, rd: true }));
-    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, rd: true }), undefined, true);
+    this.enqueueStep(
+      () => this.pins({ addr: clamp8(port()), iorq: true, rd: true }),
+      undefined,
+      cycle.waitSamplePhases.includes(2)
+    );
     this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, rd: true }), (input) => {
       target(clamp8(input.data));
     });
-    this.enqueueStep(() => this.pins({}));
+    this.enqueueIdle(cycle.idleTailTStates);
   }
 
   private enqueueWriteIo(port: () => number, value: () => number): void {
+    const cycle = this.getCycleTiming('ioWrite');
     this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, dataOut: clamp8(value()) }));
-    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, wr: true, dataOut: clamp8(value()) }), undefined, true);
+    this.enqueueStep(
+      () => this.pins({ addr: clamp8(port()), iorq: true, wr: true, dataOut: clamp8(value()) }),
+      undefined,
+      cycle.waitSamplePhases.includes(2)
+    );
     this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, wr: true, dataOut: clamp8(value()) }));
-    this.enqueueStep(() => this.pins({}));
+    this.enqueueIdle(cycle.idleTailTStates);
   }
 
   private enqueueFetchOpcode(target: (opcode: number) => void): void {
+    const cycle = this.getCycleTiming('fetchOpcode');
     this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }));
-    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }), undefined, true);
+    this.enqueueStep(
+      () => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }),
+      undefined,
+      cycle.waitSamplePhases.includes(2)
+    );
     this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }), (input) => {
       const opcode = clamp8(input.data);
       // R レジスタは命令フェッチごとに下位 7bit を進める。
@@ -390,15 +422,21 @@ export class Z80Cpu implements Z80Core {
       })
     );
     this.enqueueStep(() => this.pins({}));
+    this.enqueueIdle(cycle.idleTailTStates);
   }
 
   private enqueueIntAckFetch(target: (value: number) => void): void {
+    const cycle = this.getCycleTiming('intAck');
     this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true, rd: true }));
-    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true, rd: true }), undefined, true);
+    this.enqueueStep(
+      () => this.pins({ addr: this.regs.pc, m1: true, iorq: true, rd: true }),
+      undefined,
+      cycle.waitSamplePhases.includes(2)
+    );
     this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true, rd: true }), (input) => {
       target(clamp8(input.data));
     });
-    this.enqueueStep(() => this.pins({}));
+    this.enqueueIdle(cycle.idleTailTStates);
   }
 
   private enqueuePushWord(value: () => number): void {
@@ -460,7 +498,7 @@ export class Z80Cpu implements Z80Core {
     }
 
     this.enqueueFetchOpcode((opcode) => {
-      this.decodeOpcode(opcode, 'HL');
+      this.decodeByTimingDefinition('base', opcode, 'HL');
     });
   }
 
@@ -475,9 +513,14 @@ export class Z80Cpu implements Z80Core {
   }
 
   private enqueueHaltBusCycle(): void {
+    const cycle = this.getCycleTiming('haltFetch');
     // HALT 中は内部的に NOP フェッチ相当の M1/RFSH サイクルを繰り返す。
     this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }));
-    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }), undefined, true);
+    this.enqueueStep(
+      () => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }),
+      undefined,
+      cycle.waitSamplePhases.includes(2)
+    );
     this.enqueueStep(
       () => this.pins({ addr: this.regs.pc, m1: true, mreq: true, rd: true }),
       () => {
@@ -493,6 +536,7 @@ export class Z80Cpu implements Z80Core {
       })
     );
     this.enqueueStep(() => this.pins({}));
+    this.enqueueIdle(cycle.idleTailTStates);
   }
 
   private scheduleNmi(): void {
@@ -522,7 +566,7 @@ export class Z80Cpu implements Z80Core {
     if (this.im === 0) {
       // IM0 は ACK 時に供給された opcode をそのまま実行する。
       this.enqueueInternal(() => {
-        this.decodeOpcode(dataBus, 'HL');
+        this.decodeByTimingDefinition('base', dataBus, 'HL');
       });
       return;
     }
@@ -551,6 +595,23 @@ export class Z80Cpu implements Z80Core {
       }
       this.regs.pc = 0x0038;
     });
+  }
+
+  private getCycleTiming(kind: BusCycleKind) {
+    return this.activeTiming.cycles[kind];
+  }
+
+  private decodeByTimingDefinition(space: OpcodeSpace, opcode: number, indexMode: IndexMode, displacement = 0): void {
+    this.activeTiming = getTimingDefinition(space, opcode);
+    if (space === 'cb' || space === 'ddcb' || space === 'fdcb') {
+      this.decodeCB(opcode, indexMode, displacement);
+      return;
+    }
+    if (space === 'ed') {
+      this.decodeED(opcode);
+      return;
+    }
+    this.decodeOpcode(opcode, indexMode);
   }
 
   private decodeOpcode(opcode: number, indexMode: IndexMode): void {
@@ -611,26 +672,26 @@ export class Z80Cpu implements Z80Core {
       case 0xdd:
         // プレフィクス DD: 後続命令で HL/H/L を IX/IXH/IXL とみなして実行する。
         this.enqueueFetchOpcode((next) => {
-          this.decodeOpcode(next, 'IX');
+          this.decodeByTimingDefinition('dd', next, 'IX');
         });
         return;
       case 0xfd:
         // プレフィクス FD: 後続命令で HL/H/L を IY/IYH/IYL とみなして実行する。
         this.enqueueFetchOpcode((next) => {
-          this.decodeOpcode(next, 'IY');
+          this.decodeByTimingDefinition('fd', next, 'IY');
         });
         return;
       case 0xed:
         // プレフィクス ED: 拡張命令群へ分岐する（本実装は一部の命令のみ対応）。
         this.enqueueFetchOpcode((next) => {
-          this.decodeED(next);
+          this.decodeByTimingDefinition('ed', next, 'HL');
         });
         return;
       case 0xcb:
         // プレフィクス CB: ビットテスト・ビット更新・ローテート命令群へ分岐する。
         if (indexMode === 'HL') {
           this.enqueueFetchOpcode((next) => {
-            this.decodeCB(next, 'HL', 0);
+            this.decodeByTimingDefinition('cb', next, 'HL');
           });
           return;
         }
@@ -1610,7 +1671,7 @@ export class Z80Cpu implements Z80Core {
       displacement = signExtend8(value);
     });
     this.enqueueFetchOpcode((opcode) => {
-      this.decodeCB(opcode, indexMode, displacement);
+      this.decodeByTimingDefinition(indexMode === 'IX' ? 'ddcb' : 'fdcb', opcode, indexMode, displacement);
     });
   }
 
