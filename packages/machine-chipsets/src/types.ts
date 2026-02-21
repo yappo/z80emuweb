@@ -26,6 +26,28 @@ export interface Pin11Device {
   write(port: number, value: number): void;
 }
 
+export type ChipsetReadSource = 'none' | 'memory' | 'io' | 'int-ack';
+
+export interface ChipsetCycleTrace {
+  step: number;
+  pinsOut: Readonly<{
+    addr: number;
+    dataOut: number | null;
+    m1: boolean;
+    mreq: boolean;
+    iorq: boolean;
+    rd: boolean;
+    wr: boolean;
+    rfsh: boolean;
+    halt: boolean;
+    busak: boolean;
+  }>;
+  input: Readonly<ChipsetInputSignals & { data: number }>;
+  readSource: ChipsetReadSource;
+}
+
+export type ChipsetTraceHook = (trace: ChipsetCycleTrace) => void;
+
 export interface Chipset {
   attachCpu(cpu: Z80Core): void;
   tick(tstates: number): void;
