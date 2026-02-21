@@ -355,4 +355,72 @@ describe('Z80 cycle accuracy', () => {
     const ackAfterRelease = harness.trace.some((x) => x.m1 && x.iorq && x.rd);
     expect(ackAfterRelease).toBe(true);
   });
+
+  it('validates waveform invariants across all opcode spaces', () => {
+    type SpaceCase = {
+      name: string;
+      buildProgram: (opcode: number) => number[];
+      minM1Fetch: number;
+    };
+    const spaces: SpaceCase[] = [
+      {
+        name: 'base',
+        buildProgram: (opcode) => [opcode, 0x00, 0x00, 0x76],
+        minM1Fetch: 1
+      },
+      {
+        name: 'cb',
+        buildProgram: (opcode) => [0xcb, opcode, 0x00, 0x76],
+        minM1Fetch: 2
+      },
+      {
+        name: 'ed',
+        buildProgram: (opcode) => [0xed, opcode, 0x00, 0x76],
+        minM1Fetch: 2
+      },
+      {
+        name: 'dd',
+        buildProgram: (opcode) => [0xdd, opcode, 0x01, 0x00, 0x00, 0x76],
+        minM1Fetch: 2
+      },
+      {
+        name: 'fd',
+        buildProgram: (opcode) => [0xfd, opcode, 0x01, 0x00, 0x00, 0x76],
+        minM1Fetch: 2
+      },
+      {
+        name: 'ddcb',
+        buildProgram: (opcode) => [0xdd, 0xcb, 0x01, opcode, 0x00, 0x76],
+        minM1Fetch: 3
+      },
+      {
+        name: 'fdcb',
+        buildProgram: (opcode) => [0xfd, 0xcb, 0x01, opcode, 0x00, 0x76],
+        minM1Fetch: 3
+      }
+    ];
+
+    for (const space of spaces) {
+      for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+        const harness = new TraceHarness();
+        harness.memory.set(space.buildProgram(opcode));
+        harness.step(120);
+
+        const fetchCount = harness.trace.filter((x) => x.m1 && x.mreq && x.rd).length;
+        const refreshCount = harness.trace.filter((x) => x.m1 && x.mreq && x.rfsh).length;
+        const illegalReadWriteOverlap = harness.trace.some((x) => x.rd && x.wr);
+
+        expect(fetchCount, `${space.name} opcode 0x${opcode.toString(16).padStart(2, '0')} fetch`).toBeGreaterThanOrEqual(
+          space.minM1Fetch
+        );
+        expect(
+          refreshCount,
+          `${space.name} opcode 0x${opcode.toString(16).padStart(2, '0')} rfsh`
+        ).toBeGreaterThanOrEqual(space.minM1Fetch);
+        expect(illegalReadWriteOverlap, `${space.name} opcode 0x${opcode.toString(16).padStart(2, '0')} rd/wr overlap`).toBe(
+          false
+        );
+      }
+    }
+  });
 });
