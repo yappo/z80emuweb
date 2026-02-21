@@ -120,6 +120,30 @@ describe('Z80 cycle accuracy', () => {
     expect(harness.cpu.getState().registers.a).toBe(0x34);
   });
 
+  it('samples WAIT only on T2/TW and not on T1/T3', () => {
+    const harness = new TraceHarness();
+    harness.memory.set([
+      0xdb,
+      0x10, // IN A,(10h)
+      0x76 // HALT
+    ]);
+    harness.inValues.set(0x10, 0x34);
+
+    harness.step(120, (pins) => {
+      // T1: rd is high but mreq/iorq inactive on this implementation phase.
+      if (pins.rd && !pins.mreq && !pins.iorq) {
+        return true;
+      }
+      // T3-like finalization phase where rd is deasserted.
+      if (!pins.rd && (pins.mreq || pins.iorq)) {
+        return true;
+      }
+      return false;
+    });
+
+    expect(harness.cpu.getState().registers.a).toBe(0x34);
+  });
+
   it('defers INT acceptance for one instruction after EI', () => {
     const harness = new TraceHarness();
     harness.memory.set([
