@@ -173,7 +173,9 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
     .poll(
       async () =>
         page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          const api = window as {
+            __pcg815?: { getTextLines: () => string[] };
+          };
           const lines = api.__pcg815?.getTextLines() ?? [];
           return lines.join('\n');
         }),
@@ -183,6 +185,21 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
       }
     )
     .toContain('321');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as {
+            __pcg815?: {
+              getCompatRouteStats: () => { executeLineCalls: number; runProgramCalls: number; rejectedCalls: number };
+            };
+          };
+          return api.__pcg815?.getCompatRouteStats() ?? { executeLineCalls: -1, runProgramCalls: -1, rejectedCalls: -1 };
+        }),
+      { timeout: 3_000, intervals: [100, 250, 500] }
+    )
+    .toEqual({ executeLineCalls: 0, runProgramCalls: 0, rejectedCalls: 0 });
 
   const speedText = await page.locator('#speed-indicator').innerText();
   expect(speedText.toLowerCase()).toContain('x');
@@ -228,6 +245,31 @@ test('basic load sample runs on fresh boot', async ({ page }) => {
       { timeout: 15_000, intervals: [100, 250, 500] }
     )
     .toContain('owari');
+});
+
+test('ts-compat backend uses compatibility direct route', async ({ page }) => {
+  await page.goto('/?backend=ts-compat');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+  await expect(page.locator('#boot-status')).toContainText(/backend=ts-compat/i);
+
+  await page.locator('#basic-editor').fill('10 PRINT 77\n20 END');
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Run OK/i, { timeout: 5_000 });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as {
+            __pcg815?: {
+              getCompatRouteStats: () => { executeLineCalls: number; runProgramCalls: number; rejectedCalls: number };
+            };
+          };
+          return api.__pcg815?.getCompatRouteStats() ?? { executeLineCalls: 0, runProgramCalls: 0, rejectedCalls: 0 };
+        }),
+      { timeout: 3_000, intervals: [100, 250, 500] }
+    )
+    .toEqual({ executeLineCalls: 3, runProgramCalls: 1, rejectedCalls: 0 });
 });
 
 test('basic editor handles syntax error and reset rerun flow', async ({ page }) => {
