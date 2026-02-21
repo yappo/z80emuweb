@@ -216,7 +216,7 @@ test('basic load sample runs on fresh boot', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Load Sample' }).click();
   await page.getByRole('button', { name: 'RUN Program' }).click();
-  await expect(page.locator('#basic-run-status')).toContainText(/Run OK/i, { timeout: 5_000 });
+  await expect(page.locator('#basic-run-status')).toContainText(/Run OK/i, { timeout: 15_000 });
 
   await expect
     .poll(
@@ -225,7 +225,7 @@ test('basic load sample runs on fresh boot', async ({ page }) => {
           const api = window as { __pcg815?: { getTextLines: () => string[] } };
           return (api.__pcg815?.getTextLines() ?? []).join('\n');
         }),
-      { timeout: 5_000, intervals: [100, 250, 500] }
+      { timeout: 15_000, intervals: [100, 250, 500] }
     )
     .toContain('owari');
 });

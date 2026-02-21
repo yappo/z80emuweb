@@ -4,6 +4,7 @@ import { BasicChipset, type IoDevice, type MemoryDevice } from '@z80emu/machine-
 import {
   type BasicMachineAdapter,
   createMonitorRom,
+  MONITOR_MAIN_LOOP_ADDR,
   type MonitorRuntimeSnapshot,
   MonitorRuntime
 } from '@z80emu/firmware-monitor';
@@ -29,7 +30,13 @@ import {
   PCG815_RAM_BYTES
 } from './hardware-map';
 import { KEY_MAP_BY_CODE } from './keyboard-map';
-import type { MachinePCG815, PCG815MachineOptions, SnapshotV1 } from './types';
+import type {
+  MachinePCG815,
+  PCG815ExecutionBackend,
+  PCG815ExecutionDomain,
+  PCG815MachineOptions,
+  SnapshotV1
+} from './types';
 
 // グリフ未定義時の表示は空白にフォールバックする。
 const SPACE_CODE = 0x20;
@@ -57,6 +64,9 @@ const SYSTEM_ROM_SIZE = SYSTEM_ROM_REGION.end - SYSTEM_ROM_REGION.start + 1;
 const BANKED_ROM_SIZE = BANKED_ROM_REGION.end - BANKED_ROM_REGION.start + 1;
 const TEXT_VRAM_SIZE = LCD_COLS * LCD_ROWS;
 const ICON_VRAM_SIZE = 32;
+const SYSTEM_ROM_BANKS = 8;
+const BANKED_ROM_BANKS = 16;
+const MAIN_RAM_BANKS = 2;
 
 const PORT_SYS_10 = getIoPortSpec('sys-10').port;
 const PORT_SYS_11 = getIoPortSpec('sys-11').port;
@@ -293,11 +303,15 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
   private readonly bootstrapImage: Uint8Array;
 
-  private readonly mainRam = new Uint8Array(PCG815_RAM_BYTES);
+  private readonly mainRamBanks = Array.from({ length: MAIN_RAM_BANKS }, () => new Uint8Array(PCG815_RAM_BYTES));
 
-  private readonly systemRomWindow = new Uint8Array(SYSTEM_ROM_SIZE);
+  private readonly systemRomBanks = Array.from({ length: SYSTEM_ROM_BANKS }, () => new Uint8Array(SYSTEM_ROM_SIZE));
 
-  private readonly bankedRomWindow = new Uint8Array(BANKED_ROM_SIZE);
+  private readonly bankedRomBanks = Array.from({ length: BANKED_ROM_BANKS }, () => new Uint8Array(BANKED_ROM_SIZE));
+
+  private readonly executionBackend: PCG815ExecutionBackend;
+  private executionDomain: PCG815ExecutionDomain = 'firmware';
+  private firmwareReturnAddress = MONITOR_MAIN_LOOP_ADDR;
 
   private readonly textVram = new Uint8Array(TEXT_VRAM_SIZE);
 
@@ -357,9 +371,24 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private readonly openFiles = new Map<number, { path: string; mode: 'INPUT' | 'OUTPUT' | 'APPEND'; cursor: number }>();
   private nextFileHandle = 1;
 
+  private get mainRam(): Uint8Array {
+    const index = (this.ramBank & 0x04) !== 0 ? 1 : 0;
+    return this.mainRamBanks[index] ?? this.mainRamBanks[0]!;
+  }
+
+  private get systemRomWindow(): Uint8Array {
+    return this.systemRomBanks[this.exRomBank & 0x07] ?? this.systemRomBanks[0]!;
+  }
+
+  private get bankedRomWindow(): Uint8Array {
+    return this.bankedRomBanks[this.romBank & 0x0f] ?? this.bankedRomBanks[0]!;
+  }
+
   constructor(options?: PCG815MachineOptions) {
     const monitorRom = options?.rom ?? createMonitorRom();
     this.bootstrapImage = new Uint8Array(monitorRom);
+    this.executionBackend = options?.executionBackend ?? 'z80-firmware';
+    this.firmwareReturnAddress = clamp16(options?.firmwareReturnAddress ?? MONITOR_MAIN_LOOP_ADDR);
 
     this.seedRomWindows();
 
@@ -383,7 +412,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
   reset(cold: boolean): void {
     if (cold) {
-      this.mainRam.fill(0);
+      for (const bank of this.mainRamBanks) {
+        bank.fill(0);
+      }
       this.seedBootstrapInMainRam();
       this.iconVram.fill(0);
       this.textVram.fill(SPACE_CODE);
@@ -430,12 +461,20 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.dirtyFrame = true;
     this.elapsedTStates = 0;
     this.wasRuntimeProgramRunning = false;
+    this.executionDomain = 'firmware';
   }
 
   tick(tstates: number): void {
     const clamped = Math.max(0, Math.floor(tstates));
     const wasRunning = this.runtime.isProgramRunning();
-    this.chipset.tick(clamped);
+    for (let i = 0; i < clamped; i += 1) {
+      this.chipset.tick(1);
+      const cpu = this.chipset.getCpuState();
+      const pc = cpu.registers.pc & 0xffff;
+      if (this.executionDomain === 'user-program' && pc === this.firmwareReturnAddress) {
+        this.executionDomain = 'firmware';
+      }
+    }
     this.elapsedTStates += clamped;
     this.runtime.pump();
     this.flushRuntimeOutputToLcd();
@@ -538,6 +577,44 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     return this.kanaMode;
   }
 
+  getExecutionBackend(): PCG815ExecutionBackend {
+    return this.executionBackend;
+  }
+
+  getExecutionDomain(): PCG815ExecutionDomain {
+    return this.executionDomain;
+  }
+
+  setExecutionDomain(domain: PCG815ExecutionDomain): void {
+    this.executionDomain = domain;
+  }
+
+  getFirmwareReturnAddress(): number {
+    return this.firmwareReturnAddress & 0xffff;
+  }
+
+  setFirmwareReturnAddress(address: number): void {
+    this.firmwareReturnAddress = clamp16(address);
+  }
+
+  getActiveRomBank(): number {
+    return this.romBank & 0x0f;
+  }
+
+  getActiveExRomBank(): number {
+    return this.exRomBank & 0x07;
+  }
+
+  getActiveRamBank(): number {
+    return (this.ramBank & 0x04) !== 0 ? 1 : 0;
+  }
+
+  drainAsciiQueue(): number[] {
+    const drained = [...this.asciiQueue];
+    this.asciiQueue.length = 0;
+    return drained;
+  }
+
   isRuntimeProgramRunning(): boolean {
     return this.runtime.isProgramRunning();
   }
@@ -623,6 +700,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         kanaComposeBuffer: this.kanaComposeBuffer,
         romBankSelect: this.romBank & 0x0f,
         expansionControl: this.ramBank & 0x04,
+        executionDomain: this.executionDomain,
+        executionBackend: this.executionBackend,
+        firmwareReturnAddress: this.firmwareReturnAddress & 0xffff,
         runtime: this.runtime.getSnapshot()
       },
       timestampTStates: this.elapsedTStates
@@ -634,8 +714,13 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       throw new Error(`Unsupported snapshot version: ${snapshot.version}`);
     }
 
-    this.mainRam.fill(0);
-    this.mainRam.set(snapshot.ram.map((v) => v & 0xff).slice(0, this.mainRam.length));
+    for (const bank of this.mainRamBanks) {
+      bank.fill(0);
+    }
+    const ramBytes = snapshot.ram.map((v) => v & 0xff);
+    for (const bank of this.mainRamBanks) {
+      bank.set(ramBytes.slice(0, bank.length));
+    }
 
     this.textVram.fill(SPACE_CODE);
     this.textVram.set(snapshot.vram.text.map((v) => v & 0xff).slice(0, this.textVram.length));
@@ -656,6 +741,8 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
     this.romBank = snapshot.io.romBankSelect & 0x0f;
     this.ramBank = snapshot.io.expansionControl & 0x04;
+    this.executionDomain = snapshot.io.executionDomain ?? 'firmware';
+    this.firmwareReturnAddress = clamp16(snapshot.io.firmwareReturnAddress ?? this.firmwareReturnAddress);
 
     this.runtime.loadSnapshot(snapshot.io.runtime);
 
@@ -795,8 +882,8 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.io3Out = byte & 0xc3;
         return;
       case PORT_SYS_19:
-        this.romBank = byte & 0x0f;
-        this.exRomBank = (byte >> 4) & 0x07;
+        this.romBank = (byte & 0x0f) % BANKED_ROM_BANKS;
+        this.exRomBank = ((byte >> 4) & 0x07) % SYSTEM_ROM_BANKS;
         return;
       case PORT_SYS_1a:
         return;
@@ -938,25 +1025,52 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   }
 
   private seedBootstrapInMainRam(): void {
-    this.mainRam.set(this.bootstrapImage.subarray(0, Math.min(this.bootstrapImage.length, this.mainRam.length)), 0);
+    const bootRam = this.mainRamBanks[0];
+    if (!bootRam) {
+      return;
+    }
+    bootRam.set(this.bootstrapImage.subarray(0, Math.min(this.bootstrapImage.length, bootRam.length)), 0);
   }
 
   private seedRomWindows(): void {
-    this.systemRomWindow.fill(0);
-    this.systemRomWindow.set(
-      this.bootstrapImage.subarray(0, Math.min(this.bootstrapImage.length, this.systemRomWindow.length)),
-      0
-    );
+    for (const bank of this.systemRomBanks) {
+      bank.fill(0);
+    }
+    for (const bank of this.bankedRomBanks) {
+      bank.fill(0);
+    }
 
-    this.bankedRomWindow.fill(0);
-    const bankedOffset = this.systemRomWindow.length;
-    this.bankedRomWindow.set(
-      this.bootstrapImage.subarray(
-        bankedOffset,
-        Math.min(this.bootstrapImage.length, bankedOffset + this.bankedRomWindow.length)
-      ),
-      0
-    );
+    let offset = 0;
+    const loadBank = (target: Uint8Array): void => {
+      if (offset >= this.bootstrapImage.length) {
+        return;
+      }
+      const end = Math.min(this.bootstrapImage.length, offset + target.length);
+      target.set(this.bootstrapImage.subarray(offset, end), 0);
+      offset = end;
+    };
+
+    // Compatibility mapping: image[0] -> system bank0, image[1] -> banked bank0.
+    const systemBank0 = this.systemRomBanks[0];
+    const bankedBank0 = this.bankedRomBanks[0];
+    if (systemBank0) {
+      loadBank(systemBank0);
+    }
+    if (bankedBank0) {
+      loadBank(bankedBank0);
+    }
+
+    const interleavedBankCount = Math.max(this.systemRomBanks.length, this.bankedRomBanks.length);
+    for (let bank = 1; bank < interleavedBankCount; bank += 1) {
+      const system = this.systemRomBanks[bank];
+      if (system) {
+        loadBank(system);
+      }
+      const banked = this.bankedRomBanks[bank];
+      if (banked) {
+        loadBank(banked);
+      }
+    }
   }
 
   private resolveAsciiCodes(code: string, normal?: number, shifted?: number): number[] {

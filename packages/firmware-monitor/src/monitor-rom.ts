@@ -1,5 +1,6 @@
 // モニタ ROM は 16KiB 窓を前提に作成する。
 const ROM_SIZE = 0x4000;
+export const MONITOR_MAIN_LOOP_ADDR = 0x0011;
 
 function textToBytes(text: string): number[] {
   return [...text].map((ch) => ch.charCodeAt(0));

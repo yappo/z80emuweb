@@ -1,6 +1,9 @@
 import type { CpuState } from '@z80emu/core-z80';
 import type { MonitorRuntimeSnapshot } from '@z80emu/firmware-monitor';
 
+export type PCG815ExecutionBackend = 'z80-firmware' | 'ts-compat';
+export type PCG815ExecutionDomain = 'firmware' | 'user-program';
+
 // 永続化用スナップショットの現行フォーマット。
 export interface SnapshotV1 {
   version: 1;
@@ -19,6 +22,9 @@ export interface SnapshotV1 {
     kanaComposeBuffer: string;
     romBankSelect: number;
     expansionControl: number;
+    executionDomain?: PCG815ExecutionDomain;
+    executionBackend?: PCG815ExecutionBackend;
+    firmwareReturnAddress?: number;
     runtime: MonitorRuntimeSnapshot;
   };
   timestampTStates: number;
@@ -30,6 +36,15 @@ export interface MachinePCG815 {
   setKeyState(code: string, pressed: boolean): void;
   setKanaMode(enabled: boolean): void;
   getKanaMode(): boolean;
+  getExecutionBackend(): PCG815ExecutionBackend;
+  getExecutionDomain(): PCG815ExecutionDomain;
+  setExecutionDomain(domain: PCG815ExecutionDomain): void;
+  getFirmwareReturnAddress(): number;
+  setFirmwareReturnAddress(address: number): void;
+  getActiveRomBank(): number;
+  getActiveExRomBank(): number;
+  getActiveRamBank(): number;
+  drainAsciiQueue(): number[];
   isRuntimeProgramRunning(): boolean;
   getFrameBuffer(): Uint8Array;
   reset(cold: boolean): void;
@@ -43,4 +58,6 @@ export interface MachinePCG815 {
 export interface PCG815MachineOptions {
   rom?: Uint8Array;
   strictCpuOpcodes?: boolean;
+  executionBackend?: PCG815ExecutionBackend;
+  firmwareReturnAddress?: number;
 }

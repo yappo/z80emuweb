@@ -208,6 +208,14 @@ describe('PCG815 hardware map metadata', () => {
 });
 
 describe('PCG815Machine', () => {
+  it('defaults to z80-firmware backend and allows ts-compat fallback', () => {
+    const defaultMachine = new PCG815Machine();
+    expect(defaultMachine.getExecutionBackend()).toBe('z80-firmware');
+
+    const compatMachine = new PCG815Machine({ executionBackend: 'ts-compat' });
+    expect(compatMachine.getExecutionBackend()).toBe('ts-compat');
+  });
+
   it('exposes RAM range and allows loading program bytes into RAM window', () => {
     const machine = new PCG815Machine();
     const range = machine.getRamRange();
@@ -311,6 +319,58 @@ describe('PCG815Machine', () => {
     machine.write8(0xc000, romHighBefore ^ 0xff);
     expect(machine.read8(0x8000)).toBe(romLowBefore);
     expect(machine.read8(0xc000)).toBe(romHighBefore);
+  });
+
+  it('switches RAM window by port 0x1B bank control', () => {
+    const machine = new PCG815Machine();
+    const addr = 0x7000;
+
+    machine.out8(0x1b, 0x00);
+    machine.write8(addr, 0x11);
+    expect(machine.getActiveRamBank()).toBe(0);
+
+    machine.out8(0x1b, 0x04);
+    expect(machine.getActiveRamBank()).toBe(1);
+    machine.write8(addr, 0x22);
+    expect(machine.read8(addr)).toBe(0x22);
+
+    machine.out8(0x1b, 0x00);
+    expect(machine.getActiveRamBank()).toBe(0);
+    expect(machine.read8(addr)).toBe(0x11);
+  });
+
+  it('switches ROM windows by port 0x19 bank control', () => {
+    const bankSize = 0x4000;
+    const rom = new Uint8Array(bankSize * 4);
+    rom.fill(0x11, 0x0000, 0x4000); // system bank0
+    rom.fill(0x22, 0x4000, 0x8000); // banked bank0
+    rom.fill(0x33, 0x8000, 0xc000); // system bank1
+    rom.fill(0x44, 0xc000, 0x10000); // banked bank1
+
+    const machine = new PCG815Machine({ rom });
+    expect(machine.read8(0x8000)).toBe(0x11);
+    expect(machine.read8(0xc000)).toBe(0x22);
+
+    machine.out8(0x19, 0x11); // exRomBank=1, romBank=1
+    expect(machine.getActiveExRomBank()).toBe(1);
+    expect(machine.getActiveRomBank()).toBe(1);
+    expect(machine.read8(0x8000)).toBe(0x33);
+    expect(machine.read8(0xc000)).toBe(0x44);
+  });
+
+  it('returns execution domain to firmware when user program RET reaches firmware return address', () => {
+    const machine = new PCG815Machine();
+    machine.loadProgram(Uint8Array.from([0xc9]), 0x0200); // RET
+    const firmwareReturn = machine.getFirmwareReturnAddress();
+
+    machine.write8(0x7ffc, firmwareReturn & 0xff);
+    machine.write8(0x7ffd, (firmwareReturn >> 8) & 0xff);
+    machine.setStackPointer(0x7ffc);
+    machine.setProgramCounter(0x0200);
+    machine.setExecutionDomain('user-program');
+
+    run(machine, 64);
+    expect(machine.getExecutionDomain()).toBe('firmware');
   });
 
   it('updates keyboard matrix with active-low semantics', () => {
