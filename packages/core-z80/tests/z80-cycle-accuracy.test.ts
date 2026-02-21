@@ -242,7 +242,12 @@ describe('Z80 cycle accuracy', () => {
   });
 
   it('matches INT vector behavior for IM0/IM1/IM2', () => {
-    const runMode = (im: 0 | 1 | 2, intDataBus: number, expectedPcBase: number, i = 0x40): CpuState => {
+    const runMode = (
+      im: 0 | 1 | 2,
+      intDataBus: number,
+      expectedPcBase: number,
+      i = 0x40
+    ): { state: CpuState; trace: Z80PinsOut[] } => {
       const harness = new TraceHarness();
       harness.memory.fill(0);
       harness.memory[expectedPcBase & 0xffff] = 0x76;
@@ -266,17 +271,25 @@ describe('Z80 cycle accuracy', () => {
       });
       harness.setInt(true, intDataBus);
       harness.step(400);
-      return harness.cpu.getState();
+      return {
+        state: harness.cpu.getState(),
+        trace: harness.trace
+      };
     };
 
     const im0 = runMode(0, 0xc7, 0x0000);
     const im1 = runMode(1, 0xff, 0x0038);
     const im2 = runMode(2, 0x10, 0x2222, 0x55);
 
-    expect(im0.registers.pc).toBeGreaterThanOrEqual(0x0000);
-    expect(im0.registers.pc).toBeLessThan(0x0010);
-    expect(im1.registers.pc).toBeGreaterThanOrEqual(0x0038);
-    expect(im2.registers.pc).toBeGreaterThanOrEqual(0x2222);
+    expect(im0.state.registers.pc).toBeGreaterThanOrEqual(0x0000);
+    expect(im0.state.registers.pc).toBeLessThan(0x0010);
+    expect(im1.state.registers.pc).toBeGreaterThanOrEqual(0x0038);
+    expect(im2.state.registers.pc).toBeGreaterThanOrEqual(0x2222);
+
+    const hasIntAck = (trace: Z80PinsOut[]): boolean => trace.some((x) => x.m1 && x.iorq && x.rd);
+    expect(hasIntAck(im0.trace)).toBe(true);
+    expect(hasIntAck(im1.trace)).toBe(true);
+    expect(hasIntAck(im2.trace)).toBe(true);
   });
 
   it('asserts BUSAK and pauses instruction progress while BUSRQ is active', () => {
