@@ -277,32 +277,9 @@
 
 ## 10. 未実装命令の現況（2026-02-21時点）
 
-`strictUnsupportedOpcodes=true` で全空間（base/CB/ED/DD/FD/DDCB/FDCB）を走査しても
-`Unsupported opcode` は発生しません。
-
-今回の拡張で以下を追加し、予約/未定義 opcode は NOP 相当として扱う実装に整理しました。
-
-- ベース空間:
-  - `LD r,r'` 群
-  - `ADD/ADC/SUB/SBC/AND/XOR/OR/CP r,(HL),(IX+d),(IY+d)` 群
-  - `DJNZ`, `EXX`, `EX AF,AF'`, `EX (SP),HL/IX/IY`, `JP (HL/IX/IY)`, `LD SP,HL/IX/IY`
-  - `RLCA/RRCA/RLA/RRA`, `DAA/CPL/SCF/CCF`
-- CB 空間:
-  - `RRC`, `RR`, `SLA`, `SRA`, `SLL`, `SRL`（`r/(HL)/(IX+d)/(IY+d)`）
-- ED 空間:
-  - `IN r,(C)`, `OUT (C),r`
-  - `ADC HL,rr`, `SBC HL,rr`
-  - `LD (nn),rr`, `LD rr,(nn)`
-  - `IM 0/1/2`
-  - `RRD/RLD`
-  - `LDI/LDD/LDIR/LDDR`
-  - `CPI/CPD/CPIR/CPDR`
-  - `INI/IND/INIR/INDR`
-  - `OUTI/OUTD/OTIR/OTDR`
-
-注:
-- 「予約/未定義 opcode が存在しない」という意味ではなく、
-  CPU 実装上はそれらも実行可能（NOP 相当）として扱う、という意味です。
+- 現時点で「未実装」として明示している命令はありません。
+- ただし、実機仕様上の予約/未定義 opcode の厳密挙動は未確定です。
+  現在の実装では、これらを NOP 相当として継続実行します。
 
 ## 11. 参照ファイル
 
