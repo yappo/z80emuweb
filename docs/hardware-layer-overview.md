@@ -72,8 +72,8 @@ flowchart LR
 |---|---|---|---|
 | 端末層 | Web UI（Canvas/Key入力/Editor） | 画面描画、キーイベント、実行操作 | `PCG815Machine` API を呼ぶ |
 | マシン層 | `PCG815Machine` | RAM/ROM/LCD/Keyboard/I/Oレジスタ管理、スナップショット管理 | `BasicChipset` に memory/io を登録 |
-| chipset層 | `BasicChipset` | CPU pin 解釈、メモリ/I/O ルーティング、INT/WAIT/RESET 等入力供給 | `Z80Core.tick()` を T-state 単位で駆動 |
-| CPU層 | `Z80Cpu` | 命令デコード、M/T サイクル進行、pin出力生成 | `Z80PinsIn/Out` 契約でのみ通信 |
+| chipset層 | `BasicChipset` | CPU pin 解釈、メモリ/I/O ルーティング、INT/WAIT/RESET 等入力供給、read位相ラッチ、cycle trace 出力 | `Z80Core.tick()` を T-state 単位で駆動 |
+| CPU層 | `Z80Cpu` | 命令デコード、timing定義テーブル参照、M/T サイクル進行、pin出力生成 | `Z80PinsIn/Out` 契約でのみ通信 |
 | firmware層 | `MonitorRuntime` + ROM | BASIC/モニタ動作ロジック | machine adapter 経由でマシン資源を操作 |
 
 ## 3. 何がどこを通るか
@@ -81,7 +81,7 @@ flowchart LR
 ### 3.1 メモリ読み書きの流れ
 
 1. CPU が `mreq + rd` を出すと「メモリ読み取り要求」
-2. chipset がアドレスを見て `read8(addr)` を呼ぶ
+2. chipset が read 開始位相でアドレスを見て `read8(addr)` を呼ぶ（同一 read 位相中はラッチ値を維持）
 3. 読み出した値を `data` として CPU に返す
 4. CPU が `mreq + wr` を出すと「メモリ書き込み要求」
 5. chipset が `write8(addr, value)` を呼ぶ
@@ -89,7 +89,7 @@ flowchart LR
 ### 3.2 I/O 読み書きの流れ
 
 1. CPU が `iorq + rd` を出すと「I/O読み取り」
-2. chipset が `in8(port)` を呼ぶ
+2. chipset が read 開始位相で `in8(port)` を呼ぶ（同一 read 位相中はラッチ値を維持）
 3. CPU が `iorq + wr` を出すと「I/O書き込み」
 4. chipset が `out8(port, value)` を呼ぶ
 
@@ -98,6 +98,13 @@ flowchart LR
 1. マシン層が I/O レジスタ状態から「INT が必要か」を判断
 2. chipset が次の `tick` 入力で `int=true` を CPU に渡す
 3. CPU は命令境界で受理し、INT ACK サイクルへ入る
+
+### 3.4 BUSRQ/BUSAK の流れ
+
+1. 外部が `busrq=true` を入力
+2. CPU はバス進行を停止して `busak=true` を返す
+3. `busak=true` の間、CPU のバス制御線 (`m1/mreq/iorq/rd/wr/rfsh`) は不活性
+4. `busrq=false` で解除すると命令進行を再開
 
 ```mermaid
 flowchart TD
@@ -117,6 +124,7 @@ flowchart TD
 2. `data/int/wait` など入力 pin を組み立てる
 3. CPU に 1T 分 `tick(input)` を渡す
 4. CPU が次の T で使う pin 出力を返す
+5. 必要に応じて cycle trace フックへ当該 T の情報を通知する
 
 ```mermaid
 sequenceDiagram
@@ -160,4 +168,4 @@ sequenceDiagram
 
 1. CPU 実装とマシン実装を分離し、見通しを良くするため  
 2. サイクル精度のテストを CPU 単体で書きやすくするため  
-3. 将来、別のマシン構成に差し替えやすくするため  
+3. 将来、別のマシン構成に差し替えやすくするため

@@ -9,12 +9,18 @@
 
 ## 1. CPU コア概要
 
-`Z80Cpu` は **pin 入出力 + T-state 単位のマイクロオペレーションキュー**で命令を進行させます。
+`Z80Cpu` は **pin 入出力 + T-state 単位のマイクロオペレーションキュー**で命令を進行させます。  
+加えて現在は、opcode 空間ごとの timing 定義テーブルを参照してバスサイクルを組み立てます。
 
 - `tick(input)`
   - `queue` が空なら `scheduleNextInstruction()` で次命令をデコード
   - 1 T-state ごとに `queue` 先頭の処理を 1 つ実行
   - その T-state の pin 出力（`addr/mreq/rd/wr/iorq/m1/rfsh`）を返す
+- timing 定義テーブル
+  - 空間: `base / cb / ed / dd / fd / ddcb / fdcb`
+  - 各空間は `0x00-0xFF` の全 opcode について timing 定義を保持
+  - bus cycle 種別（`fetchOpcode/intAck/memRead/memWrite/ioRead/ioWrite/haltFetch`）ごとに
+    `tStates`, `waitSamplePhases`, `idleTailTStates` を持つ
 - 命令フェッチ
   - `M1` サイクルで `m1+mreq+rd` を出力し、`input.data` を opcode として取り込む
   - フェッチ境界で `R` レジスタ下位 7bit をインクリメント
@@ -94,7 +100,7 @@
 
 ### 4.4 割り込みモード `IM`
 
-- `IM 0`: `PC = dataBus & 0x38`
+- `IM 0`: INT ACK 時に受け取った `dataBus` を opcode として実行
 - `IM 1`: `PC = 0x0038`
 - `IM 2`: `(I:dataBus)`（偶数化）で 16bit ベクタを参照
 
@@ -249,11 +255,27 @@
 ## 8. 割り込み・バスと命令実行の関係
 
 - `HALT` 中でも NMI/INT は監視され、受理時に HALT を解除
+- `HALT` 中は擬似フェッチ相当の `M1 + MREQ + RD` と `RFSH` を継続出力する
 - 命令フェッチ（M1）で `m1+mreq+rd`、直後に `rfsh` が出力される
 - `IN/OUT` は `iorq/rd/wr` pin と `addr` で表現される
-- INT ACK 時の `input.data` は IM0/IM2 のベクタ決定に利用される
+- INT ACK 時の `input.data` は IM0/IM2 で利用される
+- `BUSRQ` が active の間は CPU はマイクロステップ進行を停止し、`BUSAK` を立ててバス制御線を不活性化する
 
-## 9. 未実装命令の現況（2026-02-14時点）
+## 9. 検証カバレッジ（最新版）
+
+- opcode 空間網羅:
+  - `strictUnsupportedOpcodes=true` で全空間（base/CB/ED/DD/FD/DDCB/FDCB）を走査し、Unsupported 例外なし
+- timing 定義網羅:
+  - 全空間で `0x00-0xFF` の定義存在をテストで固定
+- 波形不変条件:
+  - 全空間全 opcode で `M1 fetch` と `RFSH` が観測されること
+  - `RD` と `WR` の同時アサートが発生しないこと
+- 割り込み/バス境界:
+  - EI 1命令遅延
+  - IM0/1/2 の INT ACK 波形
+  - BUSRQ/BUSAK 境界（BUSAK 中の制御線不活性、解除後の再開）
+
+## 10. 未実装命令の現況（2026-02-21時点）
 
 `strictUnsupportedOpcodes=true` で全空間（base/CB/ED/DD/FD/DDCB/FDCB）を走査しても
 `Unsupported opcode` は発生しません。
@@ -282,9 +304,10 @@
 - 「予約/未定義 opcode が存在しない」という意味ではなく、
   CPU 実装上はそれらも実行可能（NOP 相当）として扱う、という意味です。
 
-## 10. 参照ファイル
+## 11. 参照ファイル
 
 - CPU 実装: `packages/core-z80/src/z80-cpu.ts`
+- timing 定義: `packages/core-z80/src/timing-definitions.ts`
 - フラグ定義: `packages/core-z80/src/flags.ts`
 - 型定義: `packages/core-z80/src/types.ts`
 - マシン側 I/O 利用例: `packages/machine-pcg815/src/machine.ts`
