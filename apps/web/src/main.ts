@@ -46,6 +46,7 @@ declare global {
       runBasicProgram: (source: string, options?: RunBasicProgramOptions) => Promise<RunBasicProgramResult>;
       getTextLines: () => string[];
       getBootState: () => BootState;
+      getExecutionBackend: () => 'z80-firmware' | 'ts-compat';
       setKanaMode: (enabled: boolean) => void;
       getKanaMode: () => boolean;
       drainAsciiFifo: () => number[];
@@ -61,6 +62,7 @@ const SCALE = 4;
 const query = new URLSearchParams(window.location.search);
 const debugMode = query.get('debug') === '1';
 const strictMode = query.get('strict') === '1';
+const executionBackend = query.get('backend') === 'ts-compat' ? 'ts-compat' : 'z80-firmware';
 
 function mustQuery<T extends Element>(selector: string): T {
   const el = document.querySelector<T>(selector);
@@ -78,7 +80,7 @@ function mustContext2D(canvas: HTMLCanvasElement, name: string): CanvasRendering
   return ctx;
 }
 
-const machine = new PCG815Machine({ strictCpuOpcodes: strictMode });
+const machine = new PCG815Machine({ strictCpuOpcodes: strictMode, executionBackend });
 
 const canvas = mustQuery<HTMLCanvasElement>('#lcd');
 const runToggleButton = mustQuery<HTMLButtonElement>('#run-toggle');
@@ -844,8 +846,19 @@ function drainRuntimeOutputQueue(): void {
   }
 }
 
+function sendLineViaFirmwareConsole(line: string): void {
+  for (const ch of line) {
+    machine.runtime.receiveChar(ch.charCodeAt(0) & 0xff);
+  }
+  machine.runtime.receiveChar(0x0d);
+}
+
 function injectBasicLine(line: string, options?: { discardOutput?: boolean }): void {
-  machine.runtime.executeLine(line);
+  if (machine.getExecutionBackend() === 'ts-compat') {
+    machine.runtime.executeLine(line);
+  } else {
+    sendLineViaFirmwareConsole(line);
+  }
   if (options?.discardOutput) {
     drainRuntimeOutputQueue();
   }
@@ -880,7 +893,11 @@ async function runBasicProgram(
     for (const line of lines) {
       injectBasicLine(line, { discardOutput: true });
     }
-    machine.runtime.runProgram(10_000, true, undefined, true);
+    if (machine.getExecutionBackend() === 'ts-compat') {
+      machine.runtime.runProgram(10_000, true, undefined, true);
+    } else {
+      injectBasicLine('RUN');
+    }
     machine.tick(40_000);
     renderLcd();
 
@@ -937,24 +954,6 @@ function setAsmDumpText(text: string): void {
   asmDumpView.textContent = text;
 }
 
-function isAddressInRange(addr: number, origin: number, size: number): boolean {
-  // TODO: This is a temporary web-runner completion heuristic.
-  // Z80 PC/SP are 16-bit and wrap around naturally; completion should eventually
-  // be driven by a machine/runtime-level execution lifecycle instead of address range checks.
-  const a = addr & 0xffff;
-  const start = origin & 0xffff;
-  const count = Math.max(0, size | 0);
-  if (count === 0) {
-    return false;
-  }
-  const end = start + count;
-  if (end <= 0x10000) {
-    return a >= start && a < end;
-  }
-  const wrappedEnd = end & 0xffff;
-  return a >= start || a < wrappedEnd;
-}
-
 function assembleAsmSource(source: string): { ok: boolean; errorLine?: string; dump: string } {
   const result = assemble(source, {
     filename: 'web-editor.asm'
@@ -989,8 +988,6 @@ function assembleAsmSource(source: string): { ok: boolean; errorLine?: string; d
 }
 
 async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
-  // Current UI behavior: after ASM RUN completion, the machine state may not
-  // return to normal interactive mode automatically. Users should press Reset.
   if (asmRunInFlight) {
     return { ok: false, errorLine: 'RUN ALREADY IN PROGRESS' };
   }
@@ -1013,8 +1010,13 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
 
     machine.reset(true);
     machine.loadProgram(build.binary, build.origin);
-    machine.setStackPointer(0x7ffe);
+    const firmwareReturnAddress = machine.getFirmwareReturnAddress() & 0xffff;
+    const returnSp = 0x7ffc;
+    machine.write8(returnSp, firmwareReturnAddress & 0xff);
+    machine.write8((returnSp + 1) & 0xffff, (firmwareReturnAddress >> 8) & 0xff);
+    machine.setStackPointer(returnSp);
     machine.setProgramCounter(build.entry);
+    machine.setExecutionDomain('user-program');
     machine.setImmediateInputToRuntimeEnabled(false);
     renderLcd();
 
@@ -1031,8 +1033,11 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
         return { ok: false, errorLine: 'STOPPED' };
       }
       const cpu = machine.getCpuState();
-      const pc = cpu.registers.pc & 0xffff;
-      if (cpu.halted || !isAddressInRange(pc, build.origin, build.binary.length)) {
+      if (cpu.halted && machine.getExecutionDomain() === 'user-program') {
+        machine.setProgramCounter(firmwareReturnAddress);
+        machine.setExecutionDomain('firmware');
+      }
+      if (machine.getExecutionDomain() === 'firmware') {
         break;
       }
       if (performance.now() - start > timeoutMs) {
@@ -1053,6 +1058,9 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
     return { ok: false, errorLine: message };
   } finally {
     machine.setImmediateInputToRuntimeEnabled(true);
+    if (machine.getExecutionDomain() !== 'firmware') {
+      machine.setExecutionDomain('firmware');
+    }
     setAsmRunInFlight(false);
   }
 }
@@ -1294,6 +1302,11 @@ function updateDebugView(): void {
       halted: state.halted,
       queueDepth: state.queueDepth,
       kanaMode: machine.getKanaMode(),
+      executionBackend: machine.getExecutionBackend(),
+      executionDomain: machine.getExecutionDomain(),
+      activeRomBank: machine.getActiveRomBank(),
+      activeExRomBank: machine.getActiveExRomBank(),
+      activeRamBank: machine.getActiveRamBank(),
       speed: speedIndicator.textContent
     },
     null,
@@ -1338,7 +1351,7 @@ function resetHealthWindow(): void {
 }
 
 function boot(coldReset: boolean): boolean {
-  setBootStatus('BOOTING', `strict=${strictMode ? 1 : 0}`);
+  setBootStatus('BOOTING', `strict=${strictMode ? 1 : 0}, backend=${machine.getExecutionBackend()}`);
 
   try {
     if (coldReset) {
@@ -1362,8 +1375,8 @@ function boot(coldReset: boolean): boolean {
 
     running = true;
     runToggleButton.textContent = 'Stop';
-    setBootStatus('READY', `strict=${strictMode ? 1 : 0}, lit=${litPixels}`);
-    appendLog(`BOOT READY strict=${strictMode ? 1 : 0}`);
+    setBootStatus('READY', `strict=${strictMode ? 1 : 0}, backend=${machine.getExecutionBackend()}, lit=${litPixels}`);
+    appendLog(`BOOT READY strict=${strictMode ? 1 : 0} backend=${machine.getExecutionBackend()}`);
     updateDebugView();
     return true;
   } catch (error) {
@@ -1420,7 +1433,7 @@ function verifyHealth(elapsedMs: number, litPixels: number): void {
   }
 
   if (currentState !== 'READY') {
-    setBootStatus('READY', `strict=${strictMode ? 1 : 0}, lit=${litPixels}`);
+    setBootStatus('READY', `strict=${strictMode ? 1 : 0}, backend=${machine.getExecutionBackend()}, lit=${litPixels}`);
   }
 
   lastLitPixels = litPixels;
@@ -1468,7 +1481,7 @@ function setRunningState(next: boolean): void {
   runToggleButton.textContent = running ? 'Stop' : 'Run';
 
   if (running && currentState !== 'READY') {
-    setBootStatus('READY', `strict=${strictMode ? 1 : 0}`);
+    setBootStatus('READY', `strict=${strictMode ? 1 : 0}, backend=${machine.getExecutionBackend()}`);
   }
 }
 
@@ -1739,16 +1752,19 @@ window.__pcg815 = {
   runBasicProgram,
   getTextLines: () => machine.getTextLines(),
   getBootState: () => currentState,
+  getExecutionBackend: () => machine.getExecutionBackend(),
   setKanaMode: (enabled: boolean) => {
     setKanaMode(Boolean(enabled), 'api');
   },
   getKanaMode: () => machine.getKanaMode(),
-  drainAsciiFifo: () => {
-    return [];
-  },
+  drainAsciiFifo: () => machine.drainAsciiQueue(),
   tapKey: (code: string) => {
+    machine.setImmediateInputToRuntimeEnabled(false);
     machine.setKeyState(code, true);
+    machine.tick(64);
     machine.setKeyState(code, false);
+    machine.tick(256);
+    machine.setImmediateInputToRuntimeEnabled(true);
   },
   assembleAsm: (source: string) => {
     return assembleAsmSource(source);

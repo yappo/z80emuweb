@@ -13,6 +13,15 @@ npm run dev
 
 - タブは `BASIC` / `ASSEMBLER` の2つで、初期表示は `BASIC` です。
 
+### 実行バックエンド（併存運用）
+
+- 既定バックエンドは `z80-firmware` です（`PCG815MachineOptions.executionBackend`）。
+- `ts-compat` は保守用フォールバックとして残しています。
+- Web ではクエリで切替できます。
+  - `?backend=z80-firmware`（既定）
+  - `?backend=ts-compat`
+- 現行フェーズでは両系統を並行運用し、主経路は `z80-firmware` に寄せています。
+
 ### BASIC タブ
 
 - 右側の `BASIC Editor` にプログラムを入力し、`RUN Program` で実行します
@@ -26,6 +35,7 @@ npm run dev
 
 - `ASSEMBLE` で Z80 アセンブルを実行し、機械語ダンプを表示します
 - `RUN` は直近アセンブル結果を RAM にロードし、`ENTRY` から実行します
+- 実行完了判定は「プログラム領域外PC」ではなく「ファームウェア復帰点到達」です
 - `STOP CPU` は CPU 実行を停止します
 - `Load Sample` は非ゲームのサンプル（チェックサム計算）を読み込みます
 - 詳細仕様: `docs/assembly-language-spec.md`
