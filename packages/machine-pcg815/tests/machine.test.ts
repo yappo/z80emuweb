@@ -257,6 +257,46 @@ describe('PCG815Machine', () => {
     expect(litCount).toBeGreaterThan(0);
   });
 
+  it('keeps advancing tstates while HALTed in strict timing mode', () => {
+    const machine = new PCG815Machine({ strictCpuOpcodes: true });
+    machine.loadProgram(Uint8Array.from([0x76]), 0x0200); // HALT
+    machine.setProgramCounter(0x0200);
+
+    run(machine, 64);
+    const first = machine.getCpuState();
+    expect(first.halted).toBe(true);
+
+    run(machine, 64);
+    const second = machine.getCpuState();
+    expect(second.halted).toBe(true);
+    expect(second.tstates).toBeGreaterThan(first.tstates);
+    expect(second.registers.pc).toBe(first.registers.pc);
+  });
+
+  it('accepts masked interrupt via IO registers and exits HALT in strict timing mode', () => {
+    const machine = new PCG815Machine({ strictCpuOpcodes: true });
+    machine.loadProgram(
+      Uint8Array.from([
+        0xfb, // EI
+        0x76 // HALT
+      ]),
+      0x0200
+    );
+    machine.loadProgram(Uint8Array.from([0x76]), 0x0038); // HALT at IM1 vector
+    machine.setProgramCounter(0x0200);
+
+    run(machine, 128);
+    expect(machine.getCpuState().halted).toBe(true);
+
+    machine.out8(0x17, 0x10); // interrupt mask enable bit4
+    machine.out8(0x11, 0x10); // raise interrupt type bit4
+    run(machine, 256);
+
+    const state = machine.getCpuState();
+    expect(state.registers.pc).toBeGreaterThanOrEqual(0x0038);
+    expect(state.halted).toBe(true);
+  });
+
   it('uses RAM window as writable and ROM windows as read-only', () => {
     const machine = new PCG815Machine();
 

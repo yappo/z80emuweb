@@ -1,12 +1,3 @@
-// CPU が外部バスとやり取りする最小インターフェース。
-export interface Bus {
-  read8(addr: number): number;
-  write8(addr: number, value: number): void;
-  in8(port: number): number;
-  out8(port: number, value: number): void;
-  onM1?(pc: number): void;
-}
-
 export type InterruptMode = 0 | 1 | 2;
 
 // エミュレータが保持する主レジスタ群。
@@ -47,17 +38,63 @@ export interface CpuState {
   im: InterruptMode;
   halted: boolean;
   pendingNmi: boolean;
+  pendingInt: boolean;
   pendingIntDataBus?: number;
   tstates: number;
   queueDepth: number;
 }
 
-// CPU 実装の公開操作。
-export interface Cpu {
+// CPU へ渡す pin 入力。
+export interface Z80PinsIn {
+  data: number;
+  wait: boolean;
+  int: boolean;
+  nmi: boolean;
+  busrq: boolean;
+  reset: boolean;
+}
+
+// CPU から出る pin 出力。
+export interface Z80PinsOut {
+  addr: number;
+  dataOut: number | null;
+  m1: boolean;
+  mreq: boolean;
+  iorq: boolean;
+  rd: boolean;
+  wr: boolean;
+  rfsh: boolean;
+  halt: boolean;
+  busak: boolean;
+}
+
+export const Z80_IDLE_PINS_OUT: Z80PinsOut = Object.freeze({
+  addr: 0,
+  dataOut: null,
+  m1: false,
+  mreq: false,
+  iorq: false,
+  rd: false,
+  wr: false,
+  rfsh: false,
+  halt: false,
+  busak: false
+});
+
+export const Z80_DEFAULT_PINS_IN: Z80PinsIn = Object.freeze({
+  data: 0xff,
+  wait: false,
+  int: false,
+  nmi: false,
+  busrq: false,
+  reset: false
+});
+
+// CPU 実装の公開操作（pin 駆動）。
+export interface Z80Core {
   reset(): void;
-  stepTState(count: number): void;
-  raiseInt(dataBus?: number): void;
-  raiseNmi(): void;
+  tick(input: Z80PinsIn): Z80PinsOut;
+  getPinsOut(): Z80PinsOut;
   getState(): CpuState;
-  loadState?(state: CpuState): void;
+  loadState(state: CpuState): void;
 }

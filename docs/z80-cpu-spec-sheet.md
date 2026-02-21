@@ -3,21 +3,28 @@
 この文書は `packages/core-z80/src/z80-cpu.ts` を一次情報として整理した、
 実装理解向けの Z80 CPU スペックシートです。
 
-- 目的: 実装を読み解くために、命令・レジスタ・バス・割り込みを人間向けに整理する
+- 目的: 実装を読み解くために、命令・レジスタ・pin・割り込みを人間向けに整理する
 - 記載方針: 著作物の引用ではなく、本実装の事実と一般的な用語で説明する
 - 対象: 現在このリポジトリで実装済みの Z80 命令セット
 
 ## 1. CPU コア概要
 
-`Z80Cpu` は **T-state 単位のマイクロオペレーションキュー**で命令を進行させます。
+`Z80Cpu` は **pin 入出力 + T-state 単位のマイクロオペレーションキュー**で命令を進行させます。  
+加えて現在は、opcode 空間ごとの timing 定義テーブルを参照してバスサイクルを組み立てます。
 
-- `stepTState(count)`
+- `tick(input)`
   - `queue` が空なら `scheduleNextInstruction()` で次命令をデコード
   - 1 T-state ごとに `queue` 先頭の処理を 1 つ実行
+  - その T-state の pin 出力（`addr/mreq/rd/wr/iorq/m1/rfsh`）を返す
+- timing 定義テーブル
+  - 空間: `base / cb / ed / dd / fd / ddcb / fdcb`
+  - 各空間は `0x00-0xFF` の全 opcode について timing 定義を保持
+  - bus cycle 種別（`fetchOpcode/intAck/memRead/memWrite/ioRead/ioWrite/haltFetch`）ごとに
+    `tStates`, `waitSamplePhases`, `idleTailTStates` を持つ
 - 命令フェッチ
-  - `enqueueFetchOpcode()` で `bus.read8(PC)` を実行
-  - `onM1?(pc)` コールバックを発火
-  - `R` レジスタ下位 7bit をインクリメント
+  - `M1` サイクルで `m1+mreq+rd` を出力し、`input.data` を opcode として取り込む
+  - フェッチ境界で `R` レジスタ下位 7bit をインクリメント
+  - フェッチ終端で `rfsh` を出力する
 - 予約/未定義 opcode
   - 現在は各 opcode 空間で例外なくデコードされる
   - 予約/未定義のものは NOP 相当として継続
@@ -48,15 +55,15 @@
 - `N=0x02`: 減算フラグ
 - `C=0x01`: キャリー
 
-## 3. バス・入出力仕様
+## 3. pin・入出力仕様
 
-### 3.1 メモリ/IO バスインターフェース
+### 3.1 CPU pin インターフェース
 
-`Bus` インターフェース:
+入力 (`Z80PinsIn`):
+- `data`, `wait`, `int`, `nmi`, `busrq`, `reset`
 
-- `read8(addr)` / `write8(addr, value)`
-- `in8(port)` / `out8(port, value)`
-- `onM1?(pc)`（命令フェッチ境界通知）
+出力 (`Z80PinsOut`):
+- `addr`, `dataOut`, `m1`, `mreq`, `iorq`, `rd`, `wr`, `rfsh`, `halt`, `busak`
 
 ### 3.2 アドレス幅
 
@@ -74,10 +81,8 @@
 
 ### 4.1 外部割り込み入力
 
-- `raiseNmi()`
-  - NMI 保留を立てる
-- `raiseInt(dataBus=0xFF)`
-  - maskable INT 保留を立て、データバス値を保持
+- `tick()` の入力 pin (`nmi`, `int`) から受理する
+- INT ACK サイクル時のベクタ値は `input.data` を使用する
 
 ### 4.2 優先順位と受理条件
 
@@ -95,7 +100,7 @@
 
 ### 4.4 割り込みモード `IM`
 
-- `IM 0`: `PC = dataBus & 0x38`
+- `IM 0`: INT ACK 時に受け取った `dataBus` を opcode として実行
 - `IM 1`: `PC = 0x0038`
 - `IM 2`: `(I:dataBus)`（偶数化）で 16bit ベクタを参照
 
@@ -250,42 +255,36 @@
 ## 8. 割り込み・バスと命令実行の関係
 
 - `HALT` 中でも NMI/INT は監視され、受理時に HALT を解除
-- 命令フェッチ（M1 相当）ごとに `onM1` コールバックが呼ばれる
-- `IN/OUT` は CPU コアがポート番号を 8bit に正規化してバスへ渡す
-- `raiseInt(dataBus)` の `dataBus` は IM0/IM2 でベクタ決定に利用される
+- `HALT` 中は擬似フェッチ相当の `M1 + MREQ + RD` と `RFSH` を継続出力する
+- 命令フェッチ（M1）で `m1+mreq+rd`、直後に `rfsh` が出力される
+- `IN/OUT` は `iorq/rd/wr` pin と `addr` で表現される
+- INT ACK 時の `input.data` は IM0/IM2 で利用される
+- `BUSRQ` が active の間は CPU はマイクロステップ進行を停止し、`BUSAK` を立ててバス制御線を不活性化する
 
-## 9. 未実装命令の現況（2026-02-14時点）
+## 9. 検証カバレッジ（最新版）
 
-`strictUnsupportedOpcodes=true` で全空間（base/CB/ED/DD/FD/DDCB/FDCB）を走査しても
-`Unsupported opcode` は発生しません。
+- opcode 空間網羅:
+  - `strictUnsupportedOpcodes=true` で全空間（base/CB/ED/DD/FD/DDCB/FDCB）を走査し、Unsupported 例外なし
+- timing 定義網羅:
+  - 全空間で `0x00-0xFF` の定義存在をテストで固定
+- 波形不変条件:
+  - 全空間全 opcode で `M1 fetch` と `RFSH` が観測されること
+  - `RD` と `WR` の同時アサートが発生しないこと
+- 割り込み/バス境界:
+  - EI 1命令遅延
+  - IM0/1/2 の INT ACK 波形
+  - BUSRQ/BUSAK 境界（BUSAK 中の制御線不活性、解除後の再開）
 
-今回の拡張で以下を追加し、予約/未定義 opcode は NOP 相当として扱う実装に整理しました。
+## 10. 未実装命令の現況（2026-02-21時点）
 
-- ベース空間:
-  - `LD r,r'` 群
-  - `ADD/ADC/SUB/SBC/AND/XOR/OR/CP r,(HL),(IX+d),(IY+d)` 群
-  - `DJNZ`, `EXX`, `EX AF,AF'`, `EX (SP),HL/IX/IY`, `JP (HL/IX/IY)`, `LD SP,HL/IX/IY`
-  - `RLCA/RRCA/RLA/RRA`, `DAA/CPL/SCF/CCF`
-- CB 空間:
-  - `RRC`, `RR`, `SLA`, `SRA`, `SLL`, `SRL`（`r/(HL)/(IX+d)/(IY+d)`）
-- ED 空間:
-  - `IN r,(C)`, `OUT (C),r`
-  - `ADC HL,rr`, `SBC HL,rr`
-  - `LD (nn),rr`, `LD rr,(nn)`
-  - `IM 0/1/2`
-  - `RRD/RLD`
-  - `LDI/LDD/LDIR/LDDR`
-  - `CPI/CPD/CPIR/CPDR`
-  - `INI/IND/INIR/INDR`
-  - `OUTI/OUTD/OTIR/OTDR`
+- 現時点で「未実装」として明示している命令はありません。
+- ただし、実機仕様上の予約/未定義 opcode の厳密挙動は未確定です。
+  現在の実装では、これらを NOP 相当として継続実行します。
 
-注:
-- 「予約/未定義 opcode が存在しない」という意味ではなく、
-  CPU 実装上はそれらも実行可能（NOP 相当）として扱う、という意味です。
-
-## 10. 参照ファイル
+## 11. 参照ファイル
 
 - CPU 実装: `packages/core-z80/src/z80-cpu.ts`
+- timing 定義: `packages/core-z80/src/timing-definitions.ts`
 - フラグ定義: `packages/core-z80/src/flags.ts`
 - 型定義: `packages/core-z80/src/types.ts`
 - マシン側 I/O 利用例: `packages/machine-pcg815/src/machine.ts`

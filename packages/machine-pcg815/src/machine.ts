@@ -1,5 +1,6 @@
-import type { Bus, CpuState } from '@z80emu/core-z80';
+import type { CpuState } from '@z80emu/core-z80';
 import { Z80Cpu } from '@z80emu/core-z80';
+import { BasicChipset, type IoDevice, type MemoryDevice } from '@z80emu/machine-chipsets';
 import {
   type BasicMachineAdapter,
   createMonitorRom,
@@ -283,12 +284,12 @@ function isSokuonConsonant(ch: string): boolean {
 }
 
 // PC-G815 互換マシン本体。CPU バス実装も兼ねる。
-export class PCG815Machine implements MachinePCG815, Bus {
+export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   static readonly CLOCK_HZ = 3_579_545;
 
-  readonly cpu: Z80Cpu;
-
   readonly runtime: MonitorRuntime;
+
+  private readonly chipset: BasicChipset;
 
   private readonly bootstrapImage: Uint8Array;
 
@@ -366,9 +367,16 @@ export class PCG815Machine implements MachinePCG815, Bus {
     this.runtime = new MonitorRuntime({
       machineAdapter: this.createBasicMachineAdapter()
     });
-    this.cpu = new Z80Cpu(this, {
-      strictUnsupportedOpcodes: options?.strictCpuOpcodes ?? false
+    this.chipset = new BasicChipset({
+      memory: this,
+      io: this,
+      getSignals: () => this.getCpuInputSignals()
     });
+    this.chipset.attachCpu(
+      new Z80Cpu({
+        strictUnsupportedOpcodes: options?.strictCpuOpcodes ?? false
+      })
+    );
 
     this.reset(true);
   }
@@ -418,7 +426,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
     this.nextFileHandle = 1;
 
     this.runtime.reset(cold);
-    this.cpu.reset();
+    this.chipset.reset();
     this.dirtyFrame = true;
     this.elapsedTStates = 0;
     this.wasRuntimeProgramRunning = false;
@@ -427,7 +435,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
   tick(tstates: number): void {
     const clamped = Math.max(0, Math.floor(tstates));
     const wasRunning = this.runtime.isProgramRunning();
-    this.cpu.stepTState(clamped);
+    this.chipset.tick(clamped);
     this.elapsedTStates += clamped;
     this.runtime.pump();
     this.flushRuntimeOutputToLcd();
@@ -441,6 +449,25 @@ export class PCG815Machine implements MachinePCG815, Bus {
       this.asciiQueue.length = 0;
     }
     this.wasRuntimeProgramRunning = isRunning;
+  }
+
+  private getCpuInputSignals(): {
+    wait: boolean;
+    int: boolean;
+    nmi: boolean;
+    busrq: boolean;
+    reset: boolean;
+    intDataBus: number;
+  } {
+    const intPending = (this.interruptType & this.interruptMask) !== 0;
+    return {
+      wait: false,
+      int: intPending,
+      nmi: false,
+      busrq: false,
+      reset: false,
+      intDataBus: 0xff
+    };
   }
 
   private flushRuntimeOutputToLcd(): void {
@@ -529,7 +556,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
   }
 
   getCpuState(): CpuState {
-    return this.cpu.getState();
+    return this.chipset.getCpuState();
   }
 
   getRamRange(): { start: number; end: number } {
@@ -563,24 +590,25 @@ export class PCG815Machine implements MachinePCG815, Bus {
     if (address < RAM_REGION.start || address > RAM_REGION.end) {
       throw new Error(`Entry address out of RAM window: ${address.toString(16).padStart(4, '0')}`);
     }
-    const state = this.cpu.getState();
+    const state = this.chipset.getCpuState();
     state.registers.pc = address;
     state.halted = false;
     state.pendingNmi = false;
+    state.pendingInt = false;
     state.pendingIntDataBus = undefined;
-    this.cpu.loadState(state);
+    this.chipset.loadCpuState(state);
   }
 
   setStackPointer(value: number): void {
-    const state = this.cpu.getState();
+    const state = this.chipset.getCpuState();
     state.registers.sp = clamp16(value);
-    this.cpu.loadState(state);
+    this.chipset.loadCpuState(state);
   }
 
   createSnapshot(): SnapshotV1 {
     return {
       version: 1,
-      cpu: this.cpu.getState(),
+      cpu: this.chipset.getCpuState(),
       ram: [...this.mainRam],
       vram: {
         text: [...this.textVram],
@@ -631,7 +659,7 @@ export class PCG815Machine implements MachinePCG815, Bus {
 
     this.runtime.loadSnapshot(snapshot.io.runtime);
 
-    this.cpu.loadState(snapshot.cpu);
+    this.chipset.loadCpuState(snapshot.cpu);
     this.elapsedTStates = snapshot.timestampTStates;
     this.dirtyFrame = true;
   }

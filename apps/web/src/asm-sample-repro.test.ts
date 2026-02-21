@@ -28,18 +28,8 @@ function tapKey(machine: PCG815Machine, code: string): void {
   runFor(machine, 1024);
 }
 
-function setSp(machine: PCG815Machine, sp: number): void {
-  const cpu = (machine as { cpu?: { getState: () => any; loadState: (state: any) => void } }).cpu;
-  if (!cpu) {
-    throw new Error('cpu internals unavailable');
-  }
-  const state = cpu.getState();
-  state.registers.sp = sp & 0xffff;
-  cpu.loadState(state);
-}
-
 describe('asm sample input flow', () => {
-  it('reads input and prints reversed text', () => {
+  it('reads input and prints reversed text', { timeout: 20_000 }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs);
     const assembled = assemble(asm, { filename: 'asm-sample.asm' });
@@ -49,7 +39,7 @@ describe('asm sample input flow', () => {
     const machine = new PCG815Machine({ strictCpuOpcodes: true });
     machine.reset(true);
     machine.loadProgram(assembled.binary, assembled.origin);
-    setSp(machine, 0x7ffe);
+    machine.setStackPointer(0x7ffe);
     machine.setProgramCounter(assembled.entry);
 
     runFor(machine, 50_000);

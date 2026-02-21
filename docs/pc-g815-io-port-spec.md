@@ -6,12 +6,40 @@
 - スコープは「エミュレータ実装準拠」です。実機の厳密仕様と差がある箇所は、未実装/暫定として明示します。
 
 ## 2. 背景
-- CPU コア（`packages/core-z80`）はデバイスを持たず、`IN/OUT` 命令で `Bus.in8/out8` に委譲します。
+- CPU コア（`packages/core-z80`）は pin 駆動で、`IN/OUT` は `iorq/rd/wr/addr` pin で表現します。
 - マシン依存の具体挙動（キーボード、LCD、システムポート）は `packages/machine-pcg815` に実装されています。
 - 仕様の優先順位は次の通りです。
   1. `packages/machine-pcg815/src/machine.ts` の実装事実
   2. `packages/machine-pcg815/src/hardware-map.ts` の公開ポート定義
   3. CPU側前提は `docs/z80-cpu-spec-sheet.md`
+
+### 2.1 pin信号と層接続の対応表
+
+この章は、「I/Oポート操作が層をまたいでどのように流れるか」を一覧で確認するための対応表です。
+
+| 起点 | 信号/呼び出し | 受け手 | 何が起きるか |
+|---|---|---|---|
+| CPU (`Z80Cpu`) | `iorq + rd + addr` | chipset (`BasicChipset`) | I/O読み取り要求として解釈される |
+| chipset | `in8(port)` | マシン (`PCG815Machine`) | 対応ポートの入力値を計算して返す |
+| マシン | 入力値（1byte） | chipset | 読み取りデータを返す |
+| chipset | `data` pin | CPU | CPUが `IN` 命令の読み取り値として受け取る |
+| CPU (`Z80Cpu`) | `iorq + wr + addr + dataOut` | chipset (`BasicChipset`) | I/O書き込み要求として解釈される |
+| chipset | `out8(port, value)` | マシン (`PCG815Machine`) | 対応ポートのレジスタ更新/副作用を実行する |
+| マシン | `interruptType`/`interruptMask` 等の状態 | chipset | 次の `tick` で `int` など入力pinに反映される |
+| 端末層（Web UI） | `setKeyState`, `tick` | マシン | キー状態更新とCPU実行を進める |
+
+補足:
+- CPU はポート実装を直接持たず、必ず pin 信号経由で要求を出します。
+- ポートごとの実処理（キーマトリクス、LCD、システムレジスタ）は `PCG815Machine` 側で実装されます。
+
+```mermaid
+flowchart LR
+  UI["Web UI"] -->|"tick / key input"| M["PCG815Machine"]
+  M -->|"MemoryDevice / IoDevice"| C["BasicChipset"]
+  C -->|"Z80PinsIn"| Z["Z80Cpu"]
+  Z -->|"Z80PinsOut\n(iorq/rd/wr/addr/dataOut)"| C
+  C -->|"in8/out8"| M
+```
 
 ## 3. 共通前提（リファレンス共通）
 
@@ -225,16 +253,9 @@
   3. `0x17` でマスク運用
 
 CPU への割り込み送信経路（現状）:
-- `packages/core-z80` の CPU 実装には `raiseInt(dataBus?)` / `raiseNmi()` が実装されている。
-- ただし `packages/machine-pcg815` では、I/O レジスタ更新（`interruptType`/`interruptMask`）から
-  `cpu.raiseInt()` / `cpu.raiseNmi()` へ接続する処理は未実装。
-- そのため現状の `0x16`/`0x17` は「要因・マスクの状態レジスタ」として動作し、
-  それ自体で CPU に割り込みを注入する仕組みにはなっていない。
-
-独自実装として現在できること:
-- 外部コードが `PCG815Machine` の `cpu` へ直接アクセスできる場合に限り、
-  `machine.cpu.raiseInt(...)` / `machine.cpu.raiseNmi()` を直接呼んで割り込みを送信できる。
-- ただしこれは I/O ポート仕様に基づく経路ではなく、エミュレータ内部 API を直接叩く運用。
+- `packages/machine-pcg815` は `interruptType`/`interruptMask` を評価し、
+  chipset 経由で CPU の `int` pin を駆動する。
+- INT ACK で取り込む `data` は既定で `0xFF` を供給する。
 
 ### 4.5 RAM/ROM バンク仕様
 - 関連レジスタ:

@@ -1,79 +1,125 @@
 import { describe, expect, it } from 'vitest';
 
 import { FLAG_C } from '../src/flags.ts';
-import type { Bus } from '../src/types.ts';
+import { hasTimingDefinition, Z80_TIMING_DEFINITION_TABLE, type OpcodeSpace } from '../src/timing-definitions.ts';
 import { Z80Cpu } from '../src/z80-cpu.ts';
+import { Z80_IDLE_PINS_OUT, type Z80PinsOut } from '../src/types.ts';
 
-class MemoryBus implements Bus {
+class PinHarness {
   readonly memory = new Uint8Array(0x10000);
 
   readonly outLog: Array<{ port: number; value: number }> = [];
 
   readonly inValues = new Map<number, number>();
 
-  read8(addr: number): number {
-    return this.memory[addr & 0xffff] ?? 0;
+  readonly cpu: Z80Cpu;
+
+  private lastPinsOut: Z80PinsOut = { ...Z80_IDLE_PINS_OUT };
+
+  private prevWriteActive = false;
+
+  private intLine = false;
+
+  private intDataBus = 0xff;
+
+  private nmiLine = false;
+
+  constructor(strictUnsupportedOpcodes = true) {
+    this.cpu = new Z80Cpu({ strictUnsupportedOpcodes });
   }
 
-  write8(addr: number, value: number): void {
-    this.memory[addr & 0xffff] = value & 0xff;
+  setInt(active: boolean, dataBus = 0xff): void {
+    this.intLine = Boolean(active);
+    this.intDataBus = dataBus & 0xff;
   }
 
-  in8(port: number): number {
-    return this.inValues.get(port & 0xff) ?? 0;
+  step(tstates: number): void {
+    const steps = Math.max(0, Math.floor(tstates));
+    for (let i = 0; i < steps; i += 1) {
+      this.applyWrite(this.lastPinsOut);
+      const data = this.readData(this.lastPinsOut);
+      this.lastPinsOut = this.cpu.tick({
+        data,
+        wait: false,
+        int: this.intLine,
+        nmi: this.nmiLine,
+        busrq: false,
+        reset: false
+      });
+    }
+    this.applyWrite(this.lastPinsOut);
   }
 
-  out8(port: number, value: number): void {
-    this.outLog.push({ port: port & 0xff, value: value & 0xff });
+  private readData(pins: Z80PinsOut): number {
+    if (pins.m1 && pins.iorq && pins.rd) {
+      return this.intDataBus;
+    }
+    if (pins.mreq && pins.rd) {
+      return this.memory[pins.addr & 0xffff] ?? 0xff;
+    }
+    if (pins.iorq && pins.rd) {
+      return this.inValues.get(pins.addr & 0xff) ?? 0xff;
+    }
+    return 0xff;
+  }
+
+  private applyWrite(pins: Z80PinsOut): void {
+    const writeActive = Boolean(pins.wr && (pins.mreq || pins.iorq) && pins.dataOut !== null);
+    if (writeActive && !this.prevWriteActive) {
+      const value = pins.dataOut ?? 0;
+      if (pins.mreq) {
+        this.memory[pins.addr & 0xffff] = value & 0xff;
+      } else if (pins.iorq) {
+        this.outLog.push({ port: pins.addr & 0xff, value: value & 0xff });
+      }
+    }
+    this.prevWriteActive = writeActive;
   }
 }
 
-function run(cpu: Z80Cpu, tstates: number): void {
-  cpu.stepTState(tstates);
+function run(harness: PinHarness, tstates: number): void {
+  harness.step(tstates);
 }
 
 function expectNoUnsupportedForProgram(program: number[]): void {
-  const bus = new MemoryBus();
-  bus.memory.set(program.map((x) => x & 0xff));
-  const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-  expect(() => run(cpu, 160)).not.toThrow();
+  const harness = new PinHarness();
+  harness.memory.set(program.map((x) => x & 0xff));
+  expect(() => run(harness, 160)).not.toThrow();
 }
 
 describe('Z80Cpu', () => {
   it('executes OUT and HALT sequence', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0x3e, 0x12, // LD A,12h
       0xd3, 0x40, // OUT (40h),A
       0x76 // HALT
     ]);
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 200);
+    run(harness, 200);
 
-    expect(bus.outLog).toContainEqual({ port: 0x40, value: 0x12 });
-    expect(cpu.getState().halted).toBe(true);
+    expect(harness.outLog).toContainEqual({ port: 0x40, value: 0x12 });
+    expect(harness.cpu.getState().halted).toBe(true);
   });
 
   it('supports DD indexed load/store', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0xdd, 0x21, 0x00, 0x40, // LD IX,4000h
       0xdd, 0x36, 0x01, 0x7f, // LD (IX+1),7Fh
       0xdd, 0x7e, 0x01, // LD A,(IX+1)
       0x76 // HALT
     ]);
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 400);
+    run(harness, 400);
 
-    expect(bus.memory[0x4001]).toBe(0x7f);
-    expect(cpu.getState().registers.a).toBe(0x7f);
+    expect(harness.memory[0x4001]).toBe(0x7f);
+    expect(harness.cpu.getState().registers.a).toBe(0x7f);
   });
 
   it('supports LD r,r and pointer variants', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0x06, 0x12, // LD B,12h
       0x48, // LD C,B
       0x21, 0x00, 0x20, // LD HL,2000h
@@ -82,18 +128,17 @@ describe('Z80Cpu', () => {
       0x76 // HALT
     ]);
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 300);
+    run(harness, 300);
 
-    const state = cpu.getState();
+    const state = harness.cpu.getState();
     expect(state.registers.c).toBe(0x12);
-    expect(bus.memory[0x2000]).toBe(0x12);
+    expect(harness.memory[0x2000]).toBe(0x12);
     expect(state.registers.e).toBe(0x12);
   });
 
   it('supports DD/FD LD r,r variants including IXH/IXL and (IX+d)/(IY+d)', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0xdd, 0x21, 0x00, 0x40, // LD IX,4000h
       0xdd, 0x66, 0x01, // LD H,(IX+1) -> IXH
       0xdd, 0x68, // LD L,B -> IXL <- B
@@ -102,9 +147,9 @@ describe('Z80Cpu', () => {
       0xfd, 0x4e, 0xfe, // LD C,(IY-2)
       0x76 // HALT
     ]);
-    bus.memory[0x4001] = 0xab;
+    harness.memory[0x4001] = 0xab;
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
+    const cpu = harness.cpu;
     cpu.loadState({
       ...cpu.getState(),
       registers: {
@@ -112,33 +157,32 @@ describe('Z80Cpu', () => {
         b: 0x34
       }
     });
-    run(cpu, 800);
+    run(harness, 800);
 
     const state = cpu.getState();
     expect((state.registers.ix >>> 8) & 0xff).toBe(0xab);
     expect(state.registers.ix & 0xff).toBe(0x34);
-    expect(bus.memory[0x4ffe]).toBe(0x34);
+    expect(harness.memory[0x4ffe]).toBe(0x34);
     expect(state.registers.c).toBe(0x34);
   });
 
   it('supports CB rotate operations', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0x06, 0x81, // LD B,81h
       0xcb, 0x00, // RLC B
       0x76
     ]);
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 240);
+    run(harness, 240);
 
-    expect(cpu.getState().registers.b).toBe(0x03);
-    expect((cpu.getState().registers.f & FLAG_C) !== 0).toBe(true);
+    expect(harness.cpu.getState().registers.b).toBe(0x03);
+    expect((harness.cpu.getState().registers.f & FLAG_C) !== 0).toBe(true);
   });
 
   it('supports base ALU register and (HL) variants', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0x3e, 0x10, // LD A,10h
       0x06, 0x22, // LD B,22h
       0x80, // ADD A,B => 32h
@@ -150,19 +194,18 @@ describe('Z80Cpu', () => {
       0xfe, 0x80, // CP 80h
       0x76
     ]);
-    bus.memory[0x2000] = 0x05;
+    harness.memory[0x2000] = 0x05;
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 900);
-    const state = cpu.getState();
+    run(harness, 900);
+    const state = harness.cpu.getState();
 
     expect(state.registers.a).toBe(0x80);
     expect((state.registers.f & FLAG_C) === 0).toBe(true);
   });
 
   it('supports base exchange, pair arithmetic, rotate/flag opcodes', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0x06, 0x02, // LD B,02h
       0x10, 0x02, // DJNZ +2 (taken)
       0x00, // NOP (skipped)
@@ -180,22 +223,21 @@ describe('Z80Cpu', () => {
       0x3f, // CCF
       0x76
     ]);
-    bus.memory[0x4000] = 0xaa;
-    bus.memory[0x4001] = 0xbb;
+    harness.memory[0x4000] = 0xaa;
+    harness.memory[0x4001] = 0xbb;
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 1500);
-    const state = cpu.getState();
+    run(harness, 1500);
+    const state = harness.cpu.getState();
 
     expect(state.registers.h).toBe(0xbb);
     expect(state.registers.l).toBe(0xaa);
-    expect(bus.memory[0x4000]).toBe(0x78);
-    expect(bus.memory[0x4001]).toBe(0x56);
+    expect(harness.memory[0x4000]).toBe(0x78);
+    expect(harness.memory[0x4001]).toBe(0x56);
   });
 
   it('supports EXX and EX AF,AF shadow register exchange', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0x06, 0x11, // LD B,11h
       0x16, 0x22, // LD D,22h
       0x26, 0x33, // LD H,33h
@@ -211,9 +253,8 @@ describe('Z80Cpu', () => {
       0x76
     ]);
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 1200);
-    const state = cpu.getState();
+    run(harness, 1200);
+    const state = harness.cpu.getState();
 
     expect(state.registers.b).toBe(0x11);
     expect(state.registers.d).toBe(0x22);
@@ -222,8 +263,8 @@ describe('Z80Cpu', () => {
   });
 
   it('supports CB remaining rotate/shift group', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0x06, 0x81, // LD B,81h
       0x0e, 0x03, // LD C,03h
       0xcb, 0x08, // RRC B => C0h
@@ -235,16 +276,15 @@ describe('Z80Cpu', () => {
       0x76
     ]);
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 1000);
-    const state = cpu.getState();
+    run(harness, 1000);
+    const state = harness.cpu.getState();
     expect(state.registers.b).toBe(0x01);
     expect(state.registers.c).toBe(0x60);
   });
 
   it('supports ED pair arithmetic/load and IM selection', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0x21, 0x34, 0x12, // LD HL,1234h
       0x01, 0x02, 0x00, // LD BC,0002h
       0xed, 0x4a, // ADC HL,BC => 1236h
@@ -256,9 +296,8 @@ describe('Z80Cpu', () => {
       0x76
     ]);
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 1400);
-    const state = cpu.getState();
+    run(harness, 1400);
+    const state = harness.cpu.getState();
 
     expect(state.registers.h).toBe(0x12);
     expect(state.registers.l).toBe(0x34);
@@ -268,9 +307,9 @@ describe('Z80Cpu', () => {
   });
 
   it('supports ED IN/OUT with (C) and block IN/OUT/CP operations', () => {
-    const bus = new MemoryBus();
-    bus.inValues.set(0x10, 0x5a);
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.inValues.set(0x10, 0x5a);
+    harness.memory.set([
       0x0e, 0x10, // LD C,10h
       0xed, 0x78, // IN A,(C)
       0xed, 0x79, // OUT (C),A
@@ -287,69 +326,64 @@ describe('Z80Cpu', () => {
       0x76
     ]);
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 2200);
-    const state = cpu.getState();
+    run(harness, 2200);
+    const state = harness.cpu.getState();
 
     expect(state.registers.a).toBe(0x5a);
-    expect(bus.outLog.some((x) => x.port === 0x10 && x.value === 0x5a)).toBe(true);
-    expect(bus.memory[0x2000]).toBe(0x5a);
+    expect(harness.outLog.some((x) => x.port === 0x10 && x.value === 0x5a)).toBe(true);
+    expect(harness.memory[0x2000]).toBe(0x5a);
   });
 
   it('supports ED RRD/RLD', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0x21, 0x00, 0x20, // LD HL,2000h
       0x3e, 0x12, // LD A,12h
       0xed, 0x67, // RRD
       0xed, 0x6f, // RLD
       0x76
     ]);
-    bus.memory[0x2000] = 0x34;
+    harness.memory[0x2000] = 0x34;
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 1000);
-    const state = cpu.getState();
+    run(harness, 1000);
+    const state = harness.cpu.getState();
     expect(state.registers.a).toBe(0x12);
-    expect(bus.memory[0x2000]).toBe(0x34);
+    expect(harness.memory[0x2000]).toBe(0x34);
   });
 
   it('supports ED LDIR block copy', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0x21, 0x00, 0x20, // LD HL,2000h
       0x11, 0x00, 0x30, // LD DE,3000h
       0x01, 0x03, 0x00, // LD BC,0003h
       0xed, 0xb0, // LDIR
       0x76 // HALT
     ]);
-    bus.memory.set([0xaa, 0xbb, 0xcc], 0x2000);
+    harness.memory.set([0xaa, 0xbb, 0xcc], 0x2000);
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    run(cpu, 800);
+    run(harness, 800);
 
-    expect(bus.memory.slice(0x3000, 0x3003)).toEqual(Uint8Array.from([0xaa, 0xbb, 0xcc]));
-    expect(cpu.getState().registers.b).toBe(0x00);
-    expect(cpu.getState().registers.c).toBe(0x00);
+    expect(harness.memory.slice(0x3000, 0x3003)).toEqual(Uint8Array.from([0xaa, 0xbb, 0xcc]));
+    expect(harness.cpu.getState().registers.b).toBe(0x00);
+    expect(harness.cpu.getState().registers.c).toBe(0x00);
   });
 
   it('defers interrupt acceptance for one instruction after EI', () => {
-    const bus = new MemoryBus();
-    bus.memory.set([
+    const harness = new PinHarness();
+    harness.memory.set([
       0xfb, // EI
       0x00, // NOP (must execute before IRQ is accepted)
       0x00, // NOP
       0x76 // HALT
     ]);
-    bus.memory[0x0038] = 0x76; // HALT at IM1 vector
+    harness.memory[0x0038] = 0x76; // HALT at IM1 vector
+    harness.setInt(true, 0xff);
 
-    const cpu = new Z80Cpu(bus, { strictUnsupportedOpcodes: true });
-    cpu.raiseInt(0xff);
+    run(harness, 1000);
 
-    run(cpu, 1000);
-
-    expect(cpu.getState().registers.pc).toBeGreaterThanOrEqual(0x0038);
-    expect(cpu.getState().halted).toBe(true);
+    expect(harness.cpu.getState().registers.pc).toBeGreaterThanOrEqual(0x0038);
+    expect(harness.cpu.getState().halted).toBe(true);
   });
 
   it('has no unsupported opcode in base space', () => {
@@ -381,6 +415,16 @@ describe('Z80Cpu', () => {
     for (let opcode = 0; opcode <= 0xff; opcode += 1) {
       expectNoUnsupportedForProgram([0xdd, 0xcb, 0x01, opcode, 0x00, 0x00]);
       expectNoUnsupportedForProgram([0xfd, 0xcb, 0x01, opcode, 0x00, 0x00]);
+    }
+  });
+
+  it('has timing definitions for all opcodes in all opcode spaces', () => {
+    const spaces: OpcodeSpace[] = ['base', 'cb', 'ed', 'dd', 'fd', 'ddcb', 'fdcb'];
+    for (const space of spaces) {
+      expect(Z80_TIMING_DEFINITION_TABLE[space]).toHaveLength(0x100);
+      for (let opcode = 0; opcode <= 0xff; opcode += 1) {
+        expect(hasTimingDefinition(space, opcode)).toBe(true);
+      }
     }
   });
 });
