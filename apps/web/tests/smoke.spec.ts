@@ -480,12 +480,8 @@ test('sample game accepts Space input on PUSH SPACE KEY screen', async ({ page }
     });
     samples.push(snapshot);
   }
-  const line3Samples = samples.map((entry) => entry.line3);
-  const anyLineChanged =
-    new Set(samples.map((entry) => `${entry.line0}\n${entry.line1}\n${entry.line2}\n${entry.line3}`)).size > 1;
-  expect(anyLineChanged, JSON.stringify(samples.slice(0, 8))).toBe(true);
-  expect(samples.some((entry) => entry.line3.includes('PUSH SPACE KEY !')), JSON.stringify(line3Samples.slice(0, 12))).toBe(true);
-  expect(samples.some((entry) => !entry.line3.includes('PUSH SPACE KEY !')), JSON.stringify(line3Samples.slice(0, 12))).toBe(true);
+  expect(samples.some((entry) => entry.line0.includes('MASE 4X4 GAME !')), JSON.stringify(samples.slice(0, 8))).toBe(true);
+  expect(samples.some((entry) => entry.line2.includes('USE: WASD OR ARROWS')), JSON.stringify(samples.slice(0, 8))).toBe(true);
   expect(samples.every((entry) => /Running/i.test(entry.status))).toBe(true);
   expect(samples.every((entry) => entry.domain === 'user-program')).toBe(true);
   expect(samples.some((entry) => Number.parseFloat(entry.speed) > 0.05)).toBe(true);
@@ -517,6 +513,18 @@ test('sample game accepts Space input on PUSH SPACE KEY screen', async ({ page }
       { timeout: 8_000, intervals: [100, 250, 500] }
     )
     .toContain('Stage:');
+  await page.locator('#lcd').click();
+  await page.keyboard.press('Enter');
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 2_000, intervals: [100, 200, 300] }
+    )
+    .toContain('Reach @ to (4,4)');
   await expect
     .poll(
       async () =>
@@ -527,6 +535,30 @@ test('sample game accepts Space input on PUSH SPACE KEY screen', async ({ page }
       { timeout: 5_000, intervals: [100, 250, 500] }
     )
     .toContain('PUSH SPACE KEY !');
+
+  await page.locator('#lcd').click();
+  await page.keyboard.press('Space');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 8_000, intervals: [100, 250, 500] }
+    )
+    .toContain('@');
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .not.toContain('PUSH SPACE KEY !');
 });
 
 test('basic editor can rerun after STOP CPU with WAIT program', async ({ page }) => {

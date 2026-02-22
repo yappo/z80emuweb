@@ -745,6 +745,7 @@ describe('PCG815Machine', () => {
       'RUN'
     ]);
 
+    expect(machine.getExecutionDomain()).toBe('firmware');
     const screen = machine.getTextLines().join('\n');
     expect(screen).toContain('255');
   });
@@ -908,6 +909,50 @@ describe('PCG815Machine', () => {
     expect(machine.getTextLines().join('\n')).toContain('1');
     expect(machine.getTextLines().join('\n')).not.toContain('\n2');
   });
+
+  it('supports nested GOSUB/RETURN flow', () => {
+    const machine = new PCG815Machine();
+
+    runBasic(machine, [
+      'NEW',
+      '10 GOSUB 100',
+      '20 PRINT 9',
+      '30 END',
+      '100 GOSUB 200',
+      '110 RETURN',
+      '200 PRINT 3',
+      '210 RETURN',
+      'RUN'
+    ]);
+
+    const screen = machine.getTextLines().join('\n');
+    expect(screen).toContain('3');
+    expect(screen).toContain('9');
+  });
+
+  it('continues after first nested cell-draw GOSUB call', () => {
+    const machine = new PCG815Machine();
+
+    runBasic(machine, [
+      'NEW',
+      '10 GOSUB 3000',
+      '20 PRINT 123',
+      '30 END',
+      '3000 LET AX=1',
+      '3010 GOSUB 3300',
+      '3020 LET AX=2',
+      '3030 GOSUB 3300',
+      '3040 RETURN',
+      '3300 LET CH=46',
+      '3310 OUT 90,CH',
+      '3320 RETURN',
+      'RUN'
+    ]);
+
+    expect(machine.getExecutionDomain()).toBe('firmware');
+    expect(machine.getTextLines().join('\n')).toContain('123');
+  });
+
 
   it('does not echo key ASCII into monitor while user-program is active', () => {
     const machine = new PCG815Machine();
