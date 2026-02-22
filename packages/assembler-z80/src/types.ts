@@ -1,8 +1,14 @@
 export type DiagnosticSeverity = 'error' | 'warning';
 
+export interface AssembleAddressRange {
+  start: number;
+  end: number;
+}
+
 export interface AssembleOptions {
   filename?: string;
   includeResolver?: (fromFilename: string, includePath: string) => { filename: string; source: string } | undefined;
+  addressRange?: AssembleAddressRange;
 }
 
 export interface AssemblerDiagnostic {

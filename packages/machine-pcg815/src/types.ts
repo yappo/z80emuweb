@@ -4,6 +4,25 @@ import type { MonitorRuntimeSnapshot } from '@z80emu/firmware-monitor';
 export type PCG815ExecutionBackend = 'z80-firmware' | 'ts-compat';
 export type PCG815ExecutionDomain = 'firmware' | 'user-program';
 
+export interface FirmwareIoStats {
+  queuedBytes: number;
+  inReads: number;
+  consumedBytes: number;
+  outWrites: number;
+  eotWrites: number;
+  pendingBytes: number;
+}
+
+export interface BasicEngineStatus {
+  entry: number;
+  romBank: number;
+  activeRomBank: number;
+  basicRamStart: number;
+  basicRamEnd: number;
+  executionBackend: PCG815ExecutionBackend;
+  executionDomain: PCG815ExecutionDomain;
+}
+
 // 永続化用スナップショットの現行フォーマット。
 export interface SnapshotV1 {
   version: 1;
@@ -52,6 +71,27 @@ export interface MachinePCG815 {
   setProgramCounter(entry: number): void;
   setStackPointer(value: number): void;
   getRamRange(): { start: number; end: number };
+  runBasicInterpreter(
+    bytes: readonly number[],
+    options?: {
+      appendEot?: boolean;
+      maxTStates?: number;
+    }
+  ): void;
+  getBasicEngineStatus(): BasicEngineStatus;
+  runFirmwareInputBridge(
+    bytes: readonly number[],
+    options?: {
+      appendEot?: boolean;
+      maxTStates?: number;
+      entryAddress?: number;
+      programBinary?: Uint8Array | readonly number[];
+    }
+  ): void;
+  enqueueFirmwareInput(bytes: readonly number[]): void;
+  clearFirmwareInput(): void;
+  getFirmwareIoStats(): FirmwareIoStats;
+  resetFirmwareIoStats(): void;
 }
 
 // マシン初期化オプション。
@@ -60,4 +100,9 @@ export interface PCG815MachineOptions {
   strictCpuOpcodes?: boolean;
   executionBackend?: PCG815ExecutionBackend;
   firmwareReturnAddress?: number;
+  basicInterpreterRomImage?: Uint8Array;
+  basicInterpreterEntry?: number;
+  basicRamStart?: number;
+  basicRamEnd?: number;
+  basicInterpreterRomBank?: number;
 }
