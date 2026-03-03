@@ -23,6 +23,22 @@ describe('z80 basic PRINT semicolon behavior', () => {
   );
 
   it.each(['z80-firmware', 'ts-compat'] as const)(
+    'does not increment numeric literal/value when trailing semicolon is used (%s)',
+    (executionBackend) => {
+      const machine = new PCG815Machine({ executionBackend });
+      machine.runBasicInterpreter(encode(['10 PRINT 1;', '20 A=3', '30 PRINT A;', 'RUN']), {
+        appendEot: true,
+        maxTStates: 2_000_000
+      });
+      const screen = machine.getTextLines().join('\n');
+      expect(screen).toContain('1');
+      expect(screen).toContain('3');
+      expect(screen).not.toContain('2');
+      expect(screen).not.toContain('4');
+    }
+  );
+
+  it.each(['z80-firmware', 'ts-compat'] as const)(
     'continues next PRINT on same line when previous ends with semicolon (%s)',
     (executionBackend) => {
       const machine = new PCG815Machine({ executionBackend });
