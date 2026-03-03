@@ -1141,13 +1141,16 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.writeLcdData('secondary', byte);
         return;
       case PORT_LCD_COMMAND:
-        this.g815LcdCtrl('primary', byte);
         // BASIC系ファーム互換:
         // 0x58 への 0x01/0x8x 系コマンドをテキスト層の
-        // CLS/カーソル制御としても解釈する。
+        // CLS/カーソル制御として解釈する。
+        // 0xC0-0xDF は raw LCD では display-start-line と衝突するため、
+        // テキストカーソル用途(0x80|pos)を優先して二重適用を避ける。
         if (byte === 0x01 || (byte & 0x80) !== 0) {
           this.handleLcdCommand(byte);
+          return;
         }
+        this.g815LcdCtrl('primary', byte);
         return;
       case PORT_LCD_DATA:
         this.writeLcdData('primary', byte);
