@@ -1201,41 +1201,52 @@ NEXT_FRAME_ADDR_DONE:
   LD A,(HL)
   LD (RAM_TMP_KEY3),A
   INC HL
-  LD C,(HL)   ; end lo
+  ; end をスタックへ退避
+  LD E,(HL)   ; end lo
   INC HL
-  LD B,(HL)   ; end hi
+  LD D,(HL)   ; end hi
+  PUSH DE
   INC HL
+  ; step をスタックへ退避
   LD E,(HL)   ; step lo
   INC HL
   LD D,(HL)   ; step hi
-  LD A,D
-  LD (RAM_CMP_OP),A
+  PUSH DE
   INC HL
-  LD A,(HL)   ; loop ptr lo
+  ; loop ptr
+  LD A,(HL)
   LD (RAM_OVERRIDE_LO),A
   INC HL
-  LD A,(HL)   ; loop ptr hi
+  LD A,(HL)
   LD (RAM_OVERRIDE_HI),A
 
-  CALL GET_VARIABLE_HL
-  ADD HL,DE
-  PUSH BC
-  LD D,H
-  LD E,L
-  CALL SET_VARIABLE_FROM_DE
-  POP BC
+  ; step を取り出し、符号情報だけ AF で保持する
+  POP BC              ; B=step hi, C=step lo
+  LD A,B
+  AND 0x80
+  LD (RAM_CMP_OP),A
 
-  ; HL=var, BC=end, DE=step
+  ; new = cur + step
+  PUSH BC
   CALL GET_VARIABLE_HL
-  PUSH HL
-  LD D,B
-  LD E,C
   POP BC
+  LD A,C
+  ADD A,L
+  LD E,A
+  LD A,B
+  ADC A,H
+  LD D,A
+  CALL SET_VARIABLE_FROM_DE
+
+  ; compare: BC=new, DE=end
+  LD B,D
+  LD C,E
+  POP DE              ; end
   CALL CMP_BC_DE_UNSIGNED
   LD B,A
 
   LD A,(RAM_CMP_OP)
-  AND 0x80
+  OR A
   JR NZ,NEXT_NEG_STEP
   ; 正方向: var <= end
   LD A,B
