@@ -78,17 +78,6 @@ function overflowSub8(left: number, right: number, result: number): boolean {
   return (((left ^ right) & (left ^ result) & 0x80) !== 0);
 }
 
-function normalizePinsIn(input: Z80PinsIn): Z80PinsIn {
-  return {
-    data: clamp8(input.data),
-    wait: Boolean(input.wait),
-    int: Boolean(input.int),
-    nmi: Boolean(input.nmi),
-    busrq: Boolean(input.busrq),
-    reset: Boolean(input.reset)
-  };
-}
-
 export class Z80Cpu implements Z80Core {
   private readonly options: Z80CpuOptions;
 
@@ -146,6 +135,14 @@ export class Z80Cpu implements Z80Core {
   private tstates = 0;
 
   private activeTiming: OpcodeTimingDefinition = getTimingDefinition('base', 0x00);
+  private readonly sampledInput: Z80PinsIn = {
+    data: 0xff,
+    wait: false,
+    int: false,
+    nmi: false,
+    busrq: false,
+    reset: false
+  };
 
   constructor(options?: Z80CpuOptions) {
     this.options = options ?? {};
@@ -190,28 +187,39 @@ export class Z80Cpu implements Z80Core {
   }
 
   tick(input: Z80PinsIn): Z80PinsOut {
-    const sampledInput = normalizePinsIn(input);
+    const sampledInputData = clamp8(input.data);
+    const sampledInputWait = Boolean(input.wait);
+    const sampledInputInt = Boolean(input.int);
+    const sampledInputNmi = Boolean(input.nmi);
+    const sampledInputBusrq = Boolean(input.busrq);
+    const sampledInputReset = Boolean(input.reset);
+    this.sampledInput.data = sampledInputData;
+    this.sampledInput.wait = sampledInputWait;
+    this.sampledInput.int = sampledInputInt;
+    this.sampledInput.nmi = sampledInputNmi;
+    this.sampledInput.busrq = sampledInputBusrq;
+    this.sampledInput.reset = sampledInputReset;
 
-    if (sampledInput.reset) {
+    if (sampledInputReset) {
       this.reset();
-      return this.getPinsOut();
+      return this.pinsOut;
     }
 
-    if (sampledInput.nmi && !this.prevNmi) {
+    if (sampledInputNmi && !this.prevNmi) {
       this.pendingNmi = true;
     }
-    this.prevNmi = sampledInput.nmi;
+    this.prevNmi = sampledInputNmi;
 
-    if (sampledInput.int) {
+    if (sampledInputInt) {
       this.pendingInt = true;
-      this.pendingIntDataBus = sampledInput.data;
+      this.pendingIntDataBus = sampledInputData;
     }
 
     // BUSRQ 中は CPU がバスを解放し、内部マイクロステップ進行を停止する。
-    if (sampledInput.busrq) {
-      this.pinsOut = this.composePinsOut(() => this.pins({}), sampledInput);
+    if (sampledInputBusrq) {
+      this.pinsOut = this.composePinsOut(() => this.pins({}), sampledInputBusrq);
       this.tstates += 1;
-      return this.getPinsOut();
+      return this.pinsOut;
     }
 
     if (this.queue.length === 0) {
@@ -220,20 +228,20 @@ export class Z80Cpu implements Z80Core {
 
     const step = this.queue[0];
     if (!step) {
-      this.pinsOut = this.composePinsOut(() => ({ ...Z80_IDLE_PINS_OUT }), sampledInput);
+      this.pinsOut = this.composePinsOut(() => ({ ...Z80_IDLE_PINS_OUT }), sampledInputBusrq);
       this.tstates += 1;
-      return this.getPinsOut();
+      return this.pinsOut;
     }
 
-    const waitActive = Boolean(step.waitable) && sampledInput.wait;
-    this.pinsOut = this.composePinsOut(step.pins, sampledInput);
+    const waitActive = Boolean(step.waitable) && sampledInputWait;
+    this.pinsOut = this.composePinsOut(step.pins, sampledInputBusrq);
     if (!waitActive) {
-      step.action?.(sampledInput);
+      step.action?.(this.sampledInput);
       this.queue.shift();
     }
 
     this.tstates += 1;
-    return this.getPinsOut();
+    return this.pinsOut;
   }
 
   getPinsOut(): Z80PinsOut {
@@ -294,22 +302,19 @@ export class Z80Cpu implements Z80Core {
     this.activeTiming = getTimingDefinition('base', 0x00);
   }
 
-  private composePinsOut(producer: PinsProducer, input: Z80PinsIn): Z80PinsOut {
+  private composePinsOut(producer: PinsProducer, busrq: boolean): Z80PinsOut {
     const raw = typeof producer === 'function' ? producer() : producer;
-    const addr = clamp16(raw.addr);
-    const dataOut = raw.dataOut === null ? null : clamp8(raw.dataOut ?? 0);
-    return {
-      addr,
-      dataOut,
-      m1: Boolean(raw.m1),
-      mreq: Boolean(raw.mreq),
-      iorq: Boolean(raw.iorq),
-      rd: Boolean(raw.rd),
-      wr: Boolean(raw.wr),
-      rfsh: Boolean(raw.rfsh),
-      halt: this.halted,
-      busak: Boolean(input.busrq)
-    };
+    this.pinsOut.addr = clamp16(raw.addr);
+    this.pinsOut.dataOut = raw.dataOut === null ? null : clamp8(raw.dataOut ?? 0);
+    this.pinsOut.m1 = Boolean(raw.m1);
+    this.pinsOut.mreq = Boolean(raw.mreq);
+    this.pinsOut.iorq = Boolean(raw.iorq);
+    this.pinsOut.rd = Boolean(raw.rd);
+    this.pinsOut.wr = Boolean(raw.wr);
+    this.pinsOut.rfsh = Boolean(raw.rfsh);
+    this.pinsOut.halt = this.halted;
+    this.pinsOut.busak = busrq;
+    return this.pinsOut;
   }
 
   private pins(partial: Partial<Z80PinsOut>): Z80PinsOut {

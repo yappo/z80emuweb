@@ -23,8 +23,6 @@ import {
   LCD_WIDTH
 } from './font5x7';
 import {
-  findIoPortSpec,
-  findMemoryRegionSpec,
   getIoPortSpec,
   getMemoryRegionSpec,
   getWorkAreaSpec,
@@ -365,6 +363,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private firmwareConsumedBytes = 0;
   private firmwareOutWrites = 0;
   private firmwareEotWrites = 0;
+  private runtimeServicePending = false;
 
   private kanaMode = false;
   private kanaComposeBuffer = '';
@@ -384,6 +383,14 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private battChk = 0;
   private keyBreak = 0;
   private pin11In = 0;
+  private readonly cpuSignals = {
+    wait: false,
+    int: false,
+    nmi: false,
+    busrq: false,
+    reset: false,
+    intDataBus: 0xff
+  };
 
   private lcdX = 0;
   private lcdY = 0;
@@ -393,6 +400,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private readonly lcdRawVram = new Uint8Array(8 * 0x80);
 
   private dirtyFrame = true;
+  private frameRevision = 0;
 
   private elapsedTStates = 0;
   private wasRuntimeProgramRunning = false;
@@ -521,17 +529,24 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   tick(tstates: number): void {
     const clamped = Math.max(0, Math.floor(tstates));
     const wasRunning = this.runtime.isProgramRunning();
-    for (let i = 0; i < clamped; i += 1) {
-      this.chipset.tick(1);
-      const cpu = this.chipset.getCpuState();
-      const pc = cpu.registers.pc & 0xffff;
-      if (this.executionDomain === 'user-program' && pc === this.firmwareReturnAddress) {
-        this.executionDomain = 'firmware';
+    if (clamped > 0) {
+      if (this.executionDomain === 'user-program') {
+        const reachedReturnAddress = this.chipset.tickWithInstructionFetchWatch(clamped, this.firmwareReturnAddress);
+        if (reachedReturnAddress) {
+          this.executionDomain = 'firmware';
+        }
+      } else {
+        this.chipset.tick(clamped);
       }
     }
     this.elapsedTStates += clamped;
-    this.runtime.pump();
-    this.flushRuntimeOutputToLcd();
+    const shouldServiceRuntime =
+      this.executionBackend === 'ts-compat' || this.executionDomain !== 'user-program' || this.runtimeServicePending;
+    if (shouldServiceRuntime) {
+      this.runtime.pump();
+      this.flushRuntimeOutputToLcd();
+      this.runtimeServicePending = false;
+    }
     const isRunning = this.runtime.isProgramRunning();
     if (!wasRunning && isRunning) {
       // RUN開始時にタイプ済み文字を捨てる（終了後の遅延エコー防止）。
@@ -553,14 +568,13 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     intDataBus: number;
   } {
     const intPending = (this.interruptType & this.interruptMask) !== 0;
-    return {
-      wait: false,
-      int: intPending,
-      nmi: false,
-      busrq: false,
-      reset: false,
-      intDataBus: 0xff
-    };
+    this.cpuSignals.wait = false;
+    this.cpuSignals.int = intPending;
+    this.cpuSignals.nmi = false;
+    this.cpuSignals.busrq = false;
+    this.cpuSignals.reset = false;
+    this.cpuSignals.intDataBus = 0xff;
+    return this.cpuSignals;
   }
 
   private flushRuntimeOutputToLcd(): void {
@@ -597,6 +611,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
           for (const ascii of asciiCodes) {
             this.runtime.receiveChar(ascii & 0xff);
           }
+          if (asciiCodes.length > 0) {
+            this.runtimeServicePending = true;
+          }
         } else if (asciiCodes.length > 0) {
           // Program execution uses INKEY$ path via FIFO.
           this.asciiQueue.push(...asciiCodes);
@@ -617,6 +634,13 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       this.renderFrameBuffer();
     }
     return this.frameBuffer;
+  }
+
+  getFrameRevision(): number {
+    if (this.dirtyFrame) {
+      this.renderFrameBuffer();
+    }
+    return this.frameRevision;
   }
 
   setKanaMode(enabled: boolean): void {
@@ -970,22 +994,16 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
   read8(addr: number): number {
     const address = clamp16(addr);
-    const region = findMemoryRegionSpec(address);
-
-    if (!region) {
-      return 0xff;
-    }
-
-    // メモリマップ定義に従って RAM/ROM の窓を切り替える。
-    if (region.kind === 'ram-window') {
+    // ホットパス最適化: アドレス帯域を直接判定する。
+    if (address <= RAM_REGION.end) {
       return this.mainRam[address - RAM_REGION.start] ?? 0xff;
     }
 
-    if (region.kind === 'rom-window') {
+    if (address >= SYSTEM_ROM_REGION.start && address <= SYSTEM_ROM_REGION.end) {
       return this.systemRomWindow[address - SYSTEM_ROM_REGION.start] ?? 0xff;
     }
 
-    if (region.kind === 'banked-rom-window') {
+    if (address >= BANKED_ROM_REGION.start) {
       return this.bankedRomWindow[address - BANKED_ROM_REGION.start] ?? 0xff;
     }
 
@@ -995,27 +1013,19 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   write8(addr: number, value: number): void {
     const address = clamp16(addr);
     const byte = clamp8(value);
-    const region = findMemoryRegionSpec(address);
-
-    if (!region || !region.writable) {
+    // RAM窓以外は書き込み不可。
+    if (address > RAM_REGION.end) {
       return;
     }
 
-    if (region.kind === 'ram-window') {
-      this.mainRam[address - RAM_REGION.start] = byte;
-      if (address === WORKAREA_DISPLAY_START_LINE) {
-        this.dirtyFrame = true;
-      }
+    this.mainRam[address - RAM_REGION.start] = byte;
+    if (address === WORKAREA_DISPLAY_START_LINE) {
+      this.dirtyFrame = true;
     }
   }
 
   in8(port: number): number {
-    const portSpec = findIoPortSpec(port);
-    if (!portSpec) {
-      return 0x78;
-    }
-
-    const normalized = portSpec.port & 0xff;
+    const normalized = clamp8(port);
     switch (normalized) {
       case PORT_SYS_10:
         return this.readKeyMatrixByStrobe();
@@ -1064,19 +1074,15 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       case PORT_LCD_STATUS:
         return this.readLcdData(true);
       default:
-        return portSpec.defaultInValue & 0xff;
+        return 0x78;
     }
   }
 
   out8(port: number, value: number): void {
-    const portSpec = findIoPortSpec(port);
-    if (!portSpec) {
-      return;
-    }
-
+    const normalized = clamp8(port);
     const byte = clamp8(value);
 
-    switch (portSpec.port & 0xff) {
+    switch (normalized) {
       case PORT_SYS_11:
         this.keyStrobe = (this.keyStrobe & 0xff00) | byte;
         if ((byte & 0x10) !== 0) {
@@ -1120,6 +1126,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
           return;
         }
         this.runtime.receiveChar(byte);
+        this.runtimeServicePending = true;
         return;
       case PORT_SYS_1e:
         this.battChk = byte & 0x03;
@@ -1555,6 +1562,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     }
 
     this.dirtyFrame = false;
+    this.frameRevision = (this.frameRevision + 1) >>> 0;
   }
 
   private setGraphicsPixel(x: number, y: number, mode = 1): void {

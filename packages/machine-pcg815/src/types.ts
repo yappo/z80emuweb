@@ -66,6 +66,7 @@ export interface MachinePCG815 {
   drainAsciiQueue(): number[];
   isRuntimeProgramRunning(): boolean;
   getFrameBuffer(): Uint8Array;
+  getFrameRevision(): number;
   reset(cold: boolean): void;
   loadProgram(bytes: Uint8Array | readonly number[], origin: number): void;
   setProgramCounter(entry: number): void;

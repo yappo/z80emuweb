@@ -64,7 +64,18 @@ export class BasicChipset implements Chipset, CpuStateProvider {
 
   private readLatch = Z80_DEFAULT_PINS_IN.data;
 
-  private prevReadSignature: string | undefined;
+  private prevReadSource: ChipsetReadSource = 'none';
+
+  private prevReadAddr = 0;
+
+  private readonly tickInput: Z80PinsIn = {
+    data: Z80_DEFAULT_PINS_IN.data,
+    wait: false,
+    int: false,
+    nmi: false,
+    busrq: false,
+    reset: false
+  };
 
   private stepCounter = 0;
 
@@ -82,7 +93,8 @@ export class BasicChipset implements Chipset, CpuStateProvider {
     this.prevWriteActive = false;
     this.prevReadActive = false;
     this.readLatch = Z80_DEFAULT_PINS_IN.data;
-    this.prevReadSignature = undefined;
+    this.prevReadSource = 'none';
+    this.prevReadAddr = 0;
     this.stepCounter = 0;
   }
 
@@ -92,47 +104,68 @@ export class BasicChipset implements Chipset, CpuStateProvider {
     this.prevWriteActive = false;
     this.prevReadActive = false;
     this.readLatch = Z80_DEFAULT_PINS_IN.data;
-    this.prevReadSignature = undefined;
+    this.prevReadSource = 'none';
+    this.prevReadAddr = 0;
     this.stepCounter = 0;
   }
 
   tick(tstates: number): void {
+    this.tickInternal(tstates);
+  }
+
+  tickWithInstructionFetchWatch(tstates: number, address: number): boolean {
+    return this.tickInternal(tstates, clamp16(address));
+  }
+
+  private tickInternal(tstates: number, watchM1Address?: number): boolean {
     const cpu = this.cpu;
     if (!cpu) {
       throw new Error('CPU is not attached to chipset');
     }
 
     const steps = Math.max(0, Math.floor(tstates));
+    let matched = false;
     for (let i = 0; i < steps; i += 1) {
       this.applyWriteIfNeeded(this.lastPinsOut);
 
       const signals = this.getSignals();
       const resolved = this.resolveDataBus(this.lastPinsOut, signals.intDataBus);
-      const input: Z80PinsIn = {
-        data: resolved.data,
-        wait: Boolean(signals.wait),
-        int: Boolean(signals.int),
-        nmi: Boolean(signals.nmi),
-        busrq: Boolean(signals.busrq),
-        reset: Boolean(signals.reset)
-      };
-      this.emitTrace({
-        step: this.stepCounter,
-        pinsOut: this.lastPinsOut,
-        input: {
-          ...signals,
-          wait: Boolean(signals.wait),
-          int: Boolean(signals.int),
-          nmi: Boolean(signals.nmi),
-          busrq: Boolean(signals.busrq),
-          reset: Boolean(signals.reset),
-          data: input.data
-        },
-        readSource: resolved.source
-      });
-      this.lastPinsOut = cpu.tick(input);
+      this.tickInput.data = resolved.data;
+      this.tickInput.wait = Boolean(signals.wait);
+      this.tickInput.int = Boolean(signals.int);
+      this.tickInput.nmi = Boolean(signals.nmi);
+      this.tickInput.busrq = Boolean(signals.busrq);
+      this.tickInput.reset = Boolean(signals.reset);
+
+      if (this.onCycleTrace) {
+        this.emitTrace({
+          step: this.stepCounter,
+          pinsOut: this.lastPinsOut,
+          input: {
+            ...signals,
+            wait: this.tickInput.wait,
+            int: this.tickInput.int,
+            nmi: this.tickInput.nmi,
+            busrq: this.tickInput.busrq,
+            reset: this.tickInput.reset,
+            data: this.tickInput.data
+          },
+          readSource: resolved.source
+        });
+      }
+      this.lastPinsOut = cpu.tick(this.tickInput);
+      if (
+        watchM1Address !== undefined &&
+        this.lastPinsOut.m1 &&
+        this.lastPinsOut.mreq &&
+        this.lastPinsOut.rd &&
+        clamp16(this.lastPinsOut.addr) === watchM1Address
+      ) {
+        matched = true;
+      }
       this.stepCounter += 1;
     }
+    return matched;
   }
 
   getCpuState(): CpuState {
@@ -165,27 +198,28 @@ export class BasicChipset implements Chipset, CpuStateProvider {
     if (!readActive) {
       this.prevReadActive = false;
       this.readLatch = Z80_DEFAULT_PINS_IN.data;
-      this.prevReadSignature = undefined;
+      this.prevReadSource = 'none';
       return { data: Z80_DEFAULT_PINS_IN.data, source: 'none' };
     }
 
     const source = this.identifyReadSource(pins);
-    const signature = `${source}:${clamp16(pins.addr)}`;
-    if (this.prevReadActive && this.prevReadSignature === signature) {
-      return { data: this.readLatch, source: this.identifyReadSource(pins) };
+    const addr = clamp16(pins.addr);
+    if (this.prevReadActive && this.prevReadSource === source && this.prevReadAddr === addr) {
+      return { data: this.readLatch, source };
     }
 
     if (source === 'int-ack') {
       this.readLatch = clamp8(intDataBus ?? 0xff);
     } else if (source === 'memory') {
-      this.readLatch = clamp8(this.memory.read8(clamp16(pins.addr)));
+      this.readLatch = clamp8(this.memory.read8(addr));
     } else if (source === 'io') {
-      this.readLatch = clamp8(this.io.in8(clamp8(pins.addr)));
+      this.readLatch = clamp8(this.io.in8(clamp8(addr)));
     } else {
       this.readLatch = Z80_DEFAULT_PINS_IN.data;
     }
     this.prevReadActive = true;
-    this.prevReadSignature = signature;
+    this.prevReadSource = source;
+    this.prevReadAddr = addr;
     return { data: this.readLatch, source };
   }
 

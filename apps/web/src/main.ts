@@ -192,6 +192,8 @@ let speedWindowExecuted = 0;
 let healthWindowElapsed = 0;
 let lastHealthTStates = 0;
 let lastLitPixels = 0;
+let lastFrameRevision = -1;
+let cachedLitPixels = 0;
 
 const inputLog: string[] = [];
 const pressedCodes = new Set<string>();
@@ -210,9 +212,11 @@ const BASIC_SAMPLE = `10 A = 1
 70 PRINT "owari"
 80 END`;
 const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
+95 REM 初期化: スコアとステージ番号
 100 LET S=0
 110 LET N=1
 120 GOSUB 5000
+125 REM 全5ステージを順番に進める
 130 IF N>5 THEN 9000
 140 GOSUB 7000
 150 GOSUB 2000
@@ -220,7 +224,9 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 170 LET Y=1
 180 LET K=0
 190 LET T=0
-200 GOSUB 3000
+195 REM メインループ: 入力→移動判定→描画→クリア判定
+200 REM ステージ開始時のみ全体描画
+205 GOSUB 3000
 210 GOSUB 1600
 220 IF D=1 THEN 260
 230 IF D=2 THEN 280
@@ -249,15 +255,23 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 430 IF NY=W2Y THEN 210
 440 IF NX<>W3X THEN 460
 450 IF NY=W3Y THEN 210
-460 LET X=NX
-470 LET Y=NY
-480 LET T=T+1
+460 LET OX=X
+465 LET OY=Y
+470 LET X=NX
+480 LET Y=NY
+482 LET AX=OX
+483 LET AY=OY
+484 GOSUB 4000
+486 LET AX=X
+487 LET AY=Y
+488 GOSUB 4000
+489 LET T=T+1
 490 IF X<>KX THEN 510
 500 IF Y=KY THEN 520
 510 GOTO 540
 520 LET K=1
 530 GOTO 540
-540 GOSUB 3000
+540 REM 移動時は差分2マスのみ再描画済み
 550 IF K=0 THEN 580
 560 IF X=GX THEN 590
 570 GOTO 580
@@ -271,6 +285,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 640 LET S=S+ADD
 650 LET N=N+1
 660 GOTO 130
+1590 REM 入力処理: WASD / 矢印キーを方向 D(1-4) に変換
 1600 LET D=0
 1610 OUT 17,1
 1620 LET R=INP(16)
@@ -288,7 +303,8 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 1740 OUT 17,64
 1750 LET R=INP(16)
 1760 IF R=254 THEN 1830
-1770 RETURN
+1770 WAIT 1
+1780 GOTO 1610
 1810 LET D=1
 1820 RETURN
 1830 LET D=2
@@ -297,6 +313,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 1860 RETURN
 1870 LET D=4
 1880 RETURN
+1990 REM ステージ定義: N から 1..5 の配置を選択
 2000 LET P=N
 2010 IF P<6 THEN 2040
 2020 LET P=P-5
@@ -361,6 +378,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 2700 LET W3X=1
 2710 LET W3Y=3
 2720 RETURN
+2990 REM 盤面描画: 4x4 全マスを順に描く
 3000 CLS
 3010 LET AY=1
 3020 LET AX=1
@@ -379,11 +397,11 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 4080 IF AY=W3Y THEN 4200
 4100 IF AX<>GX THEN 4130
 4110 IF AY=GY THEN 4220
-4130 IF K<>0 THEN 4160
-4140 IF AX<>KX THEN 4160
-4150 IF AY=KY THEN 4240
-4160 IF AX<>X THEN 4190
-4170 IF AY=Y THEN 4260
+4130 IF AX<>X THEN 4160
+4140 IF AY=Y THEN 4260
+4160 IF K<>0 THEN 4190
+4170 IF AX<>KX THEN 4190
+4180 IF AY=KY THEN 4240
 4190 GOTO 4290
 4200 LET CH=35
 4210 GOTO 4290
@@ -397,6 +415,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 4310 LOCATE CX,CY
 4320 OUT 90,CH
 4330 RETURN
+4990 REM タイトル画面
 5000 CLS
 5010 LOCATE 0,0
 5020 PRINT "     MASE 4X4 GAME !"
@@ -406,6 +425,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 5060 PRINT "USE: WASD OR ARROWS"
 5070 GOSUB 7100
 5080 RETURN
+6990 REM ステージ開始画面
 7000 CLS
 7010 LOCATE 0,0
 7020 PRINT "Stage:";N;"/5 Score:";S
@@ -415,6 +435,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 7060 PRINT "Use WASD/Arrows"
 7070 GOSUB 7100
 7080 RETURN
+7090 REM SPACE 待ち + 点滅表示
 7100 GOSUB 7350
 7110 LET SPH=0
 7120 LET BL=1
@@ -439,6 +460,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 7380 WAIT 1
 7385 GOTO 7350
 7390 RETURN
+7395 REM SPACE 押下検出(エッジ検出)
 7400 LET SP=0
 7410 OUT 17,128
 7420 LET R=INP(16)
@@ -450,6 +472,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 7470 RETURN
 7480 LET SPH=1
 7490 RETURN
+7590 REM 点滅 ON 表示: PUSH SPACE KEY !
 7600 LOCATE 4,3
 7610 OUT 90,80
 7620 OUT 90,85
@@ -468,6 +491,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 7750 OUT 90,32
 7760 OUT 90,33
 7770 RETURN
+7790 REM 点滅 OFF 表示
 7800 LOCATE 4,3
 7810 OUT 90,32
 7820 OUT 90,32
@@ -486,6 +510,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 7950 OUT 90,32
 7960 OUT 90,32
 7970 RETURN
+8990 REM クリア画面
 9000 CLS
 9010 LOCATE 0,0
 9020 PRINT "ALL STAGE CLEAR!"
@@ -823,16 +848,16 @@ function resolveKeyboardCode(event: KeyboardEvent): string | undefined {
   if (lower === 'd') {
     return 'KeyD';
   }
-  if (key === 'ArrowUp') {
+  if (key === 'ArrowUp' || key === 'Up') {
     return 'ArrowUp';
   }
-  if (key === 'ArrowDown') {
+  if (key === 'ArrowDown' || key === 'Down') {
     return 'ArrowDown';
   }
-  if (key === 'ArrowLeft') {
+  if (key === 'ArrowLeft' || key === 'Left') {
     return 'ArrowLeft';
   }
-  if (key === 'ArrowRight') {
+  if (key === 'ArrowRight' || key === 'Right') {
     return 'ArrowRight';
   }
   return undefined;
@@ -1427,6 +1452,11 @@ function setBootStatus(state: BootState, detail?: string): void {
 
 function renderLcd(): number {
   const frame = machine.getFrameBuffer();
+  const revision = machine.getFrameRevision();
+  if (revision === lastFrameRevision) {
+    return cachedLitPixels;
+  }
+
   let litPixels = 0;
 
   for (let i = 0; i < frame.length; i += 1) {
@@ -1445,6 +1475,8 @@ function renderLcd(): number {
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
 
+  lastFrameRevision = revision;
+  cachedLitPixels = litPixels;
   return litPixels;
 }
 
