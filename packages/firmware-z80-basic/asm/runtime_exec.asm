@@ -623,6 +623,9 @@ PRINT_ITEM_LOOP:
   CP '"'
   JR Z,PRINT_QUOTED
 
+  CALL PRINT_TRY_CHAR_FUNCTION
+  JR C,PRINT_DELIM
+
   CALL EVAL_EXPRESSION
   CALL PRINT_NUMBER_HL
   JR PRINT_DELIM
@@ -690,6 +693,89 @@ PRINT_USING_SKIP_FMT:
   CALL EVAL_EXPRESSION
   CALL PRINT_NUMBER_HL
   JP PRINT_CRLF
+
+; ----------------------------------------------------------------------------
+; ルーチン: PRINT_TRY_CHAR_FUNCTION
+; 役割: PRINT項目先頭の CHR$(...) / CHAR$(...) を文字出力として処理する。
+; 出力: Carry=1 処理済み, Carry=0 非該当
+; ----------------------------------------------------------------------------
+PRINT_TRY_CHAR_FUNCTION:
+  CALL EXPR_SKIP_SPACES
+  CALL EXPR_GET_PTR_HL
+
+  ; C...
+  LD A,(HL)
+  CALL TO_UPPER
+  CP 'C'
+  JR NZ,PRINT_TRY_CHAR_NONE
+  INC HL
+  ; CH...
+  LD A,(HL)
+  CALL TO_UPPER
+  CP 'H'
+  JR NZ,PRINT_TRY_CHAR_NONE
+  INC HL
+  ; CHR$ or CHAR$
+  LD A,(HL)
+  CALL TO_UPPER
+  CP 'A'
+  JR Z,PRINT_TRY_CHAR_CHAR_PATH
+  CP 'R'
+  JR NZ,PRINT_TRY_CHAR_NONE
+  INC HL
+  LD A,(HL)
+  CP '$'
+  JR NZ,PRINT_TRY_CHAR_NONE
+  JR PRINT_TRY_CHAR_PARSE_ARGS
+
+PRINT_TRY_CHAR_CHAR_PATH:
+  INC HL
+  LD A,(HL)
+  CALL TO_UPPER
+  CP 'R'
+  JR NZ,PRINT_TRY_CHAR_NONE
+  INC HL
+  LD A,(HL)
+  CP '$'
+  JR NZ,PRINT_TRY_CHAR_NONE
+
+PRINT_TRY_CHAR_PARSE_ARGS:
+  INC HL
+  CALL SKIP_SPACES
+  LD A,(HL)
+  CP '('
+  JR Z,PRINT_TRY_CHAR_HAVE_PAREN
+  CALL SET_SYNTAX_ERROR
+  SCF
+  RET
+
+PRINT_TRY_CHAR_HAVE_PAREN:
+  INC HL
+  CALL EXPR_SET_PTR_HL
+  CALL EVAL_EXPRESSION
+  PUSH HL
+  CALL EXPR_SKIP_SPACES
+  CALL EXPR_GET_PTR_HL
+  LD A,(HL)
+  CP ')'
+  JR Z,PRINT_TRY_CHAR_CLOSE_OK
+  POP HL
+  CALL SET_SYNTAX_ERROR
+  SCF
+  RET
+
+PRINT_TRY_CHAR_CLOSE_OK:
+  INC HL
+  CALL EXPR_SET_PTR_HL
+  POP HL
+  LD A,L
+  CALL OUT_LCD_CHAR
+  SCF
+  RET
+
+PRINT_TRY_CHAR_NONE:
+  AND A
+  RET
 
 ; ----------------------------------------------------------------------------
 ; 命令: LET / 暗黙 LET
