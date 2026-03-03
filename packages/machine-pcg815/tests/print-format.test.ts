@@ -41,9 +41,9 @@ describe('z80 basic PRINT formatting', () => {
 
   it('keeps successive numeric PRINT lines instead of collapsing to last line only', () => {
     const lines = run(['10 PRINT 1', '20 PRINT 21', '30 PRINT 321', '40 PRINT 4321', 'RUN']);
-    expect(lines[0]?.startsWith('                      21')).toBe(true);
-    expect(lines[1]?.startsWith('                     321')).toBe(true);
-    expect(lines[2]?.startsWith('                    4321')).toBe(true);
-    expect(lines[3]?.trim().length).toBe(0);
+    expect(lines[0]?.startsWith('                       1')).toBe(true);
+    expect(lines[1]?.startsWith('                      21')).toBe(true);
+    expect(lines[2]?.startsWith('                     321')).toBe(true);
+    expect(lines[3]?.startsWith('                    4321')).toBe(true);
   });
 });
