@@ -369,6 +369,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private kanaComposeBuffer = '';
 
   private lcdCursor = 0;
+  private lcdPendingWrap = false;
   private keyStrobe = 0;
   private keyShift = 0;
   private timer = 0;
@@ -490,6 +491,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.kanaMode = false;
     this.kanaComposeBuffer = '';
     this.lcdCursor = 0;
+    this.lcdPendingWrap = false;
     this.keyStrobe = 0;
     this.keyShift = 0;
     this.timer = 0;
@@ -968,6 +970,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.iconVram.set(snapshot.vram.icons.map((v) => v & 0xff).slice(0, this.iconVram.length));
 
     this.lcdCursor = snapshot.vram.cursor & 0x7f;
+    this.lcdPendingWrap = false;
 
     this.keyStrobe = snapshot.io.selectedKeyRow & 0xffff;
     this.keyboardRows.fill(0xff);
@@ -1454,6 +1457,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       this.textVram.fill(SPACE_CODE);
       this.graphicsPlane.fill(0);
       this.lcdCursor = 0;
+      this.lcdPendingWrap = false;
       this.dirtyFrame = true;
       return;
     }
@@ -1463,6 +1467,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       if (this.lcdCursor >= TEXT_VRAM_SIZE) {
         this.lcdCursor %= TEXT_VRAM_SIZE;
       }
+      this.lcdPendingWrap = false;
       return;
     }
   }
@@ -1474,6 +1479,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     if (value === 0x0d) {
       const row = Math.floor(this.lcdCursor / LCD_COLS);
       this.lcdCursor = row * LCD_COLS;
+      this.lcdPendingWrap = false;
       return;
     }
 
@@ -1486,11 +1492,14 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.scrollTextUp(1);
         this.lcdCursor = (LCD_ROWS - 1) * LCD_COLS + col;
       }
+      this.lcdPendingWrap = false;
       return;
     }
 
     if (value === 0x08) {
-      if (this.lcdCursor > 0) {
+      if (this.lcdPendingWrap) {
+        this.lcdPendingWrap = false;
+      } else if (this.lcdCursor > 0) {
         this.lcdCursor -= 1;
       }
       this.textVram[this.lcdCursor] = SPACE_CODE;
@@ -1498,11 +1507,23 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       return;
     }
 
+    if (this.lcdPendingWrap) {
+      const row = Math.floor(this.lcdCursor / LCD_COLS);
+      if (row < LCD_ROWS - 1) {
+        this.lcdCursor = (row + 1) * LCD_COLS;
+      } else {
+        this.scrollTextUp(1);
+        this.lcdCursor = (LCD_ROWS - 1) * LCD_COLS;
+      }
+      this.lcdPendingWrap = false;
+    }
+
     this.textVram[this.lcdCursor] = toDisplayCode(value);
-    this.lcdCursor += 1;
-    if (this.lcdCursor >= TEXT_VRAM_SIZE) {
-      this.scrollTextUp(1);
-      this.lcdCursor = (LCD_ROWS - 1) * LCD_COLS;
+    const col = this.lcdCursor % LCD_COLS;
+    if (col < LCD_COLS - 1) {
+      this.lcdCursor += 1;
+    } else {
+      this.lcdPendingWrap = true;
     }
     this.dirtyFrame = true;
   }
@@ -1727,6 +1748,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         const safeCol = Math.max(0, Math.min(LCD_COLS - 1, col | 0));
         const safeRow = Math.max(0, Math.min(LCD_ROWS - 1, row | 0));
         this.lcdCursor = safeRow * LCD_COLS + safeCol;
+        this.lcdPendingWrap = false;
       },
       getDisplayStartLine: () => this.getDisplayStartLine(),
       readKeyMatrix: (row: number) => this.keyboardRows[row & 0x07] ?? 0xff,

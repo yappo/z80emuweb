@@ -17,9 +17,16 @@ function run(lines: readonly string[]): string[] {
 }
 
 describe('z80 basic PRINT formatting', () => {
-  it('right-aligns a single numeric item within 12 columns', () => {
+  it('right-aligns a single numeric item to LCD 24-column right edge', () => {
     const lines = run(['10 PRINT 1', 'RUN']);
-    expect(lines[0]?.startsWith('           1')).toBe(true);
+    expect(lines[0]?.startsWith('                       1')).toBe(true);
+  });
+
+  it('places multi-digit numeric items at expected start columns', () => {
+    const lines10 = run(['10 PRINT 10', 'RUN']);
+    const lines5 = run(['10 PRINT 12345', 'RUN']);
+    expect(lines10[0]?.startsWith('                      10')).toBe(true);
+    expect(lines5[0]?.startsWith('                   12345')).toBe(true);
   });
 
   it('left-aligns a single string item', () => {
@@ -30,5 +37,13 @@ describe('z80 basic PRINT formatting', () => {
   it('uses 12-column tabs for comma-separated items', () => {
     const lines = run(['10 PRINT 1,2', 'RUN']);
     expect(lines[0]?.startsWith('1           2')).toBe(true);
+  });
+
+  it('keeps successive numeric PRINT lines instead of collapsing to last line only', () => {
+    const lines = run(['10 PRINT 1', '20 PRINT 21', '30 PRINT 321', '40 PRINT 4321', 'RUN']);
+    expect(lines[0]?.startsWith('                      21')).toBe(true);
+    expect(lines[1]?.startsWith('                     321')).toBe(true);
+    expect(lines[2]?.startsWith('                    4321')).toBe(true);
+    expect(lines[3]?.trim().length).toBe(0);
   });
 });

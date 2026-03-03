@@ -39,6 +39,33 @@ describe('z80 basic PRINT semicolon behavior', () => {
   );
 
   it.each(['z80-firmware', 'ts-compat'] as const)(
+    'prints comma-separated variables at 12-column tab stops (%s)',
+    (executionBackend) => {
+      const machine = new PCG815Machine({ executionBackend });
+      machine.runBasicInterpreter(encode(['10 X=83', '20 Y=5', '30 PRINT X,Y', 'RUN']), {
+        appendEot: true,
+        maxTStates: 2_000_000
+      });
+      const line0 = machine.getTextLines()[0] ?? '';
+      expect(line0.startsWith('83          5')).toBe(true);
+    }
+  );
+
+  it.each(['z80-firmware', 'ts-compat'] as const)(
+    'keeps numeric semicolon behavior without mutating values (%s)',
+    (executionBackend) => {
+      const machine = new PCG815Machine({ executionBackend });
+      machine.runBasicInterpreter(encode(['10 X=83', '20 PRINT 83;', '30 PRINT X;', 'RUN']), {
+        appendEot: true,
+        maxTStates: 2_000_000
+      });
+      const screen = machine.getTextLines().join('\n');
+      expect(screen).toContain('83');
+      expect(screen).not.toContain('84');
+    }
+  );
+
+  it.each(['z80-firmware', 'ts-compat'] as const)(
     'continues next PRINT on same line when previous ends with semicolon (%s)',
     (executionBackend) => {
       const machine = new PCG815Machine({ executionBackend });

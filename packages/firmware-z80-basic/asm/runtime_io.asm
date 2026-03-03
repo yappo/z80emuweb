@@ -16,7 +16,43 @@
 ; 異常時: なし
 ; ----------------------------------------------------------------------------
 OUT_LCD_CHAR:
+  PUSH AF
   OUT (LCD_PORT),A
+  POP AF
+  CALL TRACK_LCD_CHAR
+  RET
+
+; ----------------------------------------------------------------------------
+; ルーチン: TRACK_LCD_CHAR
+; 役割: LCDへ出力した1文字に応じて現在のテキスト列を更新する。
+; ----------------------------------------------------------------------------
+TRACK_LCD_CHAR:
+  CP CHAR_CR
+  JR Z,TRACK_LCD_CHAR_CR
+  CP CHAR_LF
+  RET Z
+  CP 0x08
+  JR Z,TRACK_LCD_CHAR_BS
+  LD A,(RAM_TEXT_COL)
+  INC A
+  CP 24
+  JR C,TRACK_LCD_CHAR_STORE
+  XOR A
+TRACK_LCD_CHAR_STORE:
+  LD (RAM_TEXT_COL),A
+  RET
+
+TRACK_LCD_CHAR_CR:
+  XOR A
+  LD (RAM_TEXT_COL),A
+  RET
+
+TRACK_LCD_CHAR_BS:
+  LD A,(RAM_TEXT_COL)
+  OR A
+  RET Z
+  DEC A
+  LD (RAM_TEXT_COL),A
   RET
 
 ; ----------------------------------------------------------------------------
