@@ -616,6 +616,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
           if (asciiCodes.length > 0) {
             this.runtimeServicePending = true;
           }
+        } else if (asciiCodes.length > 0 && this.executionDomain === 'user-program') {
+          // Z80 BASIC 実行中の INPUT は IN 0x1D から読むため、キー入力を FIFO へ渡す。
+          this.enqueueFirmwareInput(asciiCodes);
         } else if (asciiCodes.length > 0) {
           // Program execution uses INKEY$ path via FIFO.
           this.asciiQueue.push(...asciiCodes);

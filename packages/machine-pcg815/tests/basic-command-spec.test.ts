@@ -271,11 +271,11 @@ const SCENARIOS: Partial<Record<CommandName, CommandScenario>> = {
     negativeCheck: expectAnyError
   },
   INPUT: {
-    positiveLines: ['INPUT A', '123', 'PRINT A'],
+    positiveLines: ['10 INPUT "[0-99]> ";X', '20 PRINT "Your Input:";X', 'RUN', '42'],
     negativeLines: ['INPUT'],
     positiveCheck: ({ error, screen }) => {
       expect(error).toBeNull();
-      expect(screen).toContain('123');
+      expect(screen).toContain('Your Input:42');
     },
     negativeCheck: expectAnyError
   },
