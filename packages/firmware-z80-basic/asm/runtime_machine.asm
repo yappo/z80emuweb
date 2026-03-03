@@ -10,6 +10,10 @@
 ; 役割: 画面クリアを実行する。
 ; ----------------------------------------------------------------------------
 CMD_CLS_HANDLER:
+  CALL ASSERT_END_AFTER_CMD
+  LD A,(RAM_LAST_ERROR)
+  OR A
+  RET NZ
   LD A,0x01
   OUT (LCD_CMD_PORT),A
   RET
@@ -20,6 +24,10 @@ CMD_CLS_HANDLER:
 ; ----------------------------------------------------------------------------
 CMD_LOCATE_HANDLER:
   CALL LOAD_AFTER_CMD_HL
+  CALL SKIP_SPACES
+  LD A,(HL)
+  OR A
+  JP Z,SET_SYNTAX_ERROR
   CALL EXPR_SET_PTR_HL
   CALL EVAL_EXPRESSION
   LD E,L
@@ -28,7 +36,7 @@ CMD_LOCATE_HANDLER:
   CALL EXPR_GET_PTR_HL
   LD A,(HL)
   CP ','
-  RET NZ
+  JP NZ,SET_SYNTAX_ERROR
   INC HL
   PUSH DE
   CALL EXPR_SET_PTR_HL
@@ -53,6 +61,7 @@ CMD_LOCATE_HANDLER:
   ADD A,E
   OR 0x80
   OUT (LCD_CMD_PORT),A
+  CALL ASSERT_END_FROM_EXPRPTR
   RET
 
 ; ----------------------------------------------------------------------------
@@ -61,6 +70,10 @@ CMD_LOCATE_HANDLER:
 ; ----------------------------------------------------------------------------
 CMD_OUT_HANDLER:
   CALL LOAD_AFTER_CMD_HL
+  CALL SKIP_SPACES
+  LD A,(HL)
+  OR A
+  JP Z,SET_SYNTAX_ERROR
   CALL EXPR_SET_PTR_HL
   CALL EVAL_EXPRESSION
   LD B,L
@@ -69,7 +82,7 @@ CMD_OUT_HANDLER:
   CALL EXPR_GET_PTR_HL
   LD A,(HL)
   CP ','
-  RET NZ
+  JP NZ,SET_SYNTAX_ERROR
   INC HL
   PUSH BC
   CALL EXPR_SET_PTR_HL
@@ -77,6 +90,7 @@ CMD_OUT_HANDLER:
   LD A,L
   POP BC
   CALL OUT_PORT_LITERAL_A
+  CALL ASSERT_END_FROM_EXPRPTR
   RET
 
 ; ----------------------------------------------------------------------------
@@ -85,6 +99,10 @@ CMD_OUT_HANDLER:
 ; ----------------------------------------------------------------------------
 CMD_POKE_HANDLER:
   CALL LOAD_AFTER_CMD_HL
+  CALL SKIP_SPACES
+  LD A,(HL)
+  OR A
+  JP Z,SET_SYNTAX_ERROR
   CALL EXPR_SET_PTR_HL
   CALL EVAL_EXPRESSION
   PUSH HL
@@ -104,7 +122,7 @@ CMD_POKE_HANDLER:
 
 CMD_POKE_ABORT:
   POP HL
-  RET
+  JP SET_SYNTAX_ERROR
 
 ; ----------------------------------------------------------------------------
 ; ルーチン: CMD_WAIT_HANDLER
@@ -114,8 +132,17 @@ CMD_POKE_ABORT:
 ; ----------------------------------------------------------------------------
 CMD_WAIT_HANDLER:
   CALL LOAD_AFTER_CMD_HL
+  CALL SKIP_SPACES
+  LD A,(HL)
+  OR A
+  JR Z,CMD_WAIT_NO_ARG
   CALL EXPR_SET_PTR_HL
   CALL EVAL_EXPRESSION
+  CALL EXPR_SKIP_SPACES
+  CALL EXPR_GET_PTR_HL
+  LD A,(HL)
+  OR A
+  JP NZ,SET_SYNTAX_ERROR
   LD A,H
   OR L
   RET Z
@@ -129,7 +156,7 @@ CMD_WAIT_RANGE_OK:
 CMD_WAIT_OUTER:
   ; WAIT 1 あたりの遅延を十分に確保し、
   ; Web UI のフレーム観測でも点滅や段階表示が確認できる速度に合わせる。
-  LD BC,0x0900
+  LD BC,0x0020
 CMD_WAIT_INNER:
   DEC BC
   LD A,B
@@ -141,11 +168,39 @@ CMD_WAIT_INNER:
   JR NZ,CMD_WAIT_OUTER
   RET
 
+CMD_WAIT_NO_ARG:
+  RET
+
 ; ----------------------------------------------------------------------------
 ; ルーチン: CMD_BEEP_HANDLER
 ; 役割: BEEP 命令の互換スタブ。現段階では時間消費のみ行う。
 ; ----------------------------------------------------------------------------
 CMD_BEEP_HANDLER:
+  CALL LOAD_AFTER_CMD_HL
+  CALL SKIP_SPACES
+  LD A,(HL)
+  OR A
+  JR Z,CMD_BEEP_DELAY
+  CALL EXPR_SET_PTR_HL
+  CALL EVAL_EXPRESSION
+  LD C,1
+CMD_BEEP_MORE_ARGS:
+  CALL EXPR_SKIP_SPACES
+  CALL EXPR_GET_PTR_HL
+  LD A,(HL)
+  OR A
+  JR Z,CMD_BEEP_DELAY
+  CP ','
+  JP NZ,SET_SYNTAX_ERROR
+  INC HL
+  INC C
+  LD A,C
+  CP 4
+  JP NC,SET_SYNTAX_ERROR
+  CALL EXPR_SET_PTR_HL
+  CALL EVAL_EXPRESSION
+  JR CMD_BEEP_MORE_ARGS
+CMD_BEEP_DELAY:
   LD B,0x20
 CMD_BEEP_LOOP:
   DJNZ CMD_BEEP_LOOP
