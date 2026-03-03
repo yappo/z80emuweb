@@ -8,6 +8,7 @@ import {
   type MonitorRuntimeSnapshot,
   MonitorRuntime
 } from '@z80emu/firmware-monitor';
+import { getBasicInterpreterRomBundle } from '@z80emu/firmware-z80-basic';
 
 import {
   getGlyphForCode,
@@ -22,8 +23,6 @@ import {
   LCD_WIDTH
 } from './font5x7';
 import {
-  findIoPortSpec,
-  findMemoryRegionSpec,
   getIoPortSpec,
   getMemoryRegionSpec,
   getWorkAreaSpec,
@@ -31,6 +30,8 @@ import {
 } from './hardware-map';
 import { KEY_MAP_BY_CODE } from './keyboard-map';
 import type {
+  BasicEngineStatus,
+  FirmwareIoStats,
   MachinePCG815,
   PCG815ExecutionBackend,
   PCG815ExecutionDomain,
@@ -67,6 +68,31 @@ const ICON_VRAM_SIZE = 32;
 const SYSTEM_ROM_BANKS = 8;
 const BANKED_ROM_BANKS = 16;
 const MAIN_RAM_BANKS = 2;
+const FIRMWARE_BRIDGE_ENTRY_ADDR = 0x0200;
+const FIRMWARE_BRIDGE_EOT = 0x04;
+const FIRMWARE_BRIDGE_TICK_CHUNK = 4096;
+const FIRMWARE_BRIDGE_MAX_TSTATES = 8_000_000;
+const BASIC_INTERPRETER_TICK_CHUNK = 4096;
+const BASIC_INTERPRETER_MAX_TSTATES = 12_000_000;
+const BASIC_INTERPRETER_DEFAULT_ENTRY = 0xc000;
+const BASIC_INTERPRETER_DEFAULT_RAM_START = 0x4000;
+const BASIC_INTERPRETER_DEFAULT_RAM_END = 0x6fff;
+const BASIC_INTERPRETER_DEFAULT_ROM_BANK = 0x0f;
+const USER_PROGRAM_RETURN_STACK = 0x7ffc;
+const FIRMWARE_BRIDGE_BINARY = Uint8Array.from([
+  0xdb,
+  0x1d, // IN A,(1Dh)
+  0xb7, // OR A
+  0x28,
+  0xfb, // JR Z,loop
+  0xd3,
+  0x1c, // OUT (1Ch),A
+  0xfe,
+  0x04, // CP 04h
+  0x20,
+  0xf5, // JR NZ,loop
+  0xc9 // RET
+]);
 
 const PORT_SYS_10 = getIoPortSpec('sys-10').port;
 const PORT_SYS_11 = getIoPortSpec('sys-11').port;
@@ -310,6 +336,11 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private readonly bankedRomBanks = Array.from({ length: BANKED_ROM_BANKS }, () => new Uint8Array(BANKED_ROM_SIZE));
 
   private readonly executionBackend: PCG815ExecutionBackend;
+  private readonly basicInterpreterRomImage: Uint8Array;
+  private readonly basicInterpreterEntry: number;
+  private readonly basicRamStart: number;
+  private readonly basicRamEnd: number;
+  private readonly basicInterpreterRomBank: number;
   private executionDomain: PCG815ExecutionDomain = 'firmware';
   private firmwareReturnAddress = MONITOR_MAIN_LOOP_ADDR;
 
@@ -326,11 +357,19 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private readonly pressedCodes = new Set<string>();
 
   private readonly asciiQueue: number[] = [];
+  private readonly firmwareInputQueue: number[] = [];
+  private firmwareQueuedBytes = 0;
+  private firmwareInReads = 0;
+  private firmwareConsumedBytes = 0;
+  private firmwareOutWrites = 0;
+  private firmwareEotWrites = 0;
+  private runtimeServicePending = false;
 
   private kanaMode = false;
   private kanaComposeBuffer = '';
 
   private lcdCursor = 0;
+  private lcdPendingWrap = false;
   private keyStrobe = 0;
   private keyShift = 0;
   private timer = 0;
@@ -345,6 +384,14 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private battChk = 0;
   private keyBreak = 0;
   private pin11In = 0;
+  private readonly cpuSignals = {
+    wait: false,
+    int: false,
+    nmi: false,
+    busrq: false,
+    reset: false,
+    intDataBus: 0xff
+  };
 
   private lcdX = 0;
   private lcdY = 0;
@@ -354,6 +401,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private readonly lcdRawVram = new Uint8Array(8 * 0x80);
 
   private dirtyFrame = true;
+  private frameRevision = 0;
 
   private elapsedTStates = 0;
   private wasRuntimeProgramRunning = false;
@@ -385,10 +433,19 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   }
 
   constructor(options?: PCG815MachineOptions) {
+    const basicBundle = getBasicInterpreterRomBundle();
     const monitorRom = options?.rom ?? createMonitorRom();
     this.bootstrapImage = new Uint8Array(monitorRom);
     this.executionBackend = options?.executionBackend ?? 'z80-firmware';
     this.firmwareReturnAddress = clamp16(options?.firmwareReturnAddress ?? MONITOR_MAIN_LOOP_ADDR);
+    this.basicInterpreterEntry = clamp16(options?.basicInterpreterEntry ?? basicBundle.entry ?? BASIC_INTERPRETER_DEFAULT_ENTRY);
+    this.basicRamStart = clamp16(options?.basicRamStart ?? BASIC_INTERPRETER_DEFAULT_RAM_START);
+    this.basicRamEnd = clamp16(options?.basicRamEnd ?? BASIC_INTERPRETER_DEFAULT_RAM_END);
+    if (this.basicRamStart > this.basicRamEnd) {
+      throw new Error(`Invalid BASIC RAM range: ${this.basicRamStart.toString(16)}-${this.basicRamEnd.toString(16)}`);
+    }
+    this.basicInterpreterRomBank = clamp8(options?.basicInterpreterRomBank ?? basicBundle.romBank ?? BASIC_INTERPRETER_DEFAULT_ROM_BANK) & 0x0f;
+    this.basicInterpreterRomImage = new Uint8Array(options?.basicInterpreterRomImage ?? basicBundle.image);
 
     this.seedRomWindows();
 
@@ -425,9 +482,16 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.keyboardRows.fill(0xff);
     this.pressedCodes.clear();
     this.asciiQueue.length = 0;
+    this.firmwareInputQueue.length = 0;
+    this.firmwareQueuedBytes = 0;
+    this.firmwareInReads = 0;
+    this.firmwareConsumedBytes = 0;
+    this.firmwareOutWrites = 0;
+    this.firmwareEotWrites = 0;
     this.kanaMode = false;
     this.kanaComposeBuffer = '';
     this.lcdCursor = 0;
+    this.lcdPendingWrap = false;
     this.keyStrobe = 0;
     this.keyShift = 0;
     this.timer = 0;
@@ -467,17 +531,24 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   tick(tstates: number): void {
     const clamped = Math.max(0, Math.floor(tstates));
     const wasRunning = this.runtime.isProgramRunning();
-    for (let i = 0; i < clamped; i += 1) {
-      this.chipset.tick(1);
-      const cpu = this.chipset.getCpuState();
-      const pc = cpu.registers.pc & 0xffff;
-      if (this.executionDomain === 'user-program' && pc === this.firmwareReturnAddress) {
-        this.executionDomain = 'firmware';
+    if (clamped > 0) {
+      if (this.executionDomain === 'user-program') {
+        const reachedReturnAddress = this.chipset.tickWithInstructionFetchWatch(clamped, this.firmwareReturnAddress);
+        if (reachedReturnAddress) {
+          this.executionDomain = 'firmware';
+        }
+      } else {
+        this.chipset.tick(clamped);
       }
     }
     this.elapsedTStates += clamped;
-    this.runtime.pump();
-    this.flushRuntimeOutputToLcd();
+    const shouldServiceRuntime =
+      this.executionBackend === 'ts-compat' || this.executionDomain !== 'user-program' || this.runtimeServicePending;
+    if (shouldServiceRuntime) {
+      this.runtime.pump();
+      this.flushRuntimeOutputToLcd();
+      this.runtimeServicePending = false;
+    }
     const isRunning = this.runtime.isProgramRunning();
     if (!wasRunning && isRunning) {
       // RUN開始時にタイプ済み文字を捨てる（終了後の遅延エコー防止）。
@@ -499,14 +570,13 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     intDataBus: number;
   } {
     const intPending = (this.interruptType & this.interruptMask) !== 0;
-    return {
-      wait: false,
-      int: intPending,
-      nmi: false,
-      busrq: false,
-      reset: false,
-      intDataBus: 0xff
-    };
+    this.cpuSignals.wait = false;
+    this.cpuSignals.int = intPending;
+    this.cpuSignals.nmi = false;
+    this.cpuSignals.busrq = false;
+    this.cpuSignals.reset = false;
+    this.cpuSignals.intDataBus = 0xff;
+    return this.cpuSignals;
   }
 
   private flushRuntimeOutputToLcd(): void {
@@ -537,11 +607,18 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       // 押下エッジでのみ ASCII キューへ投入し、オートリピートの暴走を防ぐ。
       if (firstPress) {
         const asciiCodes = this.resolveAsciiCodes(mapping.code, mapping.normal, mapping.shifted);
-        if (!this.runtime.isProgramRunning() && this.immediateInputToRuntimeEnabled) {
-          // Immediate mode input goes directly into runtime line editor.
+        if (this.executionDomain === 'firmware' && !this.runtime.isProgramRunning() && this.immediateInputToRuntimeEnabled) {
+          // firmware ドメインの即時入力だけを runtime 行エディタへ直送する。
+          // user-program 実行中はキーマトリクス入力を優先し、文字混入を防ぐ。
           for (const ascii of asciiCodes) {
             this.runtime.receiveChar(ascii & 0xff);
           }
+          if (asciiCodes.length > 0) {
+            this.runtimeServicePending = true;
+          }
+        } else if (asciiCodes.length > 0 && this.executionDomain === 'user-program') {
+          // Z80 BASIC 実行中の INPUT は IN 0x1D から読むため、キー入力を FIFO へ渡す。
+          this.enqueueFirmwareInput(asciiCodes);
         } else if (asciiCodes.length > 0) {
           // Program execution uses INKEY$ path via FIFO.
           this.asciiQueue.push(...asciiCodes);
@@ -562,6 +639,13 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       this.renderFrameBuffer();
     }
     return this.frameBuffer;
+  }
+
+  getFrameRevision(): number {
+    if (this.dirtyFrame) {
+      this.renderFrameBuffer();
+    }
+    return this.frameRevision;
   }
 
   setKanaMode(enabled: boolean): void {
@@ -643,6 +727,83 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     };
   }
 
+  runBasicInterpreter(
+    bytes: readonly number[],
+    options?: {
+      appendEot?: boolean;
+      maxTStates?: number;
+    }
+  ): void {
+    const appendEot = options?.appendEot !== false;
+    const payload = bytes.map((value) => clamp8(value));
+    if (appendEot) {
+      payload.push(FIRMWARE_BRIDGE_EOT);
+    }
+    this.enqueueFirmwareInput(payload);
+
+    // BASIC インタープリター本体を搭載した ROM バンクへ切り替える。
+    const romSelect = (((this.exRomBank & 0x07) << 4) | (this.basicInterpreterRomBank & 0x0f)) & 0xff;
+    this.out8(PORT_SYS_19, romSelect);
+
+    const firmwareReturnAddress = this.getFirmwareReturnAddress() & 0xffff;
+    const returnSp = USER_PROGRAM_RETURN_STACK;
+    this.write8(returnSp, firmwareReturnAddress & 0xff);
+    this.write8((returnSp + 1) & 0xffff, (firmwareReturnAddress >> 8) & 0xff);
+    this.setStackPointer(returnSp);
+    this.setCpuProgramCounter(this.basicInterpreterEntry);
+    this.setExecutionDomain('user-program');
+
+    const maxTStates = Math.max(
+      BASIC_INTERPRETER_TICK_CHUNK,
+      Math.trunc(options?.maxTStates ?? BASIC_INTERPRETER_MAX_TSTATES)
+    );
+    let executed = 0;
+    let timedOut = false;
+    while (this.executionDomain === 'user-program') {
+      this.tick(BASIC_INTERPRETER_TICK_CHUNK);
+      executed += BASIC_INTERPRETER_TICK_CHUNK;
+
+      const cpu = this.getCpuState();
+      if (cpu.halted && this.executionDomain === 'user-program') {
+        this.setCpuProgramCounter(firmwareReturnAddress);
+        this.setExecutionDomain('firmware');
+        break;
+      }
+
+      if (executed >= maxTStates) {
+        timedOut = true;
+        // タイムスライス上限到達時は強制復帰させない。
+        // ループ系BASICを UI フレーム駆動で継続実行できるよう、
+        // 現在の PC / executionDomain(user-program) を保持して抜ける。
+        break;
+      }
+    }
+
+    const basicErrorCode = this.read8(0x6ef7) & 0xff;
+    if (basicErrorCode !== 0) {
+      if (basicErrorCode === 2) {
+        throw new Error('NO LINE');
+      }
+      throw new Error(`BASIC ERROR ${basicErrorCode}`);
+    }
+
+    if (timedOut) {
+      return;
+    }
+  }
+
+  getBasicEngineStatus(): BasicEngineStatus {
+    return {
+      entry: this.basicInterpreterEntry & 0xffff,
+      romBank: this.basicInterpreterRomBank & 0x0f,
+      activeRomBank: this.getActiveRomBank(),
+      basicRamStart: this.basicRamStart & 0xffff,
+      basicRamEnd: this.basicRamEnd & 0xffff,
+      executionBackend: this.executionBackend,
+      executionDomain: this.executionDomain
+    };
+  }
+
   loadProgram(bytes: Uint8Array | readonly number[], origin: number): void {
     const start = clamp16(origin);
     const end = start + bytes.length - 1;
@@ -667,6 +828,11 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     if (address < RAM_REGION.start || address > RAM_REGION.end) {
       throw new Error(`Entry address out of RAM window: ${address.toString(16).padStart(4, '0')}`);
     }
+    this.setCpuProgramCounter(address);
+  }
+
+  private setCpuProgramCounter(entry: number): void {
+    const address = clamp16(entry);
     const state = this.chipset.getCpuState();
     state.registers.pc = address;
     state.halted = false;
@@ -680,6 +846,84 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     const state = this.chipset.getCpuState();
     state.registers.sp = clamp16(value);
     this.chipset.loadCpuState(state);
+  }
+
+  enqueueFirmwareInput(bytes: readonly number[]): void {
+    for (const value of bytes) {
+      this.firmwareInputQueue.push(clamp8(value));
+      this.firmwareQueuedBytes += 1;
+    }
+  }
+
+  clearFirmwareInput(): void {
+    this.firmwareInputQueue.length = 0;
+  }
+
+  getFirmwareIoStats(): FirmwareIoStats {
+    return {
+      queuedBytes: this.firmwareQueuedBytes,
+      inReads: this.firmwareInReads,
+      consumedBytes: this.firmwareConsumedBytes,
+      outWrites: this.firmwareOutWrites,
+      eotWrites: this.firmwareEotWrites,
+      pendingBytes: this.firmwareInputQueue.length
+    };
+  }
+
+  resetFirmwareIoStats(): void {
+    this.firmwareQueuedBytes = 0;
+    this.firmwareInReads = 0;
+    this.firmwareConsumedBytes = 0;
+    this.firmwareOutWrites = 0;
+    this.firmwareEotWrites = 0;
+  }
+
+  runFirmwareInputBridge(
+    bytes: readonly number[],
+    options?: {
+      appendEot?: boolean;
+      maxTStates?: number;
+      entryAddress?: number;
+      programBinary?: Uint8Array | readonly number[];
+    }
+  ): void {
+    const appendEot = options?.appendEot !== false;
+    const payload = bytes.map((value) => clamp8(value));
+    if (appendEot) {
+      payload.push(FIRMWARE_BRIDGE_EOT);
+    }
+
+    this.enqueueFirmwareInput(payload);
+
+    const entryAddress = clamp16(options?.entryAddress ?? FIRMWARE_BRIDGE_ENTRY_ADDR);
+    const programBinary = options?.programBinary ?? FIRMWARE_BRIDGE_BINARY;
+    this.loadProgram(programBinary, entryAddress);
+
+    const firmwareReturnAddress = this.getFirmwareReturnAddress() & 0xffff;
+    const returnSp = USER_PROGRAM_RETURN_STACK;
+    this.write8(returnSp, firmwareReturnAddress & 0xff);
+    this.write8((returnSp + 1) & 0xffff, (firmwareReturnAddress >> 8) & 0xff);
+    this.setStackPointer(returnSp);
+    this.setProgramCounter(entryAddress);
+    this.setExecutionDomain('user-program');
+
+    const maxTStates = Math.max(FIRMWARE_BRIDGE_TICK_CHUNK, Math.trunc(options?.maxTStates ?? FIRMWARE_BRIDGE_MAX_TSTATES));
+    let executed = 0;
+    while (this.executionDomain === 'user-program') {
+      this.tick(FIRMWARE_BRIDGE_TICK_CHUNK);
+      executed += FIRMWARE_BRIDGE_TICK_CHUNK;
+
+      const cpu = this.getCpuState();
+      if (cpu.halted && this.executionDomain === 'user-program') {
+        this.setProgramCounter(firmwareReturnAddress);
+        this.setExecutionDomain('firmware');
+        break;
+      }
+
+      if (executed >= maxTStates) {
+        throw new Error(`FIRMWARE BRIDGE TIMEOUT tstates=${executed}`);
+      }
+    }
   }
 
   createSnapshot(): SnapshotV1 {
@@ -729,6 +973,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.iconVram.set(snapshot.vram.icons.map((v) => v & 0xff).slice(0, this.iconVram.length));
 
     this.lcdCursor = snapshot.vram.cursor & 0x7f;
+    this.lcdPendingWrap = false;
 
     this.keyStrobe = snapshot.io.selectedKeyRow & 0xffff;
     this.keyboardRows.fill(0xff);
@@ -736,6 +981,8 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
     this.asciiQueue.length = 0;
     this.asciiQueue.push(...snapshot.io.asciiQueue.map((v) => v & 0xff));
+    this.firmwareInputQueue.length = 0;
+    this.resetFirmwareIoStats();
     this.kanaMode = Boolean(snapshot.io.kanaMode);
     this.kanaComposeBuffer = snapshot.io.kanaComposeBuffer ?? '';
 
@@ -753,22 +1000,16 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
   read8(addr: number): number {
     const address = clamp16(addr);
-    const region = findMemoryRegionSpec(address);
-
-    if (!region) {
-      return 0xff;
-    }
-
-    // メモリマップ定義に従って RAM/ROM の窓を切り替える。
-    if (region.kind === 'ram-window') {
+    // ホットパス最適化: アドレス帯域を直接判定する。
+    if (address <= RAM_REGION.end) {
       return this.mainRam[address - RAM_REGION.start] ?? 0xff;
     }
 
-    if (region.kind === 'rom-window') {
+    if (address >= SYSTEM_ROM_REGION.start && address <= SYSTEM_ROM_REGION.end) {
       return this.systemRomWindow[address - SYSTEM_ROM_REGION.start] ?? 0xff;
     }
 
-    if (region.kind === 'banked-rom-window') {
+    if (address >= BANKED_ROM_REGION.start) {
       return this.bankedRomWindow[address - BANKED_ROM_REGION.start] ?? 0xff;
     }
 
@@ -778,27 +1019,19 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   write8(addr: number, value: number): void {
     const address = clamp16(addr);
     const byte = clamp8(value);
-    const region = findMemoryRegionSpec(address);
-
-    if (!region || !region.writable) {
+    // RAM窓以外は書き込み不可。
+    if (address > RAM_REGION.end) {
       return;
     }
 
-    if (region.kind === 'ram-window') {
-      this.mainRam[address - RAM_REGION.start] = byte;
-      if (address === WORKAREA_DISPLAY_START_LINE) {
-        this.dirtyFrame = true;
-      }
+    this.mainRam[address - RAM_REGION.start] = byte;
+    if (address === WORKAREA_DISPLAY_START_LINE) {
+      this.dirtyFrame = true;
     }
   }
 
   in8(port: number): number {
-    const portSpec = findIoPortSpec(port);
-    if (!portSpec) {
-      return 0x78;
-    }
-
-    const normalized = portSpec.port & 0xff;
+    const normalized = clamp8(port);
     switch (normalized) {
       case PORT_SYS_10:
         return this.readKeyMatrixByStrobe();
@@ -826,7 +1059,12 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       case PORT_SYS_1b:
         return this.ramBank & 0xff;
       case PORT_SYS_1d:
-        return 0x00;
+        this.firmwareInReads += 1;
+        if (this.firmwareInputQueue.length <= 0) {
+          return 0x00;
+        }
+        this.firmwareConsumedBytes += 1;
+        return this.firmwareInputQueue.shift() ?? 0x00;
       case PORT_SYS_1f: {
         const xinValue = (this.xinEnabled & 0x80) !== 0 ? this.pin11In & 0x04 : 0;
         const bit1 = (this.pin11In & 0x20) !== 0 ? 0x02 : 0;
@@ -842,19 +1080,15 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       case PORT_LCD_STATUS:
         return this.readLcdData(true);
       default:
-        return portSpec.defaultInValue & 0xff;
+        return 0x78;
     }
   }
 
   out8(port: number, value: number): void {
-    const portSpec = findIoPortSpec(port);
-    if (!portSpec) {
-      return;
-    }
-
+    const normalized = clamp8(port);
     const byte = clamp8(value);
 
-    switch (portSpec.port & 0xff) {
+    switch (normalized) {
       case PORT_SYS_11:
         this.keyStrobe = (this.keyStrobe & 0xff00) | byte;
         if ((byte & 0x10) !== 0) {
@@ -892,6 +1126,13 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         return;
       case PORT_SYS_1c:
         this.ioReset = byte;
+        this.firmwareOutWrites += 1;
+        if (byte === FIRMWARE_BRIDGE_EOT) {
+          this.firmwareEotWrites += 1;
+          return;
+        }
+        this.runtime.receiveChar(byte);
+        this.runtimeServicePending = true;
         return;
       case PORT_SYS_1e:
         this.battChk = byte & 0x03;
@@ -913,6 +1154,15 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.writeLcdData('secondary', byte);
         return;
       case PORT_LCD_COMMAND:
+        // BASIC系ファーム互換:
+        // 0x58 への 0x01/0x8x 系コマンドをテキスト層の
+        // CLS/カーソル制御として解釈する。
+        // 0xC0-0xDF は raw LCD では display-start-line と衝突するため、
+        // テキストカーソル用途(0x80|pos)を優先して二重適用を避ける。
+        if (byte === 0x01 || (byte & 0x80) !== 0) {
+          this.handleLcdCommand(byte);
+          return;
+        }
         this.g815LcdCtrl('primary', byte);
         return;
       case PORT_LCD_DATA:
@@ -1071,6 +1321,21 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         loadBank(banked);
       }
     }
+
+    this.installBasicInterpreterRomImage();
+  }
+
+  private installBasicInterpreterRomImage(): void {
+    const bank = this.bankedRomBanks[this.basicInterpreterRomBank & 0x0f];
+    if (!bank) {
+      return;
+    }
+    const originOffset = Math.max(0, this.basicInterpreterEntry - BANKED_ROM_REGION.start);
+    if (originOffset >= bank.length) {
+      return;
+    }
+    const copyLen = Math.min(this.basicInterpreterRomImage.length, bank.length - originOffset);
+    bank.set(this.basicInterpreterRomImage.subarray(0, copyLen), originOffset);
   }
 
   private resolveAsciiCodes(code: string, normal?: number, shifted?: number): number[] {
@@ -1195,6 +1460,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       this.textVram.fill(SPACE_CODE);
       this.graphicsPlane.fill(0);
       this.lcdCursor = 0;
+      this.lcdPendingWrap = false;
       this.dirtyFrame = true;
       return;
     }
@@ -1204,6 +1470,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       if (this.lcdCursor >= TEXT_VRAM_SIZE) {
         this.lcdCursor %= TEXT_VRAM_SIZE;
       }
+      this.lcdPendingWrap = false;
       return;
     }
   }
@@ -1215,6 +1482,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     if (value === 0x0d) {
       const row = Math.floor(this.lcdCursor / LCD_COLS);
       this.lcdCursor = row * LCD_COLS;
+      this.lcdPendingWrap = false;
       return;
     }
 
@@ -1227,11 +1495,14 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.scrollTextUp(1);
         this.lcdCursor = (LCD_ROWS - 1) * LCD_COLS + col;
       }
+      this.lcdPendingWrap = false;
       return;
     }
 
     if (value === 0x08) {
-      if (this.lcdCursor > 0) {
+      if (this.lcdPendingWrap) {
+        this.lcdPendingWrap = false;
+      } else if (this.lcdCursor > 0) {
         this.lcdCursor -= 1;
       }
       this.textVram[this.lcdCursor] = SPACE_CODE;
@@ -1239,11 +1510,23 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       return;
     }
 
+    if (this.lcdPendingWrap) {
+      const row = Math.floor(this.lcdCursor / LCD_COLS);
+      if (row < LCD_ROWS - 1) {
+        this.lcdCursor = (row + 1) * LCD_COLS;
+      } else {
+        this.scrollTextUp(1);
+        this.lcdCursor = (LCD_ROWS - 1) * LCD_COLS;
+      }
+      this.lcdPendingWrap = false;
+    }
+
     this.textVram[this.lcdCursor] = toDisplayCode(value);
-    this.lcdCursor += 1;
-    if (this.lcdCursor >= TEXT_VRAM_SIZE) {
-      this.scrollTextUp(1);
-      this.lcdCursor = (LCD_ROWS - 1) * LCD_COLS;
+    const col = this.lcdCursor % LCD_COLS;
+    if (col < LCD_COLS - 1) {
+      this.lcdCursor += 1;
+    } else {
+      this.lcdPendingWrap = true;
     }
     this.dirtyFrame = true;
   }
@@ -1303,6 +1586,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     }
 
     this.dirtyFrame = false;
+    this.frameRevision = (this.frameRevision + 1) >>> 0;
   }
 
   private setGraphicsPixel(x: number, y: number, mode = 1): void {
@@ -1467,6 +1751,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         const safeCol = Math.max(0, Math.min(LCD_COLS - 1, col | 0));
         const safeRow = Math.max(0, Math.min(LCD_ROWS - 1, row | 0));
         this.lcdCursor = safeRow * LCD_COLS + safeCol;
+        this.lcdPendingWrap = false;
       },
       getDisplayStartLine: () => this.getDisplayStartLine(),
       readKeyMatrix: (row: number) => this.keyboardRows[row & 0x07] ?? 0xff,

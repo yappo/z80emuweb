@@ -1,0 +1,16 @@
+{
+  "name": "@z80emu/firmware-z80-basic",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "dependencies": {
+    "@z80emu/assembler-z80": "file:../assembler-z80"
+  },
+  "scripts": {
+    "generate": "node scripts/generate-firmware.mjs",
+    "build": "tsc -p tsconfig.json",
+    "test": "echo \"No tests yet\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

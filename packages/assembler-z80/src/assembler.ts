@@ -1,5 +1,12 @@
 import { evaluateExpression } from './expression.js';
-import type { AssembleOptions, AssembleResult, AssemblerDiagnostic, ListingRecord, SymbolEntry } from './types.js';
+import type {
+  AssembleAddressRange,
+  AssembleOptions,
+  AssembleResult,
+  AssemblerDiagnostic,
+  ListingRecord,
+  SymbolEntry
+} from './types.js';
 
 interface SourceLine {
   file: string;
@@ -1330,14 +1337,34 @@ function evaluateOrReport(
   return undefined;
 }
 
-function ensureAddressInRam(address: number, line: ParsedLine, diagnostics: AssemblerDiagnostic[]): boolean {
-  if (address < RAM_START || address > RAM_END) {
+function normalizeAddressRange(range?: AssembleAddressRange): { start: number; end: number } {
+  const start = (range?.start ?? RAM_START) & 0xffff;
+  const end = (range?.end ?? RAM_END) & 0xffff;
+  if (start > end) {
+    return { start: RAM_START, end: RAM_END };
+  }
+  return { start, end };
+}
+
+function formatRangeLabel(range: { start: number; end: number }): string {
+  return `${range.start.toString(16).toUpperCase().padStart(4, '0')}-${range.end.toString(16).toUpperCase().padStart(4, '0')}`;
+}
+
+function ensureAddressInRange(
+  address: number,
+  line: ParsedLine,
+  diagnostics: AssemblerDiagnostic[],
+  range: { start: number; end: number }
+): boolean {
+  if (address < range.start || address > range.end) {
+    const rangeLabel = formatRangeLabel(range);
+    const prefix = range.start === RAM_START && range.end === RAM_END ? 'Address out of RAM range' : 'Address out of range';
     addDiagnostic(
       diagnostics,
       line.source.file,
       line.source.line,
       1,
-      `Address out of RAM range 0000-7FFF: ${address.toString(16).toUpperCase()}`
+      `${prefix} ${rangeLabel}: ${address.toString(16).toUpperCase()}`
     );
     return false;
   }
@@ -1347,6 +1374,7 @@ function ensureAddressInRam(address: number, line: ParsedLine, diagnostics: Asse
 export function assemble(source: string, options: AssembleOptions = {}): AssembleResult {
   const diagnostics: AssemblerDiagnostic[] = [];
   const filename = options.filename ?? '<memory>';
+  const addressRange = normalizeAddressRange(options.addressRange);
 
   const expanded = expandSource(source, filename, options, diagnostics);
   const parsed = expanded.map((line) => parseLine(line));
@@ -1412,7 +1440,7 @@ export function assemble(source: string, options: AssembleOptions = {}): Assembl
         continue;
       }
       currentAddress = evalValue & 0xffff;
-      if (!ensureAddressInRam(currentAddress, line, diagnostics)) {
+      if (!ensureAddressInRange(currentAddress, line, diagnostics, addressRange)) {
         continue;
       }
       if (state.firstOrigin === undefined) {
@@ -1576,7 +1604,7 @@ export function assemble(source: string, options: AssembleOptions = {}): Assembl
   let maxWritten: number | undefined;
 
   const writeByte = (address: number, byte: number, line: ParsedLine): void => {
-    if (!ensureAddressInRam(address, line, diagnostics)) {
+    if (!ensureAddressInRange(address, line, diagnostics, addressRange)) {
       return;
     }
     const normalized = address & 0xffff;
@@ -1611,7 +1639,7 @@ export function assemble(source: string, options: AssembleOptions = {}): Assembl
         continue;
       }
       currentAddress = value & 0xffff;
-      ensureAddressInRam(currentAddress, line, diagnostics);
+      ensureAddressInRange(currentAddress, line, diagnostics, addressRange);
       if (state.firstOrigin === undefined) {
         state.firstOrigin = currentAddress;
       }

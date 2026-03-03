@@ -87,6 +87,34 @@ npm run dev
 - `npm run dev`
 - `npm run asm -- -i input.asm -o out.bin --lst out.lst --sym out.sym`
 
+### Z80 BASICインタプリタをビルドしてWebへ反映
+
+`@z80emu/firmware-z80-basic` のZ80実装を修正したあと、Webに反映する最短手順です。
+
+```bash
+# 1) ファームウェア生成物を更新
+npm run generate -w @z80emu/firmware-z80-basic
+
+# 2) ファームウェアパッケージをビルド
+npm run build -w @z80emu/firmware-z80-basic
+
+# 3) 依存先のマシン層をビルド（Webが参照する配布物を更新）
+npm run build -w @z80emu/machine-pcg815
+
+# 4) Webを起動して確認
+npm run dev
+```
+
+確認を厳密に行う場合:
+
+```bash
+# Z80経路のBASIC仕様テスト
+npm run test -w @z80emu/machine-pcg815
+
+# 全体回帰
+npm run test
+```
+
 ## 実行時フラグ
 
 - 既定値: `strict=0`（通常利用向けの安全起動）

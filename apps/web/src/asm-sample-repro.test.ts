@@ -28,6 +28,21 @@ function tapKey(machine: PCG815Machine, code: string): void {
   runFor(machine, 1024);
 }
 
+function runUntilProgramReturns(machine: PCG815Machine, returnAddress: number, maxSteps = 60_000): void {
+  for (let i = 0; i < maxSteps; i += 1) {
+    machine.tick(64);
+    const cpu = machine.getCpuState();
+    if (cpu.halted && machine.getExecutionDomain() === 'user-program') {
+      machine.setProgramCounter(returnAddress & 0xffff);
+      machine.setExecutionDomain('firmware');
+    }
+    if (machine.getExecutionDomain() === 'firmware') {
+      return;
+    }
+  }
+  throw new Error('ASM sample did not return to firmware address');
+}
+
 describe('asm sample input flow', () => {
   it('reads input and prints reversed text', { timeout: 20_000 }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
@@ -39,8 +54,13 @@ describe('asm sample input flow', () => {
     const machine = new PCG815Machine({ strictCpuOpcodes: true });
     machine.reset(true);
     machine.loadProgram(assembled.binary, assembled.origin);
-    machine.setStackPointer(0x7ffe);
+    const firmwareReturnAddress = machine.getFirmwareReturnAddress() & 0xffff;
+    const returnSp = 0x7ffc;
+    machine.write8(returnSp, firmwareReturnAddress & 0xff);
+    machine.write8((returnSp + 1) & 0xffff, (firmwareReturnAddress >> 8) & 0xff);
+    machine.setStackPointer(returnSp);
     machine.setProgramCounter(assembled.entry);
+    machine.setExecutionDomain('user-program');
 
     runFor(machine, 50_000);
 
@@ -54,7 +74,7 @@ describe('asm sample input flow', () => {
     tapKey(machine, 'KeyL');
     tapKey(machine, 'KeyO');
     tapKey(machine, 'Enter');
-    runFor(machine, 10_000);
+    runUntilProgramReturns(machine, firmwareReturnAddress);
 
     const after = machine.getTextLines().join('\n');
     expect(after).toContain('Reversed:');

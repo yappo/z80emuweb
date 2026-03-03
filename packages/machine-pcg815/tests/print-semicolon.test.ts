@@ -1,0 +1,80 @@
+import { describe, expect, it } from 'vitest';
+import { PCG815Machine } from '../src';
+
+function encode(lines: readonly string[]): number[] {
+  const out: number[] = [];
+  for (const line of lines) {
+    for (const ch of line) out.push(ch.charCodeAt(0) & 0xff);
+    out.push(0x0d);
+  }
+  return out;
+}
+
+describe('z80 basic PRINT semicolon behavior', () => {
+  it.each(['z80-firmware', 'ts-compat'] as const)(
+    'does not print implicit 0 on trailing semicolon (%s)',
+    (executionBackend) => {
+      const machine = new PCG815Machine({ executionBackend });
+      machine.runBasicInterpreter(encode(['10 PRINT "X";', 'RUN']), { appendEot: true, maxTStates: 2_000_000 });
+      const line0 = machine.getTextLines()[0] ?? '';
+      expect(line0.startsWith('X')).toBe(true);
+      expect(line0.includes('X0')).toBe(false);
+    }
+  );
+
+  it.each(['z80-firmware', 'ts-compat'] as const)(
+    'does not increment numeric literal/value when trailing semicolon is used (%s)',
+    (executionBackend) => {
+      const machine = new PCG815Machine({ executionBackend });
+      machine.runBasicInterpreter(encode(['10 PRINT 1;', '20 A=3', '30 PRINT A;', 'RUN']), {
+        appendEot: true,
+        maxTStates: 2_000_000
+      });
+      const screen = machine.getTextLines().join('\n');
+      expect(screen).toContain('1');
+      expect(screen).toContain('3');
+      expect(screen).not.toContain('2');
+      expect(screen).not.toContain('4');
+    }
+  );
+
+  it.each(['z80-firmware', 'ts-compat'] as const)(
+    'prints comma-separated variables at 12-column tab stops (%s)',
+    (executionBackend) => {
+      const machine = new PCG815Machine({ executionBackend });
+      machine.runBasicInterpreter(encode(['10 X=83', '20 Y=5', '30 PRINT X,Y', 'RUN']), {
+        appendEot: true,
+        maxTStates: 2_000_000
+      });
+      const line0 = machine.getTextLines()[0] ?? '';
+      expect(line0.startsWith('83          5')).toBe(true);
+    }
+  );
+
+  it.each(['z80-firmware', 'ts-compat'] as const)(
+    'keeps numeric semicolon behavior without mutating values (%s)',
+    (executionBackend) => {
+      const machine = new PCG815Machine({ executionBackend });
+      machine.runBasicInterpreter(encode(['10 X=83', '20 PRINT 83;', '30 PRINT X;', 'RUN']), {
+        appendEot: true,
+        maxTStates: 2_000_000
+      });
+      const screen = machine.getTextLines().join('\n');
+      expect(screen).toContain('83');
+      expect(screen).not.toContain('84');
+    }
+  );
+
+  it.each(['z80-firmware', 'ts-compat'] as const)(
+    'continues next PRINT on same line when previous ends with semicolon (%s)',
+    (executionBackend) => {
+      const machine = new PCG815Machine({ executionBackend });
+      machine.runBasicInterpreter(encode(['10 PRINT "X";', '20 PRINT "Y"', 'RUN']), {
+        appendEot: true,
+        maxTStates: 2_000_000
+      });
+      const line0 = machine.getTextLines()[0] ?? '';
+      expect(line0.includes('XY')).toBe(true);
+    }
+  );
+});

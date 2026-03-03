@@ -45,6 +45,14 @@ interface CompatRouteStats {
   rejectedCalls: number;
 }
 
+interface FirmwareRouteStats {
+  bridgeRuns: number;
+  bridgeBytes: number;
+  bridgeErrors: number;
+  runtimeBridgeRuns: number;
+  z80InterpreterRuns: number;
+}
+
 declare global {
   interface Window {
     __pcg815?: {
@@ -57,6 +65,8 @@ declare global {
       getKanaMode: () => boolean;
       drainAsciiFifo: () => number[];
       getCompatRouteStats: () => CompatRouteStats;
+      getFirmwareRouteStats: () => FirmwareRouteStats & ReturnType<PCG815Machine['getFirmwareIoStats']>;
+      getBasicEngineStatus: () => ReturnType<PCG815Machine['getBasicEngineStatus']>;
       tapKey: (code: string) => void;
       assembleAsm: (source: string) => { ok: boolean; errorLine?: string; dump: string };
       runAsm: (source: string) => Promise<RunAsmProgramResult>;
@@ -70,6 +80,10 @@ const query = new URLSearchParams(window.location.search);
 const debugMode = query.get('debug') === '1';
 const strictMode = query.get('strict') === '1';
 const executionBackend = query.get('backend') === 'ts-compat' ? 'ts-compat' : 'z80-firmware';
+const FIRMWARE_LINE_END = 0x0d;
+const PROGRAM_LINE_NUMBER = /^\s*(\d+)\b/;
+const PROGRAM_LINE_WITH_BODY = /^\s*(\d+)(?:\s+(.*))?$/;
+const LABEL_DECL_LINE = /^\s*\*[A-Za-z0-9_]+:/;
 
 function mustQuery<T extends Element>(selector: string): T {
   const el = document.querySelector<T>(selector);
@@ -179,11 +193,17 @@ let speedWindowExecuted = 0;
 let healthWindowElapsed = 0;
 let lastHealthTStates = 0;
 let lastLitPixels = 0;
+let lastFrameRevision = -1;
+let cachedLitPixels = 0;
 
 const inputLog: string[] = [];
 const pressedCodes = new Set<string>();
 const pendingKeyRelease = new Map<string, number>();
-const KEY_RELEASE_LATCH_MS = 280;
+const KEYDOWN_POLL_BOOST_TSTATES = 64;
+const SPACE_KEYDOWN_POLL_BOOST_TSTATES = 2_500_000;
+// サンプルゲーム系のポーリング入力で短押しが取りこぼされないよう、
+// 解放反映を遅らせて押下パルス幅を確保する。
+const KEY_RELEASE_LATCH_MS = 120;
 const BASIC_SAMPLE = `10 A = 1
 20 PRINT A
 30 A = A + 1
@@ -192,83 +212,81 @@ const BASIC_SAMPLE = `10 A = 1
 60 GOTO 20
 70 PRINT "owari"
 80 END`;
-const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
+const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
+95 REM 初期化: スコアとステージ番号
 100 LET S=0
 110 LET N=1
-115 GOSUB 9500
-120 IF N>5 THEN 9000
-130 GOSUB 7000
-140 LET SE=INP(18)+INP(16)+PEEK(0)+N
-150 IF SE<>0 THEN 170
-160 LET SE=37+N
-170 GOSUB 2000
-180 LET X=1
-190 LET Y=1
-200 LET K=0
-210 LET T=0
-215 LET PH=0
-216 LET PC=0
-220 GOSUB 3000
-230 WAIT 3
-240 LET DX=0
-250 LET DY=0
-260 GOSUB 900
-270 IF M=1 THEN 320
-280 IF M=2 THEN 340
-290 IF M=3 THEN 360
-300 IF M=4 THEN 380
-310 GOTO 220
-320 LET DX=-1
-330 GOTO 400
-340 LET DX=1
-350 GOTO 400
-360 LET DY=-1
-370 GOTO 400
-380 LET DY=1
-400 LET NX=X+DX
-410 LET NY=Y+DY
-420 IF NX<1 THEN 220
-430 IF NX>4 THEN 220
-440 IF NY<1 THEN 220
-450 IF NY>4 THEN 220
-460 IF NX<>W1X THEN 480
-470 IF NY=W1Y THEN 220
-480 IF NX<>W2X THEN 500
-490 IF NY=W2Y THEN 220
-500 IF NX<>W3X THEN 520
-510 IF NY=W3Y THEN 220
-520 LET X=NX
-530 LET Y=NY
-540 LET T=T+1
-550 IF X<>KX THEN 570
-560 IF Y=KY THEN 580
-570 GOTO 600
-580 LET K=1
-600 IF K=0 THEN 220
-610 IF X<>GX THEN 220
-620 IF Y<>GY THEN 220
-630 LET ADD=100-T
-640 IF ADD<10 THEN 660
-650 GOTO 670
-660 LET ADD=10
-670 LET S=S+ADD
-680 LET N=N+1
-690 GOTO 120
-900 LET M=0
-910 GOSUB 1600
-920 IF D=0 THEN 1010
-930 IF PH=0 THEN 950
-940 RETURN
-950 LET PH=1
-960 LET PC=D
-970 RETURN
-1010 IF PH=0 THEN 1070
-1020 LET PH=0
-1030 IF PC=0 THEN 1070
-1040 LET M=PC
-1050 LET PC=0
-1060 RETURN
-1070 RETURN
+120 GOSUB 5000
+125 REM 全5ステージを順番に進める
+130 IF N>5 THEN 9000
+140 GOSUB 7000
+150 GOSUB 2000
+160 LET X=1
+170 LET Y=1
+180 LET K=0
+190 LET T=0
+195 REM メインループ: 入力→移動判定→描画→クリア判定
+200 REM ステージ開始時のみ全体描画
+205 GOSUB 3000
+210 GOSUB 1600
+220 IF D=1 THEN 260
+230 IF D=2 THEN 280
+240 IF D=3 THEN 300
+250 IF D=4 THEN 320
+255 GOTO 350
+260 LET DX=-1
+270 GOTO 340
+280 LET DX=1
+290 GOTO 340
+300 LET DY=-1
+310 GOTO 340
+320 LET DY=1
+330 GOTO 340
+340 LET NX=X+DX
+345 LET NY=Y+DY
+350 LET DX=0
+355 LET DY=0
+360 IF NX<1 THEN 210
+370 IF NX>4 THEN 210
+380 IF NY<1 THEN 210
+390 IF NY>4 THEN 210
+400 IF NX<>W1X THEN 420
+410 IF NY=W1Y THEN 210
+420 IF NX<>W2X THEN 440
+430 IF NY=W2Y THEN 210
+440 IF NX<>W3X THEN 460
+450 IF NY=W3Y THEN 210
+460 LET OX=X
+465 LET OY=Y
+470 LET X=NX
+480 LET Y=NY
+482 LET AX=OX
+483 LET AY=OY
+484 GOSUB 4000
+486 LET AX=X
+487 LET AY=Y
+488 GOSUB 4000
+489 LET T=T+1
+490 IF X<>KX THEN 510
+500 IF Y=KY THEN 520
+510 GOTO 540
+520 LET K=1
+530 GOTO 540
+540 REM 移動時は差分2マスのみ再描画済み
+550 IF K=0 THEN 580
+560 IF X=GX THEN 590
+570 GOTO 580
+580 WAIT 2
+585 GOTO 210
+590 IF Y<>GY THEN 580
+600 LET ADD=100-T
+610 IF ADD<10 THEN 630
+620 GOTO 640
+630 LET ADD=10
+640 LET S=S+ADD
+650 LET N=N+1
+660 GOTO 130
+1590 REM 入力処理: WASD / 矢印キーを方向 D(1-4) に変換
 1600 LET D=0
 1610 OUT 17,1
 1620 LET R=INP(16)
@@ -286,7 +304,8 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 1740 OUT 17,64
 1750 LET R=INP(16)
 1760 IF R=254 THEN 1830
-1770 RETURN
+1770 WAIT 1
+1780 GOTO 1610
 1810 LET D=1
 1820 RETURN
 1830 LET D=2
@@ -295,6 +314,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 1860 RETURN
 1870 LET D=4
 1880 RETURN
+1990 REM ステージ定義: N から 1..5 の配置を選択
 2000 LET P=N
 2010 IF P<6 THEN 2040
 2020 LET P=P-5
@@ -359,87 +379,133 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 2700 LET W3X=1
 2710 LET W3Y=3
 2720 RETURN
+2990 REM 盤面描画: 4x4 全マスを順に描く
 3000 CLS
-3010 FOR J=1 TO 4
-3020 FOR I=1 TO 4
-3030 LET AX=I
-3040 LET AY=J
-3050 GOSUB 3300
-3060 NEXT I
-3070 NEXT J
-3080 RETURN
-3300 LET CH=46
-3310 IF AX<>W1X THEN 3340
-3320 IF AY=W1Y THEN 3500
-3340 IF AX<>W2X THEN 3370
-3350 IF AY=W2Y THEN 3500
-3370 IF AX<>W3X THEN 3400
-3380 IF AY=W3Y THEN 3500
-3400 IF AX<>GX THEN 3430
-3410 IF AY=GY THEN 3520
-3430 IF K<>0 THEN 3460
-3440 IF AX<>KX THEN 3460
-3450 IF AY=KY THEN 3540
-3460 IF AX<>X THEN 3490
-3470 IF AY=Y THEN 3560
-3490 GOTO 3590
-3500 LET CH=35
-3510 GOTO 3590
-3520 LET CH=71
-3530 GOTO 3590
-3540 LET CH=75
-3550 GOTO 3590
-3560 LET CH=64
-3590 LET CX=AX-1
-3600 LET CY=AY-1
-3610 LOCATE CX,CY
-3620 OUT 90,CH
-3630 RETURN
+3010 LET CY=0
+3020 GOSUB 3350
+3030 LET CY=1
+3040 GOSUB 3350
+3050 LET CY=2
+3060 GOSUB 3350
+3070 LET CY=3
+3080 GOSUB 3350
+3090 LET CX=W1X-1
+3100 LET CY=W1Y-1
+3110 LOCATE CX,CY
+3120 OUT 90,35
+3130 LET CX=W2X-1
+3140 LET CY=W2Y-1
+3150 LOCATE CX,CY
+3160 OUT 90,35
+3170 LET CX=W3X-1
+3180 LET CY=W3Y-1
+3190 LOCATE CX,CY
+3200 OUT 90,35
+3210 LET CX=GX-1
+3220 LET CY=GY-1
+3230 LOCATE CX,CY
+3240 OUT 90,71
+3250 IF K<>0 THEN 3300
+3260 LET CX=KX-1
+3270 LET CY=KY-1
+3280 LOCATE CX,CY
+3290 OUT 90,75
+3300 LET CX=X-1
+3310 LET CY=Y-1
+3320 LOCATE CX,CY
+3330 OUT 90,64
+3340 RETURN
+3350 LOCATE 0,CY
+3360 OUT 90,46
+3370 OUT 90,46
+3380 OUT 90,46
+3390 OUT 90,46
+3400 RETURN
+4000 LET CH=46
+4010 IF AX<>W1X THEN 4040
+4020 IF AY=W1Y THEN 4200
+4040 IF AX<>W2X THEN 4070
+4050 IF AY=W2Y THEN 4200
+4070 IF AX<>W3X THEN 4100
+4080 IF AY=W3Y THEN 4200
+4100 IF AX<>GX THEN 4130
+4110 IF AY=GY THEN 4220
+4130 IF AX<>X THEN 4160
+4140 IF AY=Y THEN 4260
+4160 IF K<>0 THEN 4190
+4170 IF AX<>KX THEN 4190
+4180 IF AY=KY THEN 4240
+4190 GOTO 4290
+4200 LET CH=35
+4210 GOTO 4290
+4220 LET CH=71
+4230 GOTO 4290
+4240 LET CH=75
+4250 GOTO 4290
+4260 LET CH=64
+4290 LET CX=AX-1
+4300 LET CY=AY-1
+4310 LOCATE CX,CY
+4320 OUT 90,CH
+4330 RETURN
+4990 REM タイトル画面
+5000 CLS
+5010 LOCATE 0,0
+5020 PRINT "     MASE 4X4 GAME !"
+5030 LOCATE 0,1
+5040 PRINT "&=YOU #=WALL K/G V6"
+5050 LOCATE 0,2
+5060 PRINT "USE: WASD OR ARROWS"
+5070 GOSUB 7100
+5080 RETURN
+6990 REM ステージ開始画面
 7000 CLS
 7010 LOCATE 0,0
-7020 PRINT "    Stage:";N;"/5"
+7020 PRINT "Stage:";N;"/5 Score:";S
 7030 LOCATE 0,1
-7040 PRINT "Score:";S
+7040 PRINT "Reach @ to (4,4)"
 7050 LOCATE 0,2
-7060 PRINT " "
-7070 LET SPH=0
-7080 LET SPC=0
-7090 LET BL=1
-7100 LET CT=0
-7110 GOSUB 7600
-7120 GOSUB 7400
-7130 IF SP=1 THEN 7310
-7140 LET CT=CT+1
-7150 IF CT<16 THEN 7270
-7160 LET CT=0
-7170 IF BL=0 THEN 7210
-7180 LET BL=0
-7190 GOSUB 7800
-7200 GOTO 7270
-7210 LET BL=1
-7220 GOSUB 7600
-7270 WAIT 3
-7280 GOTO 7120
-7310 RETURN
+7060 PRINT "Use WASD/Arrows"
+7070 GOSUB 7100
+7080 RETURN
+7090 REM SPACE 待ち + 点滅表示
+7100 GOSUB 7350
+7110 LET SPH=0
+7120 LET BL=1
+7130 IF BL=0 THEN 7170
+7140 GOSUB 7600
+7150 GOTO 7180
+7170 GOSUB 7800
+7180 GOSUB 7400
+7190 IF SP=1 THEN 7330
+7200 WAIT 3
+7210 IF BL=0 THEN 7240
+7220 LET BL=0
+7230 GOTO 7130
+7240 LET BL=1
+7250 GOTO 7130
+7330 RETURN
+7350 OUT 17,128
+7360 LET R=INP(16)
+7370 IF R=239 THEN 7380
+7372 IF R=235 THEN 7380
+7374 GOTO 7390
+7380 WAIT 1
+7385 GOTO 7350
+7390 RETURN
+7395 REM SPACE 押下検出(エッジ検出)
 7400 LET SP=0
-7410 LET Q=0
-7420 OUT 17,128
-7430 LET R=INP(16)
-7440 IF R=239 THEN 7460
-7450 GOTO 7480
-7460 LET Q=1
-7480 IF Q=0 THEN 7540
-7490 IF SPH=0 THEN 7510
-7500 RETURN
-7510 LET SPH=1
-7520 LET SPC=1
-7530 RETURN
-7540 IF SPH=0 THEN 7590
-7550 LET SPH=0
-7560 IF SPC=0 THEN 7590
-7570 LET SP=1
-7580 LET SPC=0
-7590 RETURN
+7410 OUT 17,128
+7420 LET R=INP(16)
+7430 IF R=239 THEN 7480
+7432 IF R=235 THEN 7480
+7440 IF SPH=0 THEN 7490
+7450 LET SP=1
+7460 LET SPH=0
+7470 RETURN
+7480 LET SPH=1
+7490 RETURN
+7590 REM 点滅 ON 表示: PUSH SPACE KEY !
 7600 LOCATE 4,3
 7610 OUT 90,80
 7620 OUT 90,85
@@ -458,6 +524,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 7750 OUT 90,32
 7760 OUT 90,33
 7770 RETURN
+7790 REM 点滅 OFF 表示
 7800 LOCATE 4,3
 7810 OUT 90,32
 7820 OUT 90,32
@@ -476,58 +543,16 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V3
 7950 OUT 90,32
 7960 OUT 90,32
 7970 RETURN
-9500 CLS
-9510 LOCATE 0,0
-9520 PRINT "     MASE 4X4 GAME !"
-9530 LOCATE 0,1
-9540 PRINT "&=YOU #=WALL Key Goal"
-9550 LOCATE 0,2
-9560 PRINT "USE: WASD OR ARROWS"
-9570 LET SPH=0
-9580 LET SPC=0
-9590 LET BL=1
-9600 LET CT=0
-9610 GOSUB 7600
-9620 GOSUB 7400
-9630 IF SP=1 THEN 9810
-9640 LET CT=CT+1
-9650 IF CT<16 THEN 9760
-9660 LET CT=0
-9670 IF BL=0 THEN 9730
-9680 LET BL=0
-9690 GOSUB 7800
-9700 GOTO 9760
-9730 LET BL=1
-9740 GOSUB 7600
-9760 WAIT 3
-9770 GOTO 9620
-9810 RETURN
+8990 REM クリア画面
 9000 CLS
 9010 LOCATE 0,0
 9020 PRINT "ALL STAGE CLEAR!"
 9030 LOCATE 0,1
 9040 PRINT "FINAL SCORE:";S
 9050 LOCATE 0,2
-9060 PRINT " "
-9070 LET SPH=0
-9080 LET SPC=0
-9090 LET BL=1
-9100 LET CT=0
-9110 GOSUB 7600
-9120 GOSUB 7400
-9130 IF SP=1 THEN 9210
-9140 LET CT=CT+1
-9150 IF CT<16 THEN 9190
-9160 LET CT=0
-9170 IF BL=0 THEN 9240
-9180 LET BL=0
-9185 GOSUB 7800
-9190 WAIT 3
-9200 GOTO 9120
-9210 END
-9240 LET BL=1
-9250 GOSUB 7600
-9260 GOTO 9190`;
+9060 PRINT "Press SPACE to END"
+9070 GOSUB 7100
+9080 END`;
 const ASM_SAMPLE = `ORG 0x0200
 ENTRY START
 
@@ -732,6 +757,8 @@ SHIFT_TABLE:
   DB 0x00,0x00,0x0D,0x08,0x20,0x00,0x00,0x00`;
 let basicRunInFlight = false;
 let basicRunToken = 0;
+let z80RunAwaitingCompletion = false;
+let z80RunHasEnteredUserProgram = false;
 let asmRunInFlight = false;
 let asmRunToken = 0;
 let asmBuildCache: AsmBuildCache | undefined;
@@ -741,6 +768,14 @@ const compatRouteStats: CompatRouteStats = {
   runProgramCalls: 0,
   rejectedCalls: 0
 };
+const firmwareRouteStats: FirmwareRouteStats = {
+  bridgeRuns: 0,
+  bridgeBytes: 0,
+  bridgeErrors: 0,
+  runtimeBridgeRuns: 0,
+  z80InterpreterRuns: 0
+};
+const z80ProgramStore = new Map<number, string>();
 
 function waitForAnimationFrame(): Promise<void> {
   return new Promise((resolve) => {
@@ -798,6 +833,12 @@ function setAsmRunInFlight(inFlight: boolean): void {
   asmAssembleButton.disabled = inFlight;
 }
 
+function clearZ80RunTracking(): void {
+  z80RunAwaitingCompletion = false;
+  z80RunHasEnteredUserProgram = false;
+  machine.setImmediateInputToRuntimeEnabled(true);
+}
+
 function normalizeProgramSource(source: string): string[] {
   return source
     .replace(/\r\n?/g, '\n')
@@ -824,6 +865,9 @@ function resolveKeyboardCode(event: KeyboardEvent): string | undefined {
   if (!key) {
     return undefined;
   }
+  if (key === ' ' || key === 'Spacebar' || key.toLowerCase() === 'space') {
+    return 'Space';
+  }
   const lower = key.toLowerCase();
   if (lower === 'w') {
     return 'KeyW';
@@ -837,16 +881,16 @@ function resolveKeyboardCode(event: KeyboardEvent): string | undefined {
   if (lower === 'd') {
     return 'KeyD';
   }
-  if (key === 'ArrowUp') {
+  if (key === 'ArrowUp' || key === 'Up') {
     return 'ArrowUp';
   }
-  if (key === 'ArrowDown') {
+  if (key === 'ArrowDown' || key === 'Down') {
     return 'ArrowDown';
   }
-  if (key === 'ArrowLeft') {
+  if (key === 'ArrowLeft' || key === 'Left') {
     return 'ArrowLeft';
   }
-  if (key === 'ArrowRight') {
+  if (key === 'ArrowRight' || key === 'Right') {
     return 'ArrowRight';
   }
   return undefined;
@@ -878,18 +922,95 @@ function runCompatStoredProgram(): void {
   machine.runtime.runProgram(10_000, true, undefined, true);
 }
 
-function sendLineViaFirmwareConsole(line: string): void {
+function encodeFirmwareConsoleLine(line: string): number[] {
+  const bytes: number[] = [];
   for (const ch of line) {
-    machine.runtime.receiveChar(ch.charCodeAt(0) & 0xff);
+    bytes.push(ch.charCodeAt(0) & 0xff);
   }
-  machine.runtime.receiveChar(0x0d);
+  bytes.push(FIRMWARE_LINE_END);
+  return bytes;
+}
+
+function extractProgramLineNumber(line: string): number | undefined {
+  const match = line.match(PROGRAM_LINE_NUMBER);
+  if (!match) {
+    return undefined;
+  }
+  const value = Number.parseInt(match[1] ?? '', 10);
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+function parseProgramLine(line: string): { number: number; body: string } | undefined {
+  const match = line.match(PROGRAM_LINE_WITH_BODY);
+  if (!match) {
+    return undefined;
+  }
+  const number = Number.parseInt(match[1] ?? '', 10);
+  if (!Number.isFinite(number)) {
+    return undefined;
+  }
+  const body = (match[2] ?? '').trim();
+  return { number, body };
+}
+
+function getStoredZ80ProgramLines(): string[] {
+  return [...z80ProgramStore.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, line]) => line);
+}
+
+const Z80_BASIC_INTERPRETER_DEFAULT_SLICE_TSTATES = 12_000_000;
+const Z80_BASIC_INTERPRETER_RUN_SLICE_TSTATES = 2_000_000;
+
+function runZ80BasicInterpreter(lines: readonly string[], options?: { maxTStates?: number }): void {
+  const bytes: number[] = [];
+  for (const line of lines) {
+    bytes.push(...encodeFirmwareConsoleLine(line));
+  }
+  firmwareRouteStats.bridgeRuns += 1;
+  firmwareRouteStats.z80InterpreterRuns += 1;
+  firmwareRouteStats.bridgeBytes += bytes.length;
+  machine.runBasicInterpreter(bytes, {
+    appendEot: true,
+    maxTStates: Math.max(4_096, Math.trunc(options?.maxTStates ?? Z80_BASIC_INTERPRETER_DEFAULT_SLICE_TSTATES))
+  });
 }
 
 function injectBasicLine(line: string, options?: { discardOutput?: boolean }): void {
   if (machine.getExecutionBackend() === 'ts-compat') {
     executeCompatImmediateLine(line);
   } else {
-    sendLineViaFirmwareConsole(line);
+    try {
+      const trimmed = line.trim();
+      const upper = trimmed.toUpperCase();
+      const number = extractProgramLineNumber(trimmed);
+      const parsed = parseProgramLine(trimmed);
+      if (number !== undefined && parsed) {
+        if (parsed.body.length === 0) {
+          z80ProgramStore.delete(parsed.number);
+        } else {
+          z80ProgramStore.set(parsed.number, trimmed);
+        }
+        runZ80BasicInterpreter([trimmed]);
+      } else if (upper === 'NEW') {
+        z80ProgramStore.clear();
+        runZ80BasicInterpreter(['NEW']);
+      } else if (upper === 'LIST') {
+        runZ80BasicInterpreter([...getStoredZ80ProgramLines(), 'LIST']);
+      } else if (upper === 'RUN') {
+        runZ80BasicInterpreter(['NEW', ...getStoredZ80ProgramLines(), 'RUN'], {
+          maxTStates: Z80_BASIC_INTERPRETER_RUN_SLICE_TSTATES
+        });
+      } else {
+        runZ80BasicInterpreter([trimmed]);
+      }
+    } catch (error) {
+      firmwareRouteStats.bridgeErrors += 1;
+      throw error;
+    }
   }
   if (options?.discardOutput) {
     drainRuntimeOutputQueue();
@@ -908,6 +1029,8 @@ async function runBasicProgram(
 
   setBasicRunInFlight(true);
   const runToken = ++basicRunToken;
+  const isCancelled = (): boolean => basicRunToken !== runToken;
+  clearZ80RunTracking();
   setProgramRunStatus('running', 'Running');
   appendLog('BASIC RUN start');
 
@@ -919,24 +1042,94 @@ async function runBasicProgram(
     const resetProgram = options.resetProgram !== false;
     const lines = normalizeProgramSource(source);
 
-    if (resetProgram) {
-      injectBasicLine('NEW', { discardOutput: true });
-    }
-    for (const line of lines) {
-      injectBasicLine(line, { discardOutput: true });
-    }
     if (machine.getExecutionBackend() === 'ts-compat') {
+      if (resetProgram) {
+        injectBasicLine('NEW', { discardOutput: true });
+      }
+      for (const line of lines) {
+        injectBasicLine(line, { discardOutput: true });
+      }
       runCompatStoredProgram();
     } else {
-      injectBasicLine('RUN');
+      try {
+        // STOP直後の再RUNでは前回の入力キュー/実行文脈を捨ててから開始する。
+        machine.clearFirmwareInput();
+        machine.setExecutionDomain('firmware');
+        // Z80 BASIC 実行中は monitor 行エディタへの即時文字注入を止める。
+        machine.setImmediateInputToRuntimeEnabled(false);
+
+        if (resetProgram) {
+          z80ProgramStore.clear();
+        }
+        const hasLabelDeclaration = lines.some((line) => LABEL_DECL_LINE.test(line.trim()));
+        if (hasLabelDeclaration) {
+          // ラベル宣言行を含む場合は入力順序が意味を持つため、
+          // 行番号ストアへ再構成せず、ソース順のままZ80へ投入する。
+          const orderedScriptLines = lines.map((line) => line.trim()).filter((line) => line.length > 0);
+          const script = [...(resetProgram ? ['NEW'] : []), ...orderedScriptLines, 'RUN'];
+          runZ80BasicInterpreter(script, {
+            maxTStates: Z80_BASIC_INTERPRETER_RUN_SLICE_TSTATES
+          });
+          z80RunAwaitingCompletion = true;
+          z80RunHasEnteredUserProgram = false;
+          setProgramRunStatus('running', 'Running');
+          appendLog('BASIC RUN running');
+          return { ok: true };
+        }
+        const passthroughImmediate: string[] = [];
+        for (const line of lines) {
+          const parsed = parseProgramLine(line);
+          if (!parsed) {
+            const immediate = line.trim();
+            if (immediate.length > 0) {
+              passthroughImmediate.push(immediate);
+            }
+            continue;
+          }
+          if (parsed.body.length === 0) {
+            z80ProgramStore.delete(parsed.number);
+          } else {
+            z80ProgramStore.set(parsed.number, line.trim());
+          }
+        }
+        const script = [...(resetProgram ? ['NEW'] : []), ...getStoredZ80ProgramLines(), ...passthroughImmediate, 'RUN'];
+        runZ80BasicInterpreter(script, {
+          maxTStates: Z80_BASIC_INTERPRETER_RUN_SLICE_TSTATES
+        });
+        z80RunAwaitingCompletion = true;
+        // user-program へ実際に遷移したことを frame 側で観測してから完了判定する。
+        z80RunHasEnteredUserProgram = false;
+      } catch (error) {
+        clearZ80RunTracking();
+        firmwareRouteStats.bridgeErrors += 1;
+        throw error;
+      }
     }
+    if (isCancelled()) {
+      clearZ80RunTracking();
+      setProgramRunStatus('idle', 'Stopped');
+      appendLog('BASIC RUN stopped');
+      return { ok: false, errorLine: 'STOPPED' };
+    }
+
     machine.tick(40_000);
     renderLcd();
+
+    // Z80ファーム経路は frame ループ側で継続実行し、
+    // 復帰判定も frame 側で行う。
+    if (machine.getExecutionBackend() === 'z80-firmware') {
+      setProgramRunStatus('running', 'Running');
+      appendLog('BASIC RUN running');
+      return { ok: true };
+    }
+
+    clearZ80RunTracking();
 
     const timeoutMs = 20_000;
     const start = performance.now();
     while (machine.isRuntimeProgramRunning()) {
-      if (basicRunToken !== runToken) {
+      if (isCancelled()) {
+        clearZ80RunTracking();
         setProgramRunStatus('idle', 'Stopped');
         appendLog('BASIC RUN stopped');
         return { ok: false, errorLine: 'STOPPED' };
@@ -953,6 +1146,13 @@ async function runBasicProgram(
       await waitForAnimationFrame();
     }
 
+    if (isCancelled()) {
+      clearZ80RunTracking();
+      setProgramRunStatus('idle', 'Stopped');
+      appendLog('BASIC RUN stopped');
+      return { ok: false, errorLine: 'STOPPED' };
+    }
+
     const runtimeError = machine.runtime.getLastProgramError();
     if (runtimeError) {
       setProgramRunStatus('failed', `Failed: ${runtimeError}`);
@@ -964,6 +1164,12 @@ async function runBasicProgram(
     appendLog('BASIC RUN ok');
     return { ok: true };
   } catch (error) {
+    clearZ80RunTracking();
+    if (isCancelled()) {
+      setProgramRunStatus('idle', 'Stopped');
+      appendLog('BASIC RUN stopped');
+      return { ok: false, errorLine: 'STOPPED' };
+    }
     const message = error instanceof Error ? error.message : 'unknown error';
     setProgramRunStatus('failed', `Failed: ${message}`);
     appendLog(`BASIC RUN exception ${message}`);
@@ -1294,6 +1500,11 @@ function setBootStatus(state: BootState, detail?: string): void {
 
 function renderLcd(): number {
   const frame = machine.getFrameBuffer();
+  const revision = machine.getFrameRevision();
+  if (revision === lastFrameRevision) {
+    return cachedLitPixels;
+  }
+
   let litPixels = 0;
 
   for (let i = 0; i < frame.length; i += 1) {
@@ -1312,6 +1523,8 @@ function renderLcd(): number {
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
 
+  lastFrameRevision = revision;
+  cachedLitPixels = litPixels;
   return litPixels;
 }
 
@@ -1339,6 +1552,10 @@ function updateDebugView(): void {
       activeRomBank: machine.getActiveRomBank(),
       activeExRomBank: machine.getActiveExRomBank(),
       activeRamBank: machine.getActiveRamBank(),
+      firmwareRouteStats: {
+        ...firmwareRouteStats,
+        ...machine.getFirmwareIoStats()
+      },
       speed: speedIndicator.textContent
     },
     null,
@@ -1459,7 +1676,10 @@ function verifyHealth(elapsedMs: number, litPixels: number): void {
 
   // BASIC実行中は CLS と描画更新の間で一時的に無点灯になり得るため、
   // 「無点灯=フリーズ」判定は外す。
-  if (!machine.isRuntimeProgramRunning() && litPixels <= 0 && lastLitPixels <= 0) {
+  // z80-firmware 経路では runtime.isProgramRunning() が実行状態を表さないため、
+  // executionDomain=user-program も実行中として扱う。
+  const basicProgramRunning = machine.isRuntimeProgramRunning() || machine.getExecutionDomain() === 'user-program';
+  if (!basicProgramRunning && litPixels <= 0 && lastLitPixels <= 0) {
     fail('STALLED', 'LCD has no lit pixels');
     return;
   }
@@ -1478,7 +1698,9 @@ function frame(now: number): void {
   try {
     if (running) {
       const target = (elapsedMs / 1000) * PCG815Machine.CLOCK_HZ;
-      const bounded = Math.min(target, PCG815Machine.CLOCK_HZ / 8);
+      // 点滅観測を維持しつつ、BASIC実行速度が過度に落ちないよう
+      // 1フレームあたり上限を 1/4 秒分に調整する。
+      const bounded = Math.min(target, PCG815Machine.CLOCK_HZ / 4);
       const executable = Math.floor(carryTStates + bounded);
       carryTStates = carryTStates + bounded - executable;
 
@@ -1495,6 +1717,7 @@ function frame(now: number): void {
 
     const litPixels = renderLcd();
     verifyHealth(elapsedMs, litPixels);
+    syncZ80BasicRunStatus();
     updateDebugView();
   } catch (error) {
     fail('FAILED', 'Frame exception', error);
@@ -1515,6 +1738,33 @@ function setRunningState(next: boolean): void {
   if (running && currentState !== 'READY') {
     setBootStatus('READY', `strict=${strictMode ? 1 : 0}, backend=${machine.getExecutionBackend()}`);
   }
+}
+
+function syncZ80BasicRunStatus(): void {
+  if (machine.getExecutionBackend() !== 'z80-firmware') {
+    clearZ80RunTracking();
+    return;
+  }
+  if (basicRunInFlight) {
+    return;
+  }
+  if (basicRunStatus.dataset.state !== 'running') {
+    clearZ80RunTracking();
+    return;
+  }
+  if (!z80RunAwaitingCompletion) {
+    return;
+  }
+  if (machine.getExecutionDomain() === 'user-program') {
+    z80RunHasEnteredUserProgram = true;
+    return;
+  }
+  if (!z80RunHasEnteredUserProgram) {
+    return;
+  }
+  clearZ80RunTracking();
+  setProgramRunStatus('ok', 'Run OK');
+  appendLog('BASIC RUN ok');
 }
 
 function toggleRunState(): void {
@@ -1585,6 +1835,9 @@ basicRunButton.addEventListener('click', async () => {
 
 basicStopButton.addEventListener('click', () => {
   basicRunToken += 1;
+  clearZ80RunTracking();
+  setBasicRunInFlight(false);
+  machine.setExecutionDomain('firmware');
   setRunningState(false);
   setProgramRunStatus('idle', 'Stopped');
   appendLog('CPU STOP by editor');
@@ -1706,6 +1959,8 @@ window.addEventListener('keydown', (event) => {
   if (!resolvedCode) {
     return;
   }
+  const runningUserProgram =
+    machine.getExecutionBackend() === 'z80-firmware' && machine.getExecutionDomain() === 'user-program';
   if (isTextInputTarget(event.target)) {
     return;
   }
@@ -1722,6 +1977,13 @@ window.addEventListener('keydown', (event) => {
   }
 
   machine.setKeyState(resolvedCode, true);
+  // キーマトリクスを読むポーリング系(BASICゲーム)向けに、
+  // 押下直後の最小ステップを進めて検出取りこぼしを抑える。
+  const keydownBoost =
+    runningUserProgram && resolvedCode === 'Space'
+      ? SPACE_KEYDOWN_POLL_BOOST_TSTATES
+      : KEYDOWN_POLL_BOOST_TSTATES;
+  machine.tick(keydownBoost);
   pressedCodes.add(resolvedCode);
   appendLog(`DOWN ${resolvedCode}`);
 });
@@ -1731,6 +1993,8 @@ window.addEventListener('keyup', (event) => {
   if (!resolvedCode) {
     return;
   }
+  const runningUserProgram =
+    machine.getExecutionBackend() === 'z80-firmware' && machine.getExecutionDomain() === 'user-program';
   if (isTextInputTarget(event.target)) {
     return;
   }
@@ -1740,12 +2004,15 @@ window.addEventListener('keyup', (event) => {
   if (pendingTimer !== undefined) {
     window.clearTimeout(pendingTimer);
   }
+  const releaseDelayMs = KEY_RELEASE_LATCH_MS;
   const timerId = window.setTimeout(() => {
     machine.setKeyState(resolvedCode, false);
+    // 離上エッジ依存の判定を取りこぼさないよう解放側でも短く進める。
+    machine.tick(256);
     pressedCodes.delete(resolvedCode);
     pendingKeyRelease.delete(resolvedCode);
     appendLog(`UP   ${resolvedCode}`);
-  }, KEY_RELEASE_LATCH_MS);
+  }, releaseDelayMs);
   pendingKeyRelease.set(resolvedCode, timerId);
 });
 
@@ -1791,12 +2058,22 @@ window.__pcg815 = {
   getKanaMode: () => machine.getKanaMode(),
   drainAsciiFifo: () => machine.drainAsciiQueue(),
   getCompatRouteStats: () => ({ ...compatRouteStats }),
+  getFirmwareRouteStats: () => ({
+    ...firmwareRouteStats,
+    ...machine.getFirmwareIoStats()
+  }),
+  getBasicEngineStatus: () => machine.getBasicEngineStatus(),
   tapKey: (code: string) => {
+    const pressTicks = 220_000;
+    const releaseTicks = 260_000;
     machine.setImmediateInputToRuntimeEnabled(false);
+    // サンプルゲーム互換: キーマトリクスの行7(0x80)を明示選択してから入力を流す。
+    machine.out8(0x11, 0x80);
+    machine.out8(0x17, 0x80);
     machine.setKeyState(code, true);
-    machine.tick(64);
+    machine.tick(pressTicks);
     machine.setKeyState(code, false);
-    machine.tick(256);
+    machine.tick(releaseTicks);
     machine.setImmediateInputToRuntimeEnabled(true);
   },
   assembleAsm: (source: string) => {

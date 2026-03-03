@@ -201,6 +201,64 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
     )
     .toEqual({ executeLineCalls: 0, runProgramCalls: 0, rejectedCalls: 0 });
 
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as {
+            __pcg815?: {
+              getFirmwareRouteStats: () => {
+                bridgeRuns: number;
+                bridgeBytes: number;
+                bridgeErrors: number;
+                z80InterpreterRuns: number;
+                consumedBytes: number;
+              };
+            };
+          };
+          const stats = api.__pcg815?.getFirmwareRouteStats();
+          if (!stats) {
+            return false;
+          }
+            return (
+              stats.bridgeRuns > 0 &&
+              stats.bridgeBytes > 0 &&
+              stats.bridgeErrors === 0 &&
+              stats.z80InterpreterRuns > 0 &&
+              stats.consumedBytes > 0
+            );
+        }),
+      { timeout: 3_000, intervals: [100, 250, 500] }
+    )
+    .toBe(true);
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as {
+            __pcg815?: {
+              getBasicEngineStatus: () => {
+                entry: number;
+                romBank: number;
+                activeRomBank: number;
+                basicRamStart: number;
+                basicRamEnd: number;
+              };
+            };
+          };
+          return api.__pcg815?.getBasicEngineStatus();
+        }),
+      { timeout: 3_000, intervals: [100, 250, 500] }
+    )
+    .toMatchObject({
+      entry: 0xc000,
+      romBank: 0x0f,
+      activeRomBank: 0x0f,
+      basicRamStart: 0x4000,
+      basicRamEnd: 0x6fff
+    });
+
   const speedText = await page.locator('#speed-indicator').innerText();
   expect(speedText.toLowerCase()).toContain('x');
 
@@ -270,6 +328,74 @@ test('ts-compat backend uses compatibility direct route', async ({ page }) => {
       { timeout: 3_000, intervals: [100, 250, 500] }
     )
     .toEqual({ executeLineCalls: 3, runProgramCalls: 1, rejectedCalls: 0 });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as {
+            __pcg815?: {
+              getFirmwareRouteStats: () => { bridgeRuns: number; bridgeBytes: number };
+            };
+          };
+          const stats = api.__pcg815?.getFirmwareRouteStats();
+          if (!stats) {
+            return false;
+          }
+          return stats.bridgeRuns === 0 && stats.bridgeBytes === 0;
+        }),
+      { timeout: 3_000, intervals: [100, 250, 500] }
+    )
+    .toBe(true);
+});
+
+test('z80-firmware injectBasicLine LIST route uses firmware bridge', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.evaluate(() => {
+    const api = window as {
+      __pcg815?: {
+        injectBasicLine: (line: string) => void;
+      };
+    };
+    api.__pcg815?.injectBasicLine('10 PRINT 555');
+    api.__pcg815?.injectBasicLine('LIST');
+  });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('10 PRINT 555');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as {
+            __pcg815?: {
+              getFirmwareRouteStats: () => {
+                bridgeRuns: number;
+                z80InterpreterRuns: number;
+                consumedBytes: number;
+              };
+            };
+          };
+          const stats = api.__pcg815?.getFirmwareRouteStats();
+          if (!stats) {
+            return false;
+          }
+          return stats.bridgeRuns >= 2 && stats.z80InterpreterRuns >= 2 && stats.consumedBytes > 0;
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toBe(true);
 });
 
 test('basic editor handles syntax error and reset rerun flow', async ({ page }) => {
@@ -313,18 +439,92 @@ test('sample game button loads maze code and starts running', async ({ page }) =
   await expect(page.locator('#basic-editor')).toHaveValue(/ALL STAGE CLEAR!/);
 
   await page.getByRole('button', { name: 'RUN Program' }).click();
-  await expect(page.locator('#basic-run-status')).toContainText(/Running|Run OK/i, { timeout: 5_000 });
+  await expect(page.locator('#basic-run-status')).toContainText(/Running/i, { timeout: 5_000 });
+  await page.waitForTimeout(3_000);
+  await expect(page.locator('#basic-run-status')).toContainText(/Running/i);
   await expect(page.locator('#basic-run-status')).not.toContainText(/Failed:/i);
 });
 
-test('sample game proceeds from PUSH SPACE KEY after pressing Space', async ({ page }) => {
+test('sample game accepts Space input on PUSH SPACE KEY screen', async ({ page }) => {
+  test.setTimeout(120_000);
   await page.goto('/');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
 
   await page.getByRole('button', { name: 'Sample Game' }).click();
   await page.getByRole('button', { name: 'RUN Program' }).click();
-  await expect(page.locator('#basic-run-status')).toContainText(/Running|Run OK/i, { timeout: 5_000 });
+  await expect(page.locator('#basic-run-status')).toContainText(/Running/i, { timeout: 5_000 });
 
+  const samples: Array<{ line0: string; line1: string; line2: string; line3: string; status: string; domain: string; speed: string }> = [];
+  for (let i = 0; i < 24; i += 1) {
+    await page.waitForTimeout(150);
+    const snapshot = await page.evaluate(() => {
+      const api = window as {
+        __pcg815?: {
+          getTextLines: () => string[];
+          getBasicEngineStatus?: () => { executionDomain?: string };
+        };
+      };
+      const lines = api.__pcg815?.getTextLines() ?? [];
+      const status = document.querySelector('#basic-run-status')?.textContent ?? '';
+      const domain = api.__pcg815?.getBasicEngineStatus?.().executionDomain ?? '';
+      const speed = document.querySelector('#speed-indicator')?.textContent ?? '';
+      return {
+        line0: lines[0] ?? '',
+        line1: lines[1] ?? '',
+        line2: lines[2] ?? '',
+        line3: lines[3] ?? '',
+        status,
+        domain,
+        speed
+      };
+    });
+    samples.push(snapshot);
+  }
+  expect(samples.some((entry) => entry.line0.includes('MASE 4X4 GAME !')), JSON.stringify(samples.slice(0, 8))).toBe(true);
+  expect(samples.some((entry) => entry.line2.includes('USE: WASD OR ARROWS')), JSON.stringify(samples.slice(0, 8))).toBe(true);
+  expect(samples.every((entry) => /Running/i.test(entry.status))).toBe(true);
+  expect(samples.every((entry) => entry.domain === 'user-program')).toBe(true);
+  expect(samples.some((entry) => Number.parseFloat(entry.speed) > 0.05)).toBe(true);
+
+  await page.locator('#lcd').click();
+  await page.keyboard.press('KeyA');
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 3_000, intervals: [100, 250, 500] }
+    )
+    .not.toContain('> A');
+
+  await page.locator('#lcd').click();
+  await page.keyboard.press('Space');
+
+  await expect(page.locator('#basic-run-status')).not.toContainText(/Failed:/i);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 8_000, intervals: [100, 250, 500] }
+    )
+    .toContain('Stage:');
+  await page.locator('#lcd').click();
+  await page.keyboard.press('Enter');
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
+      { timeout: 2_000, intervals: [100, 200, 300] }
+    )
+    .toContain('Reach @ to (4,4)');
   await expect
     .poll(
       async () =>
@@ -346,9 +546,19 @@ test('sample game proceeds from PUSH SPACE KEY after pressing Space', async ({ p
           const api = window as { __pcg815?: { getTextLines: () => string[] } };
           return (api.__pcg815?.getTextLines() ?? []).join('\n');
         }),
+      { timeout: 8_000, intervals: [100, 250, 500] }
+    )
+    .toContain('@');
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { getTextLines: () => string[] } };
+          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+        }),
       { timeout: 5_000, intervals: [100, 250, 500] }
     )
-    .toContain('Stage:');
+    .not.toContain('PUSH SPACE KEY !');
 });
 
 test('basic editor can rerun after STOP CPU with WAIT program', async ({ page }) => {
