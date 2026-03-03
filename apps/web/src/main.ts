@@ -1596,7 +1596,10 @@ function verifyHealth(elapsedMs: number, litPixels: number): void {
 
   // BASIC実行中は CLS と描画更新の間で一時的に無点灯になり得るため、
   // 「無点灯=フリーズ」判定は外す。
-  if (!machine.isRuntimeProgramRunning() && litPixels <= 0 && lastLitPixels <= 0) {
+  // z80-firmware 経路では runtime.isProgramRunning() が実行状態を表さないため、
+  // executionDomain=user-program も実行中として扱う。
+  const basicProgramRunning = machine.isRuntimeProgramRunning() || machine.getExecutionDomain() === 'user-program';
+  if (!basicProgramRunning && litPixels <= 0 && lastLitPixels <= 0) {
     fail('STALLED', 'LCD has no lit pixels');
     return;
   }
