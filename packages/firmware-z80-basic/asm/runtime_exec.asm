@@ -50,6 +50,10 @@ INIT_INTERPRETER:
   LD (RAM_REPEAT_FLAG),A
   LD (RAM_DATA_COUNT),A
   LD (RAM_DATA_INDEX),A
+  LD A,0x2B
+  LD (RAM_RND_SEED_LO),A
+  LD A,0x4D
+  LD (RAM_RND_SEED_HI),A
   RET
 
 ; ----------------------------------------------------------------------------
@@ -1692,6 +1696,14 @@ EXEC_CMD_ON_SET_JUMP:
 
 EXEC_CMD_RANDOMIZE:
   CALL ASSERT_END_AFTER_CMD
+  LD A,(RAM_LAST_ERROR)
+  OR A
+  RET NZ
+  CALL RND_NEXT_HL
+  LD A,L
+  LD (RAM_RND_SEED_LO),A
+  LD A,H
+  LD (RAM_RND_SEED_HI),A
   RET
 
 EXEC_CMD_RENUM:

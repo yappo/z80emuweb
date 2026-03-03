@@ -129,7 +129,7 @@ PARSE_FACTOR:
   LD A,(HL)
   CALL TO_UPPER
   CP 'I'
-  JP NZ,PARSE_FACTOR_PEEK_CHECK
+  JP NZ,PARSE_FACTOR_RND_CHECK
   INC HL
   LD A,(HL)
   CALL TO_UPPER
@@ -162,6 +162,109 @@ PARSE_FACTOR_INP_DONE:
   CALL READ_PORT_LITERAL_A
   LD L,A
   LD H,0
+  RET
+
+PARSE_FACTOR_RND_CHECK:
+  LD A,(HL)
+  CALL TO_UPPER
+  CP 'R'
+  JP NZ,PARSE_FACTOR_PEEK_CHECK
+  INC HL
+  LD A,(HL)
+  CALL TO_UPPER
+  CP 'N'
+  JP NZ,PARSE_FACTOR_VARIABLE
+  INC HL
+  LD A,(HL)
+  CALL TO_UPPER
+  CP 'D'
+  JP NZ,PARSE_FACTOR_VARIABLE
+  INC HL
+  LD A,(HL)
+  CALL IS_ALNUM
+  JP C,PARSE_FACTOR_VARIABLE
+  CP '$'
+  JP Z,PARSE_FACTOR_VARIABLE
+
+  CALL EXPR_SET_PTR_HL
+  CALL EXPR_SKIP_SPACES
+  CALL EXPR_GET_PTR_HL
+  LD A,(HL)
+  CP '('
+  JR Z,PARSE_FACTOR_RND_PAREN
+  OR A
+  JP Z,SET_SYNTAX_ERROR
+  CP ','
+  JP Z,SET_SYNTAX_ERROR
+  CP ';'
+  JP Z,SET_SYNTAX_ERROR
+  CP ')'
+  JP Z,SET_SYNTAX_ERROR
+  CALL EXPR_SET_PTR_HL
+  CALL EVAL_EXPRESSION
+  LD D,H
+  LD E,L
+  JR PARSE_FACTOR_RND_VALUE
+
+PARSE_FACTOR_RND_PAREN:
+  INC HL
+  CALL EXPR_SET_PTR_HL
+  CALL EVAL_EXPRESSION
+  PUSH HL
+  CALL EXPR_SKIP_SPACES
+  CALL EXPR_GET_PTR_HL
+  LD A,(HL)
+  CP ')'
+  JR Z,PARSE_FACTOR_RND_HAVE_CLOSE
+  POP HL
+  JP SET_SYNTAX_ERROR
+PARSE_FACTOR_RND_HAVE_CLOSE:
+  INC HL
+  CALL EXPR_SET_PTR_HL
+  POP DE
+
+PARSE_FACTOR_RND_VALUE:
+  LD A,D
+  AND 0x80
+  JR Z,PARSE_FACTOR_RND_NON_NEG
+  ; 式<0: 再現可能な系列になるよう seed を初期化
+  LD A,D
+  CPL
+  LD D,A
+  LD A,E
+  CPL
+  LD E,A
+  INC DE
+  LD A,D
+  OR E
+  JR NZ,PARSE_FACTOR_RND_SEED_SET
+  LD DE,1
+PARSE_FACTOR_RND_SEED_SET:
+  LD A,E
+  LD (RAM_RND_SEED_LO),A
+  LD A,D
+  LD (RAM_RND_SEED_HI),A
+  LD HL,0
+  RET
+
+PARSE_FACTOR_RND_NON_NEG:
+  ; 0<=式<2: 1未満乱数（整数系実装では 0 を返す）
+  LD A,D
+  OR A
+  JR NZ,PARSE_FACTOR_RND_RANGE
+  LD A,E
+  CP 2
+  JR NC,PARSE_FACTOR_RND_RANGE
+  CALL RND_NEXT_HL
+  LD HL,0
+  RET
+
+PARSE_FACTOR_RND_RANGE:
+  PUSH DE
+  CALL RND_NEXT_HL
+  POP DE
+  CALL MOD_HL_DE
+  INC HL
   RET
 
 PARSE_FACTOR_PEEK_CHECK:
@@ -316,6 +419,63 @@ PARSE_NUMBER_DONE:
   CALL EXPR_SET_PTR_HL
   LD H,D
   LD L,E
+  RET
+
+; ----------------------------------------------------------------------------
+; ルーチン: RND_NEXT_HL
+; 役割: 16-bit LCG で次乱数を生成し、seedとHLへ格納する。
+; ----------------------------------------------------------------------------
+RND_NEXT_HL:
+  LD A,(RAM_RND_SEED_LO)
+  LD L,A
+  LD A,(RAM_RND_SEED_HI)
+  LD H,A
+  LD A,H
+  OR L
+  JR NZ,RND_NEXT_HAVE_SEED
+  LD HL,1
+RND_NEXT_HAVE_SEED:
+  PUSH HL
+  ADD HL,HL
+  ADD HL,HL
+  POP DE
+  ADD HL,DE
+  INC HL
+  LD A,L
+  LD (RAM_RND_SEED_LO),A
+  LD A,H
+  LD (RAM_RND_SEED_HI),A
+  RET
+
+; ----------------------------------------------------------------------------
+; ルーチン: MOD_HL_DE
+; 役割: HL = HL mod DE (DE!=0 前提)
+; ----------------------------------------------------------------------------
+MOD_HL_DE:
+MOD_HL_DE_LOOP:
+  CALL CMP_HL_DE_UNSIGNED
+  RET C
+  AND A
+  SBC HL,DE
+  JR MOD_HL_DE_LOOP
+
+; ----------------------------------------------------------------------------
+; ルーチン: CMP_HL_DE_UNSIGNED
+; 役割: HL と DE を符号なし比較し、HL<DEなら Carry=1
+; ----------------------------------------------------------------------------
+CMP_HL_DE_UNSIGNED:
+  LD A,H
+  CP D
+  JR C,CMP_HL_DE_LT
+  JR NZ,CMP_HL_DE_GE
+  LD A,L
+  CP E
+  JR C,CMP_HL_DE_LT
+CMP_HL_DE_GE:
+  AND A
+  RET
+CMP_HL_DE_LT:
+  SCF
   RET
 
 ; ----------------------------------------------------------------------------
