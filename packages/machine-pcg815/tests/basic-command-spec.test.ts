@@ -335,12 +335,19 @@ const SCENARIOS: Partial<Record<CommandName, CommandScenario>> = {
     negativeCheck: expectAnyError
   },
   IF: {
-    positiveLines: ['10 LET A=1', '20 IF A=1 THEN 40', '30 PRINT 0', '40 PRINT 7', 'RUN'],
+    positiveLines: [
+      '10 LET A=1',
+      '20 IF A=1 PRINT "A is 1"',
+      '30 IF A=2 PRINT "NG"',
+      '40 IF A=2 PRINT "X" ELSE PRINT "ELSE"',
+      'RUN'
+    ],
     negativeLines: ['10 IF A THEN X', 'RUN'],
     positiveCheck: ({ error, screen }) => {
       expect(error).toBeNull();
-      expect(screen).toContain('7');
-      expect(screen).not.toContain('0\n');
+      expect(screen).toContain('A is 1');
+      expect(screen).toContain('ELSE');
+      expect(screen).not.toContain('NG');
     },
     negativeCheck: expectAnyError
   },
