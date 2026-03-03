@@ -14,6 +14,8 @@
 ; ----------------------------------------------------------------------------
 CLEAR_PROGRAM:
   CALL INVALIDATE_FIND_LINE_CACHE
+  XOR A
+  LD (RAM_LABEL_CACHE_VALID),A
   LD A,0x00
   LD (RAM_PROG_PTR_LO),A
   LD A,0x40
@@ -93,6 +95,8 @@ APPEND_COPY_DONE:
   LD A,D
   LD (RAM_PROG_PTR_HI),A
   CALL INVALIDATE_FIND_LINE_CACHE
+  XOR A
+  LD (RAM_LABEL_CACHE_VALID),A
   RET
 
 INVALIDATE_FIND_LINE_CACHE:

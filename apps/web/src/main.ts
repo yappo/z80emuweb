@@ -83,6 +83,7 @@ const executionBackend = query.get('backend') === 'ts-compat' ? 'ts-compat' : 'z
 const FIRMWARE_LINE_END = 0x0d;
 const PROGRAM_LINE_NUMBER = /^\s*(\d+)\b/;
 const PROGRAM_LINE_WITH_BODY = /^\s*(\d+)(?:\s+(.*))?$/;
+const LABEL_DECL_LINE = /^\s*\*[A-Za-z0-9_]+:/;
 
 function mustQuery<T extends Element>(selector: string): T {
   const el = document.querySelector<T>(selector);
@@ -1059,6 +1060,21 @@ async function runBasicProgram(
 
         if (resetProgram) {
           z80ProgramStore.clear();
+        }
+        const hasLabelDeclaration = lines.some((line) => LABEL_DECL_LINE.test(line.trim()));
+        if (hasLabelDeclaration) {
+          // ラベル宣言行を含む場合は入力順序が意味を持つため、
+          // 行番号ストアへ再構成せず、ソース順のままZ80へ投入する。
+          const orderedScriptLines = lines.map((line) => line.trim()).filter((line) => line.length > 0);
+          const script = [...(resetProgram ? ['NEW'] : []), ...orderedScriptLines, 'RUN'];
+          runZ80BasicInterpreter(script, {
+            maxTStates: Z80_BASIC_INTERPRETER_RUN_SLICE_TSTATES
+          });
+          z80RunAwaitingCompletion = true;
+          z80RunHasEnteredUserProgram = false;
+          setProgramRunStatus('running', 'Running');
+          appendLog('BASIC RUN running');
+          return { ok: true };
         }
         const passthroughImmediate: string[] = [];
         for (const line of lines) {
