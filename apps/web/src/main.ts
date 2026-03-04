@@ -67,6 +67,8 @@ declare global {
       getCompatRouteStats: () => CompatRouteStats;
       getFirmwareRouteStats: () => FirmwareRouteStats & ReturnType<PCG815Machine['getFirmwareIoStats']>;
       getBasicEngineStatus: () => ReturnType<PCG815Machine['getBasicEngineStatus']>;
+      getCpuPinsOut: () => ReturnType<PCG815Machine['getCpuPinsOut']>;
+      getCpuPinsIn: () => ReturnType<PCG815Machine['getCpuPinsIn']>;
       tapKey: (code: string) => void;
       assembleAsm: (source: string) => { ok: boolean; errorLine?: string; dump: string };
       runAsm: (source: string) => Promise<RunAsmProgramResult>;
@@ -77,7 +79,6 @@ declare global {
 
 const SCALE = 4;
 const query = new URLSearchParams(window.location.search);
-const debugMode = query.get('debug') === '1';
 const strictMode = query.get('strict') === '1';
 const executionBackend = query.get('backend') === 'ts-compat' ? 'ts-compat' : 'z80-firmware';
 const FIRMWARE_LINE_END = 0x0d;
@@ -111,7 +112,14 @@ const kanaToggleButton = mustQuery<HTMLButtonElement>('#kana-toggle');
 const fontDebugToggleButton = mustQuery<HTMLButtonElement>('#font-debug-toggle');
 const speedIndicator = mustQuery<HTMLElement>('#speed-indicator');
 const bootStatus = mustQuery<HTMLElement>('#boot-status');
-const debugView = mustQuery<HTMLElement>('#debug-view');
+const monitorSummary = mustQuery<HTMLElement>('#monitor-summary');
+const monitorRegisterMain = mustQuery<HTMLElement>('#monitor-register-main');
+const monitorRegisterShadow = mustQuery<HTMLElement>('#monitor-register-shadow');
+const monitorAddressHex = mustQuery<HTMLElement>('#monitor-address-hex');
+const monitorAddressBits = mustQuery<HTMLElement>('#monitor-address-bits');
+const monitorDataHex = mustQuery<HTMLElement>('#monitor-data-hex');
+const monitorDataBits = mustQuery<HTMLElement>('#monitor-data-bits');
+const monitorPinGrid = mustQuery<HTMLElement>('#monitor-pin-grid');
 const logView = mustQuery<HTMLElement>('#log-view');
 const keyMapList = mustQuery<HTMLElement>('#keymap-list');
 const editorTabBasic = mustQuery<HTMLButtonElement>('#editor-tab-basic');
@@ -763,6 +771,7 @@ let asmRunInFlight = false;
 let asmRunToken = 0;
 let asmBuildCache: AsmBuildCache | undefined;
 let currentEditorMode: EditorMode = 'basic';
+let lastMonitorRenderMs = 0;
 const compatRouteStats: CompatRouteStats = {
   executeLineCalls: 0,
   runProgramCalls: 0,
@@ -781,10 +790,6 @@ function waitForAnimationFrame(): Promise<void> {
   return new Promise((resolve) => {
     requestAnimationFrame(() => resolve());
   });
-}
-
-if (debugMode) {
-  debugView.hidden = false;
 }
 
 keyMapList.innerHTML = KEY_MAP.slice(0, 32)
@@ -1118,6 +1123,14 @@ async function runBasicProgram(
     // Z80ファーム経路は frame ループ側で継続実行し、
     // 復帰判定も frame 側で行う。
     if (machine.getExecutionBackend() === 'z80-firmware') {
+      // 短いプログラムは同一フレーム内で user-program -> firmware へ戻ることがあり、
+      // frame 側が遷移を観測できない場合があるためここで即時完了を判定する。
+      if (z80RunAwaitingCompletion && machine.getExecutionDomain() !== 'user-program') {
+        clearZ80RunTracking();
+        setProgramRunStatus('ok', 'Run OK');
+        appendLog('BASIC RUN ok');
+        return { ok: true };
+      }
       setProgramRunStatus('running', 'Running');
       appendLog('BASIC RUN running');
       return { ok: true };
@@ -1488,7 +1501,7 @@ function setFontDebugVisible(next: boolean): void {
 
 function getCpuSummary(): string {
   const state = machine.getCpuState();
-  const pc = `0x${state.registers.pc.toString(16).padStart(4, '0')}`;
+  const pc = `0x${state.registers.pc.toString(16).padStart(4, '0').toUpperCase()}`;
   return `pc=${pc} t=${state.tstates}`;
 }
 
@@ -1528,39 +1541,151 @@ function renderLcd(): number {
   return litPixels;
 }
 
-function updateDebugView(): void {
-  if (!debugMode && currentState === 'READY') {
+function toHex8(value: number): string {
+  return `0x${(value & 0xff).toString(16).padStart(2, '0').toUpperCase()}`;
+}
+
+function toHex16(value: number): string {
+  return `0x${(value & 0xffff).toString(16).padStart(4, '0').toUpperCase()}`;
+}
+
+function formatCompactTicks(value: number): string {
+  if (!Number.isFinite(value)) {
+    return 'N/A';
+  }
+  return new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    maximumFractionDigits: 2
+  }).format(value);
+}
+
+function formatFullTicks(value: number): string {
+  if (!Number.isFinite(value)) {
+    return 'N/A';
+  }
+  return new Intl.NumberFormat('en-US').format(value);
+}
+
+function renderRegisterGrid(
+  target: HTMLElement,
+  items: ReadonlyArray<{
+    name: string;
+    value: string;
+    title?: string;
+  }>
+): void {
+  target.innerHTML = items
+    .map(
+      (item) =>
+        `<div class="register-item"><span class="register-name">${item.name}</span><span class="register-value"${
+          item.title ? ` title="${item.title}"` : ''
+        }>${item.value}</span></div>`
+    )
+    .join('');
+}
+
+function renderBitGrid(target: HTMLElement, value: number, width: 8 | 16, prefix: 'A' | 'D'): void {
+  const labels: string[] = [];
+  for (let bit = width - 1; bit >= 0; bit -= 1) {
+    const on = ((value >> bit) & 0x01) !== 0;
+    labels.push(
+      `<span class="bit-chip" data-on="${on ? '1' : '0'}" title="${prefix}${bit}:${on ? '1' : '0'}">${prefix}${bit}</span>`
+    );
+  }
+  target.innerHTML = labels.join('');
+}
+
+function renderPinGrid(target: HTMLElement, items: ReadonlyArray<{ name: string; high: boolean }>): void {
+  target.innerHTML = items
+    .map(
+      (item) =>
+        `<div class="pin-item"><span class="pin-name">${item.name}</span><span class="pin-state" data-high="${item.high ? '1' : '0'}">${item.high ? 'H' : 'L'}</span></div>`
+    )
+    .join('');
+}
+
+function updateDebugView(nowMs?: number): void {
+  if (nowMs !== undefined && nowMs - lastMonitorRenderMs < 500) {
     return;
   }
+  lastMonitorRenderMs = nowMs ?? performance.now();
 
   const state = machine.getCpuState();
-  debugView.hidden = false;
-  debugView.textContent = JSON.stringify(
-    {
-      bootState: currentState,
-      strict: strictMode,
-      pc: `0x${state.registers.pc.toString(16).padStart(4, '0')}`,
-      sp: `0x${state.registers.sp.toString(16).padStart(4, '0')}`,
-      a: `0x${state.registers.a.toString(16).padStart(2, '0')}`,
-      f: `0x${state.registers.f.toString(16).padStart(2, '0')}`,
-      tstates: state.tstates,
-      halted: state.halted,
-      queueDepth: state.queueDepth,
-      kanaMode: machine.getKanaMode(),
-      executionBackend: machine.getExecutionBackend(),
-      executionDomain: machine.getExecutionDomain(),
-      activeRomBank: machine.getActiveRomBank(),
-      activeExRomBank: machine.getActiveExRomBank(),
-      activeRamBank: machine.getActiveRamBank(),
-      firmwareRouteStats: {
-        ...firmwareRouteStats,
-        ...machine.getFirmwareIoStats()
-      },
-      speed: speedIndicator.textContent
-    },
-    null,
-    2
-  );
+  const pinsOut = machine.getCpuPinsOut();
+  const pinsIn = machine.getCpuPinsIn();
+  const regs = state.registers;
+  const shadow = state.shadowRegisters;
+  const af = ((regs.a & 0xff) << 8) | (regs.f & 0xff);
+  const bc = ((regs.b & 0xff) << 8) | (regs.c & 0xff);
+  const de = ((regs.d & 0xff) << 8) | (regs.e & 0xff);
+  const hl = ((regs.h & 0xff) << 8) | (regs.l & 0xff);
+
+  renderRegisterGrid(monitorRegisterMain, [
+    { name: 'AF', value: toHex16(af) },
+    { name: 'BC', value: toHex16(bc) },
+    { name: 'DE', value: toHex16(de) },
+    { name: 'HL', value: toHex16(hl) },
+    { name: 'IX', value: toHex16(regs.ix) },
+    { name: 'IY', value: toHex16(regs.iy) },
+    { name: 'SP', value: toHex16(regs.sp) },
+    { name: 'PC', value: toHex16(regs.pc) },
+    { name: 'I', value: toHex8(regs.i) },
+    { name: 'R', value: toHex8(regs.r) },
+    { name: 'IFF1', value: state.iff1 ? '1' : '0' },
+    { name: 'IFF2', value: state.iff2 ? '1' : '0' },
+    { name: 'IM', value: `${state.im}` },
+    { name: 'HALT', value: state.halted ? '1' : '0' },
+    { name: 'T', value: formatCompactTicks(state.tstates), title: formatFullTicks(state.tstates) },
+    { name: 'Q', value: `${state.queueDepth}` }
+  ]);
+
+  if (shadow) {
+    const afp = ((shadow.a & 0xff) << 8) | (shadow.f & 0xff);
+    const bcp = ((shadow.b & 0xff) << 8) | (shadow.c & 0xff);
+    const dep = ((shadow.d & 0xff) << 8) | (shadow.e & 0xff);
+    const hlp = ((shadow.h & 0xff) << 8) | (shadow.l & 0xff);
+    renderRegisterGrid(monitorRegisterShadow, [
+      { name: "AF'", value: toHex16(afp) },
+      { name: "BC'", value: toHex16(bcp) },
+      { name: "DE'", value: toHex16(dep) },
+      { name: "HL'", value: toHex16(hlp) }
+    ]);
+  } else {
+    renderRegisterGrid(monitorRegisterShadow, [
+      { name: "AF'", value: 'N/A' },
+      { name: "BC'", value: 'N/A' },
+      { name: "DE'", value: 'N/A' },
+      { name: "HL'", value: 'N/A' }
+    ]);
+  }
+
+  const addressBus = pinsOut.addr & 0xffff;
+  const isWriteCycle = Boolean(pinsOut.wr && (pinsOut.mreq || pinsOut.iorq) && pinsOut.dataOut !== null);
+  const dataBus = isWriteCycle ? pinsOut.dataOut ?? 0xff : pinsIn.data;
+  monitorAddressHex.textContent = toHex16(addressBus);
+  monitorDataHex.textContent = toHex8(dataBus);
+  renderBitGrid(monitorAddressBits, addressBus, 16, 'A');
+  renderBitGrid(monitorDataBits, dataBus, 8, 'D');
+
+  renderPinGrid(monitorPinGrid, [
+    { name: 'M1', high: pinsOut.m1 },
+    { name: 'MREQ*', high: pinsOut.mreq },
+    { name: 'IORQ*', high: pinsOut.iorq },
+    { name: 'RD*', high: pinsOut.rd },
+    { name: 'WR*', high: pinsOut.wr },
+    { name: 'RFSH*', high: pinsOut.rfsh },
+    { name: 'HALT', high: pinsOut.halt },
+    { name: 'BUSAK', high: pinsOut.busak },
+    { name: 'WAIT', high: pinsIn.wait },
+    { name: 'INT', high: pinsIn.int },
+    { name: 'NMI', high: pinsIn.nmi },
+    { name: 'BUSRQ', high: pinsIn.busrq },
+    { name: 'RESET', high: pinsIn.reset }
+  ]);
+
+  monitorSummary.textContent = `${currentState} ${toHex16(regs.pc)} ${toHex8(dataBus)} ${
+    isWriteCycle ? 'WRITE' : 'READ'
+  } ${speedIndicator.textContent ?? '0.00x'}`;
 }
 
 function fail(state: 'FAILED' | 'STALLED', message: string, error?: unknown): void {
@@ -1571,22 +1696,7 @@ function fail(state: 'FAILED' | 'STALLED', message: string, error?: unknown): vo
   setBootStatus(state, `${reason} (${getCpuSummary()})`);
   appendLog(`${state} ${reason}`);
 
-  debugView.hidden = false;
-  const cpu = machine.getCpuState();
-  debugView.textContent = JSON.stringify(
-    {
-      state,
-      message,
-      reason,
-      pc: `0x${cpu.registers.pc.toString(16).padStart(4, '0')}`,
-      tstates: cpu.tstates,
-      queueDepth: cpu.queueDepth,
-      kanaMode: machine.getKanaMode(),
-      strict: strictMode
-    },
-    null,
-    2
-  );
+  updateDebugView();
 }
 
 function resetSpeedWindow(): void {
@@ -1631,7 +1741,7 @@ function boot(coldReset: boolean): boolean {
   } catch (error) {
     fail('FAILED', 'Boot exception', error);
     renderLcd();
-    updateDebugView();
+    updateDebugView(now);
     return false;
   }
 }
@@ -2063,6 +2173,8 @@ window.__pcg815 = {
     ...machine.getFirmwareIoStats()
   }),
   getBasicEngineStatus: () => machine.getBasicEngineStatus(),
+  getCpuPinsOut: () => machine.getCpuPinsOut(),
+  getCpuPinsIn: () => machine.getCpuPinsIn(),
   tapKey: (code: string) => {
     const pressTicks = 220_000;
     const releaseTicks = 260_000;

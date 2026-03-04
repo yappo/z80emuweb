@@ -1,4 +1,4 @@
-import type { CpuState } from '@z80emu/core-z80';
+import type { CpuState, Z80PinsOut } from '@z80emu/core-z80';
 import type { MonitorRuntimeSnapshot } from '@z80emu/firmware-monitor';
 
 export type PCG815ExecutionBackend = 'z80-firmware' | 'ts-compat';
@@ -21,6 +21,16 @@ export interface BasicEngineStatus {
   basicRamEnd: number;
   executionBackend: PCG815ExecutionBackend;
   executionDomain: PCG815ExecutionDomain;
+}
+
+export interface CpuPinsInSnapshot {
+  wait: boolean;
+  int: boolean;
+  nmi: boolean;
+  busrq: boolean;
+  reset: boolean;
+  intDataBus: number;
+  data: number;
 }
 
 // 永続化用スナップショットの現行フォーマット。
@@ -67,6 +77,9 @@ export interface MachinePCG815 {
   isRuntimeProgramRunning(): boolean;
   getFrameBuffer(): Uint8Array;
   getFrameRevision(): number;
+  getCpuState(): CpuState;
+  getCpuPinsOut(): Z80PinsOut;
+  getCpuPinsIn(): CpuPinsInSnapshot;
   reset(cold: boolean): void;
   loadProgram(bytes: Uint8Array | readonly number[], origin: number): void;
   setProgramCounter(entry: number): void;
