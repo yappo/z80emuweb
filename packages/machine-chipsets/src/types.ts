@@ -1,4 +1,4 @@
-import type { CpuState, Z80Core } from '@z80emu/core-z80';
+import type { CpuState, Z80Core, Z80PinsIn, Z80PinsOut } from '@z80emu/core-z80';
 
 export interface MemoryDevice {
   read8(addr: number): number;
@@ -51,6 +51,9 @@ export type ChipsetTraceHook = (trace: ChipsetCycleTrace) => void;
 export interface Chipset {
   attachCpu(cpu: Z80Core): void;
   tick(tstates: number): void;
+  getLastPinsOut(): Z80PinsOut;
+  getLastPinsIn(): Z80PinsIn;
+  getLastIntDataBus(): number;
 }
 
 export interface CpuStateProvider {

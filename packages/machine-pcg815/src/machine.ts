@@ -1,4 +1,4 @@
-import type { CpuState } from '@z80emu/core-z80';
+import type { CpuState, Z80PinsOut } from '@z80emu/core-z80';
 import { Z80Cpu } from '@z80emu/core-z80';
 import { BasicChipset, type IoDevice, type MemoryDevice } from '@z80emu/machine-chipsets';
 import {
@@ -31,6 +31,7 @@ import {
 import { KEY_MAP_BY_CODE } from './keyboard-map';
 import type {
   BasicEngineStatus,
+  CpuPinsInSnapshot,
   FirmwareIoStats,
   MachinePCG815,
   PCG815ExecutionBackend,
@@ -718,6 +719,23 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
   getCpuState(): CpuState {
     return this.chipset.getCpuState();
+  }
+
+  getCpuPinsOut(): Z80PinsOut {
+    return this.chipset.getLastPinsOut();
+  }
+
+  getCpuPinsIn(): CpuPinsInSnapshot {
+    const pinsIn = this.chipset.getLastPinsIn();
+    return {
+      wait: Boolean(pinsIn.wait),
+      int: Boolean(pinsIn.int),
+      nmi: Boolean(pinsIn.nmi),
+      busrq: Boolean(pinsIn.busrq),
+      reset: Boolean(pinsIn.reset),
+      intDataBus: this.chipset.getLastIntDataBus() & 0xff,
+      data: pinsIn.data & 0xff
+    };
   }
 
   getRamRange(): { start: number; end: number } {

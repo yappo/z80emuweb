@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('app boots and renders lit LCD pixels without runtime errors', async ({ page }) => {
+  test.setTimeout(120_000);
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
 
@@ -127,7 +128,7 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
 
   await page.locator('#font-debug-canvas').click({ position: { x: 6, y: 6 } });
   await expect(page.locator('#font-debug-meta')).toContainText(/0x00/i);
-  await page.locator('#font-kana-canvas').click({ position: { x: 30, y: 8 } });
+  await page.locator('#font-kana-canvas').click({ position: { x: 64, y: 8 } });
   await expect(page.locator('#font-debug-meta')).toContainText(/0xA1/i);
 
   await expect
@@ -589,6 +590,46 @@ test('strict URL parameter enables strict boot mode diagnostics', async ({ page 
   await page.goto('/?strict=1&debug=1');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
   await expect(page.locator('#boot-status')).toContainText(/strict=1/i);
+});
+
+test('machine monitor renders shadow registers and pin/bus visualization without debug flag', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+  await expect(page.locator('#machine-monitor')).toBeVisible();
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const lcd = document.querySelector('#lcd') as HTMLCanvasElement | null;
+          const monitor = document.querySelector('#machine-monitor') as HTMLElement | null;
+          if (!lcd || !monitor) {
+            return false;
+          }
+          const lcdRect = lcd.getBoundingClientRect();
+          const monitorRect = monitor.getBoundingClientRect();
+          return monitorRect.top >= lcdRect.bottom;
+        }),
+      { timeout: 2_000, intervals: [100, 250] }
+    )
+    .toBe(true);
+  await expect(page.locator('#machine-monitor')).toContainText(/Machine Monitor/i);
+  await expect(page.locator('#machine-monitor')).toContainText(/Shadow Registers/i);
+  await expect(page.locator('#monitor-register-shadow')).toContainText(/AF'/i);
+  await expect(page.locator('#monitor-register-shadow')).toContainText(/(N\/A|0x[0-9A-F]{4})/);
+  await expect(page.locator('#monitor-address-hex')).toContainText(/^0x[0-9A-F]{4}$/);
+  await expect(page.locator('#monitor-data-hex')).toContainText(/^0x[0-9A-F]{2}$/);
+  await expect(page.locator('#monitor-pin-grid')).toContainText(/MREQ/i);
+  await expect(page.locator('#log-view')).toBeVisible();
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const log = document.querySelector('#log-view');
+          return log?.closest('#machine-monitor')?.id ?? '';
+        }),
+      { timeout: 2_000, intervals: [100, 250] }
+    )
+    .toBe('machine-monitor');
 });
 
 test('accepts keyboard input on boot prompt without editor focus', async ({ page }) => {

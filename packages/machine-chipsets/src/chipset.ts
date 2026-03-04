@@ -77,6 +77,8 @@ export class BasicChipset implements Chipset, CpuStateProvider {
     reset: false
   };
 
+  private lastIntDataBus = 0xff;
+
   private stepCounter = 0;
 
   constructor(options: BasicChipsetOptions) {
@@ -95,6 +97,7 @@ export class BasicChipset implements Chipset, CpuStateProvider {
     this.readLatch = Z80_DEFAULT_PINS_IN.data;
     this.prevReadSource = 'none';
     this.prevReadAddr = 0;
+    this.lastIntDataBus = 0xff;
     this.stepCounter = 0;
   }
 
@@ -106,6 +109,7 @@ export class BasicChipset implements Chipset, CpuStateProvider {
     this.readLatch = Z80_DEFAULT_PINS_IN.data;
     this.prevReadSource = 'none';
     this.prevReadAddr = 0;
+    this.lastIntDataBus = 0xff;
     this.stepCounter = 0;
   }
 
@@ -136,6 +140,7 @@ export class BasicChipset implements Chipset, CpuStateProvider {
       this.tickInput.nmi = Boolean(signals.nmi);
       this.tickInput.busrq = Boolean(signals.busrq);
       this.tickInput.reset = Boolean(signals.reset);
+      this.lastIntDataBus = clamp8(signals.intDataBus ?? 0xff);
 
       if (this.onCycleTrace) {
         this.emitTrace({
@@ -187,6 +192,14 @@ export class BasicChipset implements Chipset, CpuStateProvider {
 
   getLastPinsOut(): Z80PinsOut {
     return { ...this.lastPinsOut };
+  }
+
+  getLastPinsIn(): Z80PinsIn {
+    return { ...this.tickInput };
+  }
+
+  getLastIntDataBus(): number {
+    return this.lastIntDataBus & 0xff;
   }
 
   getPin11Device(): Pin11Device {
