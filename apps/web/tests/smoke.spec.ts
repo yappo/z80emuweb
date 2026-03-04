@@ -626,6 +626,55 @@ test('machine monitor renders shadow registers and pin/bus visualization without
   await expect(page.locator('#monitor-flags-bits')).toContainText(/C/i);
   await expect(page.locator('#monitor-flags-bits')).toContainText(/X/i);
   await expect(page.locator('#monitor-flags-bits')).toContainText(/Y/i);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const main = document.querySelector('#monitor-register-main')?.closest('.monitor-card') as HTMLElement | null;
+          const shadow = document.querySelector('#monitor-register-shadow')?.closest('.monitor-card') as HTMLElement | null;
+          if (!main || !shadow) {
+            return false;
+          }
+          const mainRect = main.getBoundingClientRect();
+          const shadowRect = shadow.getBoundingClientRect();
+          return shadowRect.left >= mainRect.right - 4 && Math.abs(shadowRect.top - mainRect.top) < 4;
+        }),
+      { timeout: 2_000, intervals: [100, 250] }
+    )
+    .toBe(true);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const address = document.querySelector('#monitor-address-hex')?.closest('.monitor-card') as HTMLElement | null;
+          const data = document.querySelector('#monitor-data-hex')?.closest('.monitor-card') as HTMLElement | null;
+          if (!address || !data) {
+            return false;
+          }
+          const addressRect = address.getBoundingClientRect();
+          const dataRect = data.getBoundingClientRect();
+          return dataRect.left >= addressRect.right - 4 && Math.abs(dataRect.top - addressRect.top) < 4;
+        }),
+      { timeout: 2_000, intervals: [100, 250] }
+    )
+    .toBe(true);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const shadow = document.querySelector('#monitor-register-shadow')?.closest('.monitor-card') as HTMLElement | null;
+          const flags = document.querySelector('#monitor-flags-hex')?.closest('.monitor-card') as HTMLElement | null;
+          if (!shadow || !flags) {
+            return false;
+          }
+          const shadowRect = shadow.getBoundingClientRect();
+          const flagsRect = flags.getBoundingClientRect();
+          const verticalGap = flagsRect.top - shadowRect.bottom;
+          return verticalGap >= -1 && verticalGap <= 24;
+        }),
+      { timeout: 2_000, intervals: [100, 250] }
+    )
+    .toBe(true);
   await expect(page.locator('#monitor-pin-grid')).toContainText(/MREQ/i);
   await expect(page.locator('#log-view')).toBeVisible();
   await expect
