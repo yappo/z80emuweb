@@ -45,24 +45,35 @@
               <span id="monitor-summary" class="monitor-summary">BOOTING</span>
             </div>
             <div class="monitor-grid">
-              <section class="monitor-card">
-                <h3>Main Registers</h3>
-                <div id="monitor-register-main" class="register-grid"></div>
-              </section>
-              <section class="monitor-card">
-                <h3>Shadow Registers</h3>
-                <div id="monitor-register-shadow" class="register-grid"></div>
-              </section>
-              <section class="monitor-card">
-                <h3>Address Bus</h3>
-                <div id="monitor-address-hex" class="bus-hex">0x0000</div>
-                <div id="monitor-address-bits" class="bit-grid"></div>
-              </section>
-              <section class="monitor-card">
-                <h3>Data Bus</h3>
-                <div id="monitor-data-hex" class="bus-hex">0x00</div>
-                <div id="monitor-data-bits" class="bit-grid"></div>
-              </section>
+              <div class="monitor-top-grid">
+                <section class="monitor-card">
+                  <h3>Main Registers</h3>
+                  <div id="monitor-register-main" class="register-grid"></div>
+                </section>
+                <div class="shadow-stack">
+                  <section class="monitor-card">
+                    <h3>Shadow Registers</h3>
+                    <div id="monitor-register-shadow" class="register-grid"></div>
+                  </section>
+                  <section class="monitor-card">
+                    <h3>Flags (Main F)</h3>
+                    <div id="monitor-flags-hex" class="bus-hex">0x00</div>
+                    <div id="monitor-flags-bits" class="bit-grid flag-bit-grid"></div>
+                  </section>
+                </div>
+              </div>
+              <div class="monitor-bus-grid">
+                <section class="monitor-card">
+                  <h3>Address Bus</h3>
+                  <div id="monitor-address-hex" class="bus-hex">0x0000</div>
+                  <div id="monitor-address-bits" class="bit-grid"></div>
+                </section>
+                <section class="monitor-card">
+                  <h3>Data Bus</h3>
+                  <div id="monitor-data-hex" class="bus-hex">0x00</div>
+                  <div id="monitor-data-bits" class="bit-grid"></div>
+                </section>
+              </div>
               <section class="monitor-card monitor-card-wide">
                 <h3>CPU Pins (H/L)</h3>
                 <div id="monitor-pin-grid" class="pin-grid"></div>

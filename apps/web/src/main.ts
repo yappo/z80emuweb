@@ -119,6 +119,8 @@ const monitorAddressHex = mustQuery<HTMLElement>('#monitor-address-hex');
 const monitorAddressBits = mustQuery<HTMLElement>('#monitor-address-bits');
 const monitorDataHex = mustQuery<HTMLElement>('#monitor-data-hex');
 const monitorDataBits = mustQuery<HTMLElement>('#monitor-data-bits');
+const monitorFlagsHex = mustQuery<HTMLElement>('#monitor-flags-hex');
+const monitorFlagsBits = mustQuery<HTMLElement>('#monitor-flags-bits');
 const monitorPinGrid = mustQuery<HTMLElement>('#monitor-pin-grid');
 const logView = mustQuery<HTMLElement>('#log-view');
 const keyMapList = mustQuery<HTMLElement>('#keymap-list');
@@ -1595,6 +1597,25 @@ function renderBitGrid(target: HTMLElement, value: number, width: 8 | 16, prefix
   target.innerHTML = labels.join('');
 }
 
+function renderFlagBitGrid(target: HTMLElement, f: number): void {
+  const labels: ReadonlyArray<{ label: 'S' | 'Z' | 'Y' | 'H' | 'X' | 'PV' | 'N' | 'C'; bit: number }> = [
+    { label: 'S', bit: 7 },
+    { label: 'Z', bit: 6 },
+    { label: 'Y', bit: 5 },
+    { label: 'H', bit: 4 },
+    { label: 'X', bit: 3 },
+    { label: 'PV', bit: 2 },
+    { label: 'N', bit: 1 },
+    { label: 'C', bit: 0 }
+  ];
+  target.innerHTML = labels
+    .map(({ label, bit }) => {
+      const on = ((f >> bit) & 0x01) !== 0;
+      return `<span class="bit-chip" data-on="${on ? '1' : '0'}" title="${label}:${on ? '1' : '0'}">${label}</span>`;
+    })
+    .join('');
+}
+
 function renderPinGrid(target: HTMLElement, items: ReadonlyArray<{ name: string; high: boolean }>): void {
   target.innerHTML = items
     .map(
@@ -1664,8 +1685,10 @@ function updateDebugView(nowMs?: number): void {
   const dataBus = isWriteCycle ? pinsOut.dataOut ?? 0xff : pinsIn.data;
   monitorAddressHex.textContent = toHex16(addressBus);
   monitorDataHex.textContent = toHex8(dataBus);
+  monitorFlagsHex.textContent = toHex8(regs.f);
   renderBitGrid(monitorAddressBits, addressBus, 16, 'A');
   renderBitGrid(monitorDataBits, dataBus, 8, 'D');
+  renderFlagBitGrid(monitorFlagsBits, regs.f);
 
   renderPinGrid(monitorPinGrid, [
     { name: 'M1', high: pinsOut.m1 },

@@ -351,19 +351,28 @@ button[data-active='1'] {
 }
 
 .machine-monitor {
+  --mon-cyan-1: #7ff7ff;
+  --mon-cyan-2: #19ecff;
+  --mon-cyan-3: #00b7ff;
+  --mon-lime-1: #7ce86a;
+  --mon-amber-1: #ffc15a;
+  --mon-bg-1: rgba(8, 10, 34, 0.96);
+  --mon-bg-2: rgba(6, 18, 52, 0.95);
+  --mon-bg-3: rgba(5, 28, 66, 0.9);
   margin: 0;
   padding: 0.78rem;
   border-radius: 10px;
-  border: 1px solid #00e5ff;
+  border: 1px solid var(--mon-cyan-2);
   background:
-    linear-gradient(135deg, rgba(12, 9, 36, 0.94), rgba(8, 18, 48, 0.96)),
-    radial-gradient(700px 280px at 80% -20%, rgba(0, 255, 245, 0.24), transparent 60%),
-    radial-gradient(650px 240px at -10% 120%, rgba(255, 20, 147, 0.24), transparent 58%);
+    radial-gradient(520px 260px at 84% -12%, rgba(124, 232, 106, 0.14), transparent 62%),
+    radial-gradient(620px 250px at -8% 122%, rgba(255, 193, 90, 0.11), transparent 58%),
+    linear-gradient(135deg, var(--mon-bg-1), var(--mon-bg-2) 55%, var(--mon-bg-3));
   display: grid;
   gap: 0.62rem;
   box-shadow:
-    inset 0 0 0 1px rgba(107, 255, 249, 0.25),
-    0 0 28px rgba(0, 229, 255, 0.38),
+    inset 0 0 0 1px rgba(127, 247, 255, 0.32),
+    0 0 24px rgba(25, 236, 255, 0.3),
+    0 0 38px rgba(124, 232, 106, 0.13),
     0 12px 30px -18px rgba(0, 0, 0, 0.82);
 }
 
@@ -375,8 +384,10 @@ button[data-active='1'] {
 
 .machine-monitor h2 {
   font-size: 1rem;
-  color: #f4fcff;
-  text-shadow: 0 0 14px rgba(80, 248, 255, 0.92);
+  color: #f2fdff;
+  text-shadow:
+    0 0 12px rgba(127, 247, 255, 0.9),
+    0 0 15px rgba(124, 232, 106, 0.28);
 }
 
 .monitor-head {
@@ -390,16 +401,36 @@ button[data-active='1'] {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.76rem;
   border-radius: 999px;
-  border: 1px solid #00f0ff;
-  background: rgba(8, 18, 44, 0.88);
+  border: 1px solid var(--mon-cyan-2);
+  background: linear-gradient(180deg, rgba(6, 26, 58, 0.92), rgba(6, 20, 44, 0.92));
   color: #ccfbff;
   padding: 0.14rem 0.56rem;
   box-shadow:
-    inset 0 0 0 1px rgba(173, 245, 255, 0.2),
-    0 0 10px rgba(0, 240, 255, 0.42);
+    inset 0 0 0 1px rgba(173, 245, 255, 0.24),
+    0 0 10px rgba(25, 236, 255, 0.46),
+    0 0 13px rgba(124, 232, 106, 0.16);
 }
 
 .monitor-grid {
+  display: grid;
+  gap: 0.5rem;
+  align-items: start;
+}
+
+.monitor-top-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  align-items: start;
+}
+
+.shadow-stack {
+  display: grid;
+  gap: 0.5rem;
+  align-content: start;
+}
+
+.monitor-bus-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
@@ -408,13 +439,13 @@ button[data-active='1'] {
 
 .monitor-card {
   border-radius: 8px;
-  border: 1px solid rgba(77, 243, 255, 0.88);
+  border: 1px solid rgba(127, 247, 255, 0.9);
   background:
-    linear-gradient(180deg, rgba(10, 20, 54, 0.9), rgba(6, 14, 35, 0.92)),
+    linear-gradient(180deg, rgba(8, 26, 66, 0.92), rgba(6, 16, 40, 0.94)),
     repeating-linear-gradient(
       180deg,
-      rgba(124, 236, 255, 0.12) 0,
-      rgba(124, 236, 255, 0.12) 1px,
+      rgba(127, 247, 255, 0.13) 0,
+      rgba(127, 247, 255, 0.13) 1px,
       transparent 1px,
       transparent 4px
     );
@@ -422,17 +453,20 @@ button[data-active='1'] {
   display: grid;
   gap: 0.4rem;
   box-shadow:
-    inset 0 0 0 1px rgba(130, 235, 255, 0.16),
-    0 0 20px rgba(0, 231, 255, 0.24);
+    inset 0 0 0 1px rgba(127, 247, 255, 0.22),
+    0 0 14px rgba(25, 236, 255, 0.24),
+    0 0 17px rgba(124, 232, 106, 0.1);
 }
 
 .monitor-card h3 {
   margin: 0;
   font-size: 0.88rem;
   line-height: 1.2;
-  color: #d8fbff;
+  color: #dcfeff;
   letter-spacing: 0.02em;
-  text-shadow: 0 0 10px rgba(76, 232, 255, 0.7);
+  text-shadow:
+    0 0 9px rgba(127, 247, 255, 0.7),
+    0 0 11px rgba(124, 232, 106, 0.15);
 }
 
 .monitor-card-wide {
@@ -476,7 +510,7 @@ button[data-active='1'] {
   line-height: 1.25;
   color: #f5feff;
   background: linear-gradient(180deg, rgba(8, 48, 86, 0.96), rgba(6, 26, 56, 0.98));
-  border: 1px solid #41f3ff;
+  border: 1px solid var(--mon-cyan-2);
   border-radius: 6px;
   padding: 0.32rem 0.64rem;
   display: inline-flex;
@@ -489,13 +523,18 @@ button[data-active='1'] {
   overflow: visible;
   box-shadow:
     inset 0 0 0 1px rgba(141, 241, 255, 0.24),
-    0 0 18px rgba(26, 231, 255, 0.5);
+    0 0 14px rgba(25, 236, 255, 0.46),
+    0 0 17px rgba(124, 232, 106, 0.15);
 }
 
 .bit-grid {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 0.24rem;
+}
+
+.flag-bit-grid {
+  grid-template-columns: repeat(8, minmax(2.4ch, 1fr));
 }
 
 .bit-chip {
@@ -511,10 +550,12 @@ button[data-active='1'] {
 }
 
 .bit-chip[data-on='1'] {
-  border-color: #39ffea;
-  background: linear-gradient(180deg, rgba(9, 111, 124, 0.96), rgba(8, 67, 98, 0.98));
+  border-color: #63efb0;
+  background: linear-gradient(180deg, rgba(18, 128, 146, 0.96), rgba(10, 80, 106, 0.98));
   color: #f2fffd;
-  box-shadow: 0 0 12px rgba(52, 255, 230, 0.55);
+  box-shadow:
+    0 0 10px rgba(79, 245, 255, 0.45),
+    0 0 14px rgba(124, 232, 106, 0.2);
 }
 
 .pin-grid {
@@ -552,10 +593,12 @@ button[data-active='1'] {
 }
 
 .pin-state[data-high='1'] {
-  border-color: #30ffe8;
+  border-color: #63efb0;
   color: #edfffd;
-  background: linear-gradient(180deg, rgba(7, 132, 136, 0.95), rgba(8, 78, 102, 0.98));
-  box-shadow: 0 0 12px rgba(62, 255, 220, 0.58);
+  background: linear-gradient(180deg, rgba(15, 132, 148, 0.95), rgba(10, 82, 108, 0.98));
+  box-shadow:
+    0 0 10px rgba(79, 245, 255, 0.38),
+    0 0 14px rgba(124, 232, 106, 0.18);
 }
 
 .machine-monitor .log-view {
@@ -659,8 +702,12 @@ button[data-active='1'] {
     align-items: flex-start;
   }
 
-  .monitor-grid,
   .pin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .monitor-top-grid,
+  .monitor-bus-grid {
     grid-template-columns: 1fr;
   }
 
