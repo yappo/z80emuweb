@@ -498,6 +498,10 @@ button[data-active='1'] {
   gap: 0.24rem;
 }
 
+.flag-bit-grid {
+  grid-template-columns: repeat(8, minmax(2.4ch, 1fr));
+}
+
 .bit-chip {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 0.7rem;

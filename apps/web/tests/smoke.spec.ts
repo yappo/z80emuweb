@@ -618,6 +618,14 @@ test('machine monitor renders shadow registers and pin/bus visualization without
   await expect(page.locator('#monitor-register-shadow')).toContainText(/(N\/A|0x[0-9A-F]{4})/);
   await expect(page.locator('#monitor-address-hex')).toContainText(/^0x[0-9A-F]{4}$/);
   await expect(page.locator('#monitor-data-hex')).toContainText(/^0x[0-9A-F]{2}$/);
+  await expect(page.locator('#monitor-flags-hex')).toContainText(/^0x[0-9A-F]{2}$/);
+  await expect(page.locator('#monitor-flags-bits')).toContainText(/S/i);
+  await expect(page.locator('#monitor-flags-bits')).toContainText(/Z/i);
+  await expect(page.locator('#monitor-flags-bits')).toContainText(/PV/i);
+  await expect(page.locator('#monitor-flags-bits')).toContainText(/N/i);
+  await expect(page.locator('#monitor-flags-bits')).toContainText(/C/i);
+  await expect(page.locator('#monitor-flags-bits')).toContainText(/X/i);
+  await expect(page.locator('#monitor-flags-bits')).toContainText(/Y/i);
   await expect(page.locator('#monitor-pin-grid')).toContainText(/MREQ/i);
   await expect(page.locator('#log-view')).toBeVisible();
   await expect
