@@ -286,6 +286,20 @@ test('assembler tab can assemble and run a simple ORG/ENTRY program', async ({ p
   await expect(page.locator('#basic-editor')).toBeVisible();
 });
 
+test('assembler tab 3D Sample button loads doom-like source', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('tab', { name: 'ASSEMBLER' }).click();
+  await expect(page.locator('#asm-editor')).toBeVisible();
+
+  await page.locator('#asm-new').click();
+  await page.locator('#asm-load-3d-sample').click();
+  await expect(page.locator('#asm-run-status')).toContainText(/3D sample loaded/i);
+  await expect(page.locator('#asm-editor')).toHaveValue(/Maze-style pseudo 3D/i);
+  await expect(page.locator('#asm-editor')).toHaveValue(/ROUTE_TABLE:/i);
+});
+
 test('basic load sample runs on fresh boot', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
