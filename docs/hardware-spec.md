@@ -47,7 +47,7 @@
 | ドット解像度 | `144 x 32` | `CONFIRMED` | `z88dk-platform-sharp-pc` | `LOCKED` | 互換ターゲットの基準 |
 | 文字グリッド | `24 x 4` | `CONFIRMED` | `z88dk-platform-sharp-pc` | `LOCKED` | 96文字セル |
 | グリフモデル | `5 x 7` | `CONFIRMED` | `z88dk-platform-sharp-pc` | `LOCKED` | `6 x 8` ピッチで描画 |
-| フレームバッファモデル | 1bppモノクロ | `DERIVED` | `ver0-js`, `ver0-root` | `TBD` | LCD詳細解析の進展で更新される可能性あり |
+| フレームバッファモデル | raw LCD VRAM を正本とする 1bpp モノクロ | `DERIVED` | `ver0-js`, `ver0-root` | `LOCKED` | 描画は text layer 合成ではなく raw LCD VRAM から復元する |
 
 ## メモリ
 
@@ -83,6 +83,7 @@
 - 公式PC-G815サービスマニュアルは本リポジトリに同梱していない
 - `0x10-0x1F` の複数制御ポートは強い根拠待ちのプレースホルダ
 - LCDアイコンセグメントと独自記号は未だ実機厳密ではない
+- BASIC 文字表示互換のため、ファームウェア側から raw LCD へ 5x7 グリフ描画する互換経路を併用している
 
 ## BASIC互換ポリシー
 

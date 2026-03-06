@@ -64,8 +64,6 @@ const BANKED_ROM_REGION = getMemoryRegionSpec('banked-rom-window');
 
 const SYSTEM_ROM_SIZE = SYSTEM_ROM_REGION.end - SYSTEM_ROM_REGION.start + 1;
 const BANKED_ROM_SIZE = BANKED_ROM_REGION.end - BANKED_ROM_REGION.start + 1;
-const TEXT_VRAM_SIZE = LCD_COLS * LCD_ROWS;
-const ICON_VRAM_SIZE = 32;
 const SYSTEM_ROM_BANKS = 8;
 const BANKED_ROM_BANKS = 16;
 const MAIN_RAM_BANKS = 2;
@@ -124,6 +122,8 @@ const PORT_LCD_STATUS_DUAL = getIoPortSpec('lcd-status-dual').port;
 const PORT_LCD_STATUS_SECONDARY = getIoPortSpec('lcd-status-secondary').port;
 
 const WORKAREA_DISPLAY_START_LINE = getWorkAreaSpec('display-start-line').address;
+const LCD_TEXT_COMPAT_FLAG_ADDRESS = (WORKAREA_DISPLAY_START_LINE + 1) & 0xffff;
+const LCD_HALF_WIDTH = LCD_WIDTH / 2;
 
 // かな入力合成で使う半角カナ特殊コード。
 const HALF_WIDTH_KANA_DAKUTEN = 0xde;
@@ -345,13 +345,8 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private executionDomain: PCG815ExecutionDomain = 'firmware';
   private firmwareReturnAddress = MONITOR_MAIN_LOOP_ADDR;
 
-  private readonly textVram = new Uint8Array(TEXT_VRAM_SIZE);
-
-  private readonly iconVram = new Uint8Array(ICON_VRAM_SIZE);
-
   private readonly frameBuffer = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
-
-  private readonly graphicsPlane = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
+  private readonly debugTextBuffer = new Uint8Array(LCD_COLS * LCD_ROWS);
 
   private readonly keyboardRows = new Uint8Array(8);
 
@@ -369,8 +364,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private kanaMode = false;
   private kanaComposeBuffer = '';
 
-  private lcdCursor = 0;
-  private lcdPendingWrap = false;
+  private textCursorCol = 0;
+  private textCursorRow = 0;
+  private textCursorPendingWrap = false;
   private keyStrobe = 0;
   private keyShift = 0;
   private timer = 0;
@@ -399,6 +395,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private lcdX2 = 0;
   private lcdY2 = 0;
   private lcdRead = false;
+  private lcdTextCompatStream = false;
   private readonly lcdRawVram = new Uint8Array(8 * 0x80);
 
   private dirtyFrame = true;
@@ -474,9 +471,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         bank.fill(0);
       }
       this.seedBootstrapInMainRam();
-      this.iconVram.fill(0);
-      this.textVram.fill(SPACE_CODE);
-      this.graphicsPlane.fill(0);
+      this.debugTextBuffer.fill(SPACE_CODE);
       this.files.clear();
     }
 
@@ -491,8 +486,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.firmwareEotWrites = 0;
     this.kanaMode = false;
     this.kanaComposeBuffer = '';
-    this.lcdCursor = 0;
-    this.lcdPendingWrap = false;
+    this.textCursorCol = 0;
+    this.textCursorRow = 0;
+    this.textCursorPendingWrap = false;
     this.keyStrobe = 0;
     this.keyShift = 0;
     this.timer = 0;
@@ -512,7 +508,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.lcdX2 = 0;
     this.lcdY2 = 0;
     this.lcdRead = false;
+    this.lcdTextCompatStream = false;
     this.lcdRawVram.fill(0);
+    this.debugTextBuffer.fill(SPACE_CODE);
     this.printWaitTicks = 0;
     this.printPauseMode = false;
     this.graphicCursorX = 0;
@@ -581,13 +579,12 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   }
 
   private flushRuntimeOutputToLcd(): void {
-    // Runtime PRINT queue is exposed as bytes; consume and mirror into LCD text layer.
     while (true) {
       const code = this.runtime.popOutputChar();
       if (code === 0) {
         break;
       }
-      this.handleLcdData(code & 0xff);
+      this.writeCompatTextChar(code & 0xff);
     }
   }
 
@@ -706,10 +703,12 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
   getTextLines(): string[] {
     const lines: string[] = [];
+    const frame = this.getFrameBuffer();
     for (let row = 0; row < LCD_ROWS; row += 1) {
       let line = '';
       for (let col = 0; col < LCD_COLS; col += 1) {
-        const code = this.textVram[row * LCD_COLS + col] ?? SPACE_CODE;
+        const tracked = this.debugTextBuffer[row * LCD_COLS + col] ?? SPACE_CODE;
+        const code = tracked === SPACE_CODE ? this.decodeCellCode(frame, col, row) : tracked;
         line += String.fromCharCode(toDisplayCode(code));
       }
       lines.push(line);
@@ -950,9 +949,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       cpu: this.chipset.getCpuState(),
       ram: [...this.mainRam],
       vram: {
-        text: [...this.textVram],
-        icons: [...this.iconVram],
-        cursor: this.lcdCursor
+        text: [...this.lcdRawVram],
+        icons: [],
+        cursor: (this.textCursorRow * LCD_COLS + this.textCursorCol) & 0x7f
       },
       io: {
         selectedKeyRow: this.keyStrobe & 0xff,
@@ -984,14 +983,17 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       bank.set(ramBytes.slice(0, bank.length));
     }
 
-    this.textVram.fill(SPACE_CODE);
-    this.textVram.set(snapshot.vram.text.map((v) => v & 0xff).slice(0, this.textVram.length));
-
-    this.iconVram.fill(0);
-    this.iconVram.set(snapshot.vram.icons.map((v) => v & 0xff).slice(0, this.iconVram.length));
-
-    this.lcdCursor = snapshot.vram.cursor & 0x7f;
-    this.lcdPendingWrap = false;
+    this.lcdRawVram.fill(0);
+    this.lcdRawVram.set(snapshot.vram.text.map((v) => v & 0xff).slice(0, this.lcdRawVram.length));
+    this.textCursorCol = (snapshot.vram.cursor ?? 0) % LCD_COLS;
+    this.textCursorRow = Math.trunc((snapshot.vram.cursor ?? 0) / LCD_COLS) % LCD_ROWS;
+    this.textCursorPendingWrap = false;
+    this.debugTextBuffer.fill(SPACE_CODE);
+    for (let row = 0; row < LCD_ROWS; row += 1) {
+      for (let col = 0; col < LCD_COLS; col += 1) {
+        this.debugTextBuffer[row * LCD_COLS + col] = this.decodeCellCode(this.getFrameBuffer(), col, row);
+      }
+    }
 
     this.keyStrobe = snapshot.io.selectedKeyRow & 0xffff;
     this.keyboardRows.fill(0xff);
@@ -1172,18 +1174,18 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.writeLcdData('secondary', byte);
         return;
       case PORT_LCD_COMMAND:
-        // BASIC系ファーム互換:
-        // 0x58 への 0x01/0x8x 系コマンドをテキスト層の
-        // CLS/カーソル制御として解釈する。
-        // 0xC0-0xDF は raw LCD では display-start-line と衝突するため、
-        // テキストカーソル用途(0x80|pos)を優先して二重適用を避ける。
-        if (byte === 0x01 || (byte & 0x80) !== 0) {
-          this.handleLcdCommand(byte);
+        if (this.shouldUseLcdTextCompatCommand(byte)) {
+          this.writeCompatTextCommand(byte);
           return;
         }
+        this.lcdTextCompatStream = false;
         this.g815LcdCtrl('primary', byte);
         return;
       case PORT_LCD_DATA:
+        if (this.shouldUseLcdTextCompatData()) {
+          this.writeCompatTextChar(byte);
+          return;
+        }
         this.writeLcdData('primary', byte);
         return;
       default:
@@ -1253,7 +1255,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       this.writeRawLcdAt(address, this.lcdY, value);
       this.lcdX = (this.lcdX + 1) & 0xff;
     }
-    this.handleLcdData(value);
   }
 
   private readLcdData(primary: boolean): number {
@@ -1472,158 +1473,188 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     return raw & 0x1f;
   }
 
-  private handleLcdCommand(command: number): void {
-    // 現状は CLS とカーソル設定のみを実装。
+  private consumeLcdTextCompatFlag(): boolean {
+    const offset = LCD_TEXT_COMPAT_FLAG_ADDRESS - RAM_REGION.start;
+    if (offset < 0 || offset >= this.mainRam.length) {
+      return false;
+    }
+    if ((this.mainRam[offset] ?? 0) === 0) {
+      return false;
+    }
+    this.mainRam[offset] = 0;
+    return true;
+  }
+
+  private shouldUseLcdTextCompatCommand(command: number): boolean {
+    if (this.consumeLcdTextCompatFlag()) {
+      this.lcdTextCompatStream = true;
+      return true;
+    }
+    if (command === 0x01 || (command & 0x80) !== 0) {
+      this.lcdTextCompatStream = true;
+      return true;
+    }
+    return false;
+  }
+
+  private shouldUseLcdTextCompatData(): boolean {
+    if (this.consumeLcdTextCompatFlag()) {
+      this.lcdTextCompatStream = true;
+      return true;
+    }
+    return this.lcdTextCompatStream;
+  }
+
+  private writeCompatTextCommand(command: number): void {
     if (command === 0x01) {
-      this.textVram.fill(SPACE_CODE);
-      this.graphicsPlane.fill(0);
-      this.lcdCursor = 0;
-      this.lcdPendingWrap = false;
-      this.dirtyFrame = true;
+      this.clearRawScreen();
       return;
     }
 
     if ((command & 0x80) !== 0) {
-      this.lcdCursor = command & 0x7f;
-      if (this.lcdCursor >= TEXT_VRAM_SIZE) {
-        this.lcdCursor %= TEXT_VRAM_SIZE;
-      }
-      this.lcdPendingWrap = false;
-      return;
+      const cursor = (command & 0x7f) % (LCD_COLS * LCD_ROWS);
+      this.textCursorCol = cursor % LCD_COLS;
+      this.textCursorRow = Math.trunc(cursor / LCD_COLS);
+      this.textCursorPendingWrap = false;
     }
   }
 
-  private handleLcdData(rawValue: number): void {
+  private writeCompatTextChar(rawValue: number): void {
     const value = rawValue & 0xff;
-
-    // CR/LF/BS を先に処理して、テキスト VRAM の編集挙動を再現する。
     if (value === 0x0d) {
-      const row = Math.floor(this.lcdCursor / LCD_COLS);
-      this.lcdCursor = row * LCD_COLS;
-      this.lcdPendingWrap = false;
+      this.textCursorCol = 0;
+      this.textCursorPendingWrap = false;
       return;
     }
 
     if (value === 0x0a) {
-      const row = Math.floor(this.lcdCursor / LCD_COLS);
-      const col = this.lcdCursor % LCD_COLS;
-      if (row < LCD_ROWS - 1) {
-        this.lcdCursor = (row + 1) * LCD_COLS + col;
+      if (this.textCursorRow < LCD_ROWS - 1) {
+        this.textCursorRow += 1;
       } else {
-        this.scrollTextUp(1);
-        this.lcdCursor = (LCD_ROWS - 1) * LCD_COLS + col;
+        this.scrollScreenUp(LCD_GLYPH_PITCH_Y);
       }
-      this.lcdPendingWrap = false;
+      this.textCursorPendingWrap = false;
       return;
     }
 
     if (value === 0x08) {
-      if (this.lcdPendingWrap) {
-        this.lcdPendingWrap = false;
-      } else if (this.lcdCursor > 0) {
-        this.lcdCursor -= 1;
+      if (this.textCursorPendingWrap) {
+        this.textCursorPendingWrap = false;
+      } else if (this.textCursorCol > 0) {
+        this.textCursorCol -= 1;
       }
-      this.textVram[this.lcdCursor] = SPACE_CODE;
-      this.dirtyFrame = true;
+      this.clearTextCell(this.textCursorCol, this.textCursorRow);
       return;
     }
 
-    if (this.lcdPendingWrap) {
-      const row = Math.floor(this.lcdCursor / LCD_COLS);
-      if (row < LCD_ROWS - 1) {
-        this.lcdCursor = (row + 1) * LCD_COLS;
+    if (this.textCursorPendingWrap) {
+      this.textCursorCol = 0;
+      if (this.textCursorRow < LCD_ROWS - 1) {
+        this.textCursorRow += 1;
       } else {
-        this.scrollTextUp(1);
-        this.lcdCursor = (LCD_ROWS - 1) * LCD_COLS;
+        this.scrollScreenUp(LCD_GLYPH_PITCH_Y);
       }
-      this.lcdPendingWrap = false;
+      this.textCursorPendingWrap = false;
     }
 
-    this.textVram[this.lcdCursor] = toDisplayCode(value);
-    const col = this.lcdCursor % LCD_COLS;
-    if (col < LCD_COLS - 1) {
-      this.lcdCursor += 1;
+    this.drawTextCell(this.textCursorCol, this.textCursorRow, toDisplayCode(value));
+    if (this.textCursorCol < LCD_COLS - 1) {
+      this.textCursorCol += 1;
     } else {
-      this.lcdPendingWrap = true;
+      this.textCursorPendingWrap = true;
     }
+  }
+
+  private clearRawScreen(): void {
+    this.lcdRawVram.fill(0);
+    this.debugTextBuffer.fill(SPACE_CODE);
+    this.textCursorCol = 0;
+    this.textCursorRow = 0;
+    this.textCursorPendingWrap = false;
+    this.graphicCursorX = 0;
+    this.graphicCursorY = 0;
     this.dirtyFrame = true;
   }
 
-  private scrollTextUp(lines: number): void {
-    const count = Math.max(0, Math.min(lines, LCD_ROWS));
-    if (count === 0) {
+  private clearTextCell(col: number, row: number): void {
+    if (col >= 0 && col < LCD_COLS && row >= 0 && row < LCD_ROWS) {
+      this.debugTextBuffer[row * LCD_COLS + col] = SPACE_CODE;
+    }
+    const originX = col * LCD_GLYPH_PITCH_X;
+    const originY = row * LCD_GLYPH_PITCH_Y;
+    for (let y = 0; y < LCD_GLYPH_PITCH_Y; y += 1) {
+      for (let x = 0; x < LCD_GLYPH_PITCH_X; x += 1) {
+        this.writeScreenPixel(originX + x, originY + y, 0);
+      }
+    }
+  }
+
+  private drawTextCell(col: number, row: number, charCode: number): void {
+    this.clearTextCell(col, row);
+    if (col >= 0 && col < LCD_COLS && row >= 0 && row < LCD_ROWS) {
+      this.debugTextBuffer[row * LCD_COLS + col] = toDisplayCode(charCode);
+    }
+    this.drawGlyphAt(col * LCD_GLYPH_PITCH_X, row * LCD_GLYPH_PITCH_Y, charCode);
+  }
+
+  private drawGlyphAt(originX: number, originY: number, charCode: number): void {
+    const glyph = getGlyphForCode(charCode);
+    for (let y = 0; y < LCD_GLYPH_HEIGHT; y += 1) {
+      const bits = glyph[y] ?? 0;
+      for (let x = 0; x < LCD_GLYPH_WIDTH; x += 1) {
+        if (((bits >> (LCD_GLYPH_WIDTH - 1 - x)) & 0x01) === 0) {
+          continue;
+        }
+        this.writeScreenPixel(originX + x, originY + y, 1);
+      }
+    }
+  }
+
+  private scrollScreenUp(lines: number): void {
+    const shift = Math.max(0, Math.min(LCD_HEIGHT, Math.trunc(lines)));
+    if (shift === 0) {
       return;
     }
-
-    const shift = count * LCD_COLS;
-    if (shift >= TEXT_VRAM_SIZE) {
-      this.textVram.fill(SPACE_CODE);
-      this.dirtyFrame = true;
-      return;
+    const snapshot = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
+    for (let y = 0; y < LCD_HEIGHT; y += 1) {
+      for (let x = 0; x < LCD_WIDTH; x += 1) {
+        snapshot[y * LCD_WIDTH + x] = this.readScreenPixel(x, y) ? 1 : 0;
+      }
     }
-
-    this.textVram.copyWithin(0, shift, TEXT_VRAM_SIZE);
-    this.textVram.fill(SPACE_CODE, TEXT_VRAM_SIZE - shift);
+    this.lcdRawVram.fill(0);
+    if (shift % LCD_GLYPH_PITCH_Y === 0) {
+      const rows = Math.min(LCD_ROWS, Math.trunc(shift / LCD_GLYPH_PITCH_Y));
+      if (rows >= LCD_ROWS) {
+        this.debugTextBuffer.fill(SPACE_CODE);
+      } else {
+        this.debugTextBuffer.copyWithin(0, rows * LCD_COLS, this.debugTextBuffer.length);
+        this.debugTextBuffer.fill(SPACE_CODE, this.debugTextBuffer.length - rows * LCD_COLS);
+      }
+    }
+    for (let y = 0; y < LCD_HEIGHT - shift; y += 1) {
+      for (let x = 0; x < LCD_WIDTH; x += 1) {
+        if (snapshot[(y + shift) * LCD_WIDTH + x] !== 0) {
+          this.writeScreenPixel(x, y, 1);
+        }
+      }
+    }
     this.dirtyFrame = true;
   }
 
   private renderFrameBuffer(): void {
-    // textVRAM の文字コードを 5x7 グリフへ展開し、1bpp バッファを生成する。
-    this.frameBuffer.fill(0);
     const verticalScroll = this.getDisplayStartLine();
-
-    for (let row = 0; row < LCD_ROWS; row += 1) {
-      for (let col = 0; col < LCD_COLS; col += 1) {
-        const charCode = this.textVram[row * LCD_COLS + col] ?? SPACE_CODE;
-        const glyph = getGlyphForCode(charCode);
-
-        const originX = col * LCD_GLYPH_PITCH_X;
-        const originY = row * LCD_GLYPH_PITCH_Y;
-
-        for (let y = 0; y < LCD_GLYPH_HEIGHT; y += 1) {
-          const bits = glyph[y] ?? 0;
-          for (let x = 0; x < LCD_GLYPH_WIDTH; x += 1) {
-            if (((bits >> (LCD_GLYPH_WIDTH - 1 - x)) & 0x01) === 0) {
-              continue;
-            }
-            const dstX = originX + x;
-            const dstY = (originY + y - verticalScroll + LCD_HEIGHT) % LCD_HEIGHT;
-            if (dstX < 0 || dstX >= LCD_WIDTH || dstY < 0 || dstY >= LCD_HEIGHT) {
-              continue;
-            }
-            this.frameBuffer[dstY * LCD_WIDTH + dstX] = 1;
-          }
-        }
+    for (let y = 0; y < LCD_HEIGHT; y += 1) {
+      const sourceY = (y + verticalScroll) % LCD_HEIGHT;
+      for (let x = 0; x < LCD_WIDTH; x += 1) {
+        this.frameBuffer[y * LCD_WIDTH + x] = this.readScreenPixel(x, sourceY) ? 1 : 0;
       }
     }
-
-    for (let index = 0; index < this.graphicsPlane.length; index += 1) {
-      if (this.graphicsPlane[index] !== 0) {
-        this.frameBuffer[index] = 1;
-      }
-    }
-
     this.dirtyFrame = false;
     this.frameRevision = (this.frameRevision + 1) >>> 0;
   }
 
   private setGraphicsPixel(x: number, y: number, mode = 1): void {
-    const ix = Math.trunc(x);
-    const iy = Math.trunc(y);
-    if (ix < 0 || ix >= LCD_WIDTH || iy < 0 || iy >= LCD_HEIGHT) {
-      return;
-    }
-
-    const offset = iy * LCD_WIDTH + ix;
-    if (mode === 0) {
-      this.graphicsPlane[offset] = 0;
-    } else if (mode === 2) {
-      this.graphicsPlane[offset] = this.graphicsPlane[offset] ? 0 : 1;
-    } else {
-      this.graphicsPlane[offset] = 1;
-    }
-
-    this.dirtyFrame = true;
+    this.writeScreenPixel(Math.trunc(x), Math.trunc(y), mode);
   }
 
   private drawGraphicsLine(x1: number, y1: number, x2: number, y2: number, mode = 1): void {
@@ -1663,9 +1694,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     }
 
     const seedOffset = sy * LCD_WIDTH + sx;
-    const target = this.graphicsPlane[seedOffset] ? 1 : 0;
+    const target = this.readScreenPixel(sx, sy) ? 1 : 0;
     const queue: number[] = [seedOffset];
-    const visited = new Uint8Array(this.graphicsPlane.length);
+    const visited = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
 
     const shouldPaint = (px: number, py: number): boolean => {
       if (pattern <= 1 || pattern >= 6) {
@@ -1682,14 +1713,13 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       }
       visited[offset] = 1;
 
-      if ((this.graphicsPlane[offset] ? 1 : 0) !== target) {
-        continue;
-      }
-
       const px = offset % LCD_WIDTH;
       const py = Math.trunc(offset / LCD_WIDTH);
+      if ((this.readScreenPixel(px, py) ? 1 : 0) !== target) {
+        continue;
+      }
       if (shouldPaint(px, py)) {
-        this.graphicsPlane[offset] = 1;
+        this.writeScreenPixel(px, py, 1);
       }
 
       if (px > 0) {
@@ -1705,8 +1735,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         queue.push(offset + LCD_WIDTH);
       }
     }
-
-    this.dirtyFrame = true;
   }
 
   private drawGraphicsText(text: string): void {
@@ -1744,6 +1772,87 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     }
   }
 
+  private writeScreenPixel(x: number, y: number, mode = 1): void {
+    const mapping = this.mapScreenPixel(x, y);
+    if (!mapping) {
+      return;
+    }
+
+    const offset = mapping.page * 0x80 + mapping.x;
+    const mask = 1 << mapping.bit;
+    const current = this.lcdRawVram[offset] ?? 0;
+    if (mode === 0) {
+      this.lcdRawVram[offset] = current & ~mask;
+    } else if (mode === 2) {
+      this.lcdRawVram[offset] = current ^ mask;
+    } else {
+      this.lcdRawVram[offset] = current | mask;
+    }
+    this.dirtyFrame = true;
+  }
+
+  private readScreenPixel(x: number, y: number): boolean {
+    const mapping = this.mapScreenPixel(x, y);
+    if (!mapping) {
+      return false;
+    }
+    const value = this.lcdRawVram[mapping.page * 0x80 + mapping.x] ?? 0;
+    return (value & (1 << mapping.bit)) !== 0;
+  }
+
+  private mapScreenPixel(x: number, y: number): { x: number; page: number; bit: number } | null {
+    const ix = Math.trunc(x);
+    const iy = Math.trunc(y);
+    if (ix < 0 || ix >= LCD_WIDTH || iy < 0 || iy >= LCD_HEIGHT) {
+      return null;
+    }
+
+    const page = iy >> 3;
+    const bit = iy & 0x07;
+    if (ix < LCD_HALF_WIDTH) {
+      return { x: ix & 0x7f, page, bit };
+    }
+    return {
+      x: (LCD_HALF_WIDTH - 1 - (ix - LCD_HALF_WIDTH)) & 0x7f,
+      page: (page + 4) & 0x07,
+      bit
+    };
+  }
+
+  private decodeCellCode(frame: Uint8Array, col: number, row: number): number {
+    const originX = col * LCD_GLYPH_PITCH_X;
+    const originY = row * LCD_GLYPH_PITCH_Y;
+    let bestCode = SPACE_CODE;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (let code = 0x20; code <= 0xff; code += 1) {
+      if (!hasGlyphForCode(code)) {
+        continue;
+      }
+      const glyph = getGlyphForCode(code);
+      let score = 0;
+      for (let y = 0; y < LCD_GLYPH_HEIGHT; y += 1) {
+        const bits = glyph[y] ?? 0;
+        for (let x = 0; x < LCD_GLYPH_WIDTH; x += 1) {
+          const expected = ((bits >> (LCD_GLYPH_WIDTH - 1 - x)) & 0x01) !== 0 ? 1 : 0;
+          const actual = frame[(originY + y) * LCD_WIDTH + (originX + x)] ?? 0;
+          if (expected !== actual) {
+            score += 1;
+          }
+        }
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        bestCode = code;
+        if (score === 0) {
+          break;
+        }
+      }
+    }
+
+    return bestScore <= 6 ? bestCode : SPACE_CODE;
+  }
+
   private normalizeFilePath(path: string): string {
     if (path.startsWith('E:') || path.startsWith('e:')) {
       return path.slice(2);
@@ -1755,10 +1864,10 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     // firmware-monitor から見える操作だけを束ねて公開する。
     return {
       clearLcd: () => {
-        this.handleLcdCommand(0x01);
+        this.clearRawScreen();
       },
       writeLcdChar: (charCode: number) => {
-        this.handleLcdData(charCode & 0xff);
+        this.writeCompatTextChar(charCode & 0xff);
       },
       setDisplayStartLine: (line: number) => {
         const offset = WORKAREA_DISPLAY_START_LINE - RAM_REGION.start;
@@ -1766,10 +1875,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.dirtyFrame = true;
       },
       setTextCursor: (col: number, row: number) => {
-        const safeCol = Math.max(0, Math.min(LCD_COLS - 1, col | 0));
-        const safeRow = Math.max(0, Math.min(LCD_ROWS - 1, row | 0));
-        this.lcdCursor = safeRow * LCD_COLS + safeCol;
-        this.lcdPendingWrap = false;
+        this.textCursorCol = Math.max(0, Math.min(LCD_COLS - 1, col | 0));
+        this.textCursorRow = Math.max(0, Math.min(LCD_ROWS - 1, row | 0));
+        this.textCursorPendingWrap = false;
       },
       getDisplayStartLine: () => this.getDisplayStartLine(),
       readKeyMatrix: (row: number) => this.keyboardRows[row & 0x07] ?? 0xff,

@@ -17,6 +17,10 @@
 ; ----------------------------------------------------------------------------
 OUT_LCD_CHAR:
   PUSH AF
+  LD A,0x01
+  LD (RAM_LCD_TEXT_MODE),A
+  POP AF
+  PUSH AF
   OUT (LCD_PORT),A
   POP AF
   CALL TRACK_LCD_CHAR
