@@ -164,8 +164,8 @@ VAR_ENTRY_SIZE      EQU 6
 VAR_MAX_ENTRIES     EQU 64
 
 INCLUDE "command_tokens.asm"
+INCLUDE "bios_api.asm"
 INCLUDE "line_input.asm"
-INCLUDE "generated_font5x7.asm"
 INCLUDE "runtime_io.asm"
 INCLUDE "program_store.asm"
 INCLUDE "runtime_exec.asm"
