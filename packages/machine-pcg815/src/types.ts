@@ -78,6 +78,8 @@ export interface MachinePCG815 {
   isRuntimeProgramRunning(): boolean;
   getFrameBuffer(): Uint8Array;
   getFrameRevision(): number;
+  writeDisplayTextAt(col: number, row: number, text: string): void;
+  restoreFirmwareMainLoopState(): void;
   getCpuState(): CpuState;
   getCpuPinsOut(): Z80PinsOut;
   getCpuPinsIn(): CpuPinsInSnapshot;

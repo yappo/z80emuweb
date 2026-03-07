@@ -13,11 +13,13 @@ const LCD_PRIMARY_DATA_PORT = 0x5a;
 const KEY_STROBE_PORT = 0x11;
 const KEY_READ_PORT = 0x10;
 
-export const MONITOR_MAIN_LOOP_ADDR = 0x0400;
+export const MONITOR_PROMPT_RESUME_ADDR = 0x0287;
+export const MONITOR_MAIN_LOOP_ADDR = 0x02a3;
 export const MONITOR_PROMPT_CURSOR_COL = 2;
 export const MONITOR_PROMPT_CURSOR_ROW = 2;
 
 const BOOT_LINES = ['PC-G815 COMPAT', 'BASIC READY', '> '];
+const RESUME_LINES = ['', '', '> '];
 
 function row(bits: string): number {
   return Number.parseInt(bits, 2) & 0x1f;
@@ -78,9 +80,9 @@ function drawGlyph(rawPages: Uint8Array, originX: number, originY: number, ch: s
   }
 }
 
-function buildBootRawPages(): Uint8Array {
+function buildRawPages(lines: readonly string[]): Uint8Array {
   const rawPages = new Uint8Array(8 * LCD_HALF_WIDTH);
-  BOOT_LINES.forEach((line, rowIndex) => {
+  lines.forEach((line, rowIndex) => {
     const originY = rowIndex * LCD_GLYPH_PITCH_Y;
     [...line].forEach((ch, colIndex) => {
       drawGlyph(rawPages, colIndex * LCD_GLYPH_PITCH_X, originY, ch);
@@ -123,13 +125,20 @@ function emitPageSpan(code: number[], rawPages: Uint8Array, page: number, rawSta
 }
 
 function buildBootDrawCode(): number[] {
-  const rawPages = buildBootRawPages();
+  const rawPages = buildRawPages(BOOT_LINES);
+  const resumeRawPages = buildRawPages(RESUME_LINES);
   const code: number[] = [0x31, 0xff, 0x7f];
 
   for (let page = 0; page < 8; page += 1) {
     emitPageSpan(code, rawPages, page, 0, 59);
     emitPageSpan(code, rawPages, page, 60, 71);
   }
+
+  while (code.length < MONITOR_PROMPT_RESUME_ADDR) {
+    code.push(0x00);
+  }
+
+  emitPageSpan(code, resumeRawPages, 2, 0, 59);
 
   while (code.length < MONITOR_MAIN_LOOP_ADDR) {
     code.push(0x00);

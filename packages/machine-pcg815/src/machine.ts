@@ -5,6 +5,7 @@ import {
   type BasicMachineAdapter,
   createMonitorRom,
   MONITOR_MAIN_LOOP_ADDR,
+  MONITOR_PROMPT_RESUME_ADDR,
   MONITOR_PROMPT_CURSOR_COL,
   MONITOR_PROMPT_CURSOR_ROW,
   type MonitorRuntimeSnapshot,
@@ -334,7 +335,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private readonly basicRamEnd: number;
   private readonly basicInterpreterRomBank: number;
   private executionDomain: PCG815ExecutionDomain = 'firmware';
-  private firmwareReturnAddress = MONITOR_MAIN_LOOP_ADDR;
+  private firmwareReturnAddress = MONITOR_PROMPT_RESUME_ADDR;
 
   private readonly frameBuffer = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
   private readonly keyboardRows = new Uint8Array(8);
@@ -424,7 +425,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     const monitorRom = options?.rom ?? createMonitorRom();
     this.bootstrapImage = new Uint8Array(monitorRom);
     this.executionBackend = options?.executionBackend ?? 'z80-firmware';
-    this.firmwareReturnAddress = clamp16(options?.firmwareReturnAddress ?? MONITOR_MAIN_LOOP_ADDR);
+    this.firmwareReturnAddress = clamp16(options?.firmwareReturnAddress ?? MONITOR_PROMPT_RESUME_ADDR);
     this.basicInterpreterEntry = clamp16(options?.basicInterpreterEntry ?? basicBundle.entry ?? BASIC_INTERPRETER_DEFAULT_ENTRY);
     this.basicRamStart = clamp16(options?.basicRamStart ?? BASIC_INTERPRETER_DEFAULT_RAM_START);
     this.basicRamEnd = clamp16(options?.basicRamEnd ?? BASIC_INTERPRETER_DEFAULT_RAM_END);
@@ -631,6 +632,21 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       this.renderFrameBuffer();
     }
     return this.frameRevision;
+  }
+
+  writeDisplayTextAt(col: number, row: number, text: string): void {
+    this.textCursorCol = Math.max(0, Math.min(LCD_COLS - 1, col | 0));
+    this.textCursorRow = Math.max(0, Math.min(LCD_ROWS - 1, row | 0));
+    this.textCursorPendingWrap = false;
+    for (const ch of text) {
+      this.writeTextChar(ch.charCodeAt(0) & 0xff);
+    }
+  }
+
+  restoreFirmwareMainLoopState(): void {
+    this.setCpuProgramCounter(this.firmwareReturnAddress & 0xffff);
+    this.setStackPointer(0x7fff);
+    this.executionDomain = 'firmware';
   }
 
   setKanaMode(enabled: boolean): void {
@@ -1253,8 +1269,16 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private writeRawLcdAt(x: number, y: number, value: number): void {
     const xx = x & 0x7f;
     const yy = y & 0x07;
-    this.lcdRawVram[yy * 0x80 + xx] = value & 0xff;
-    this.dirtyFrame = true;
+    const offset = yy * 0x80 + xx;
+    const next = value & 0xff;
+    if ((this.lcdRawVram[offset] ?? 0) === next) {
+      return;
+    }
+    this.lcdRawVram[offset] = next;
+    if (this.dirtyFrame) {
+      return;
+    }
+    this.updateFrameBufferFromRawByte(xx, yy, next);
   }
 
   private seedBootstrapInMainRam(): void {
@@ -1695,14 +1719,22 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     const offset = mapping.page * 0x80 + mapping.x;
     const mask = 1 << mapping.bit;
     const current = this.lcdRawVram[offset] ?? 0;
+    let next = current;
     if (mode === 0) {
-      this.lcdRawVram[offset] = current & ~mask;
+      next = current & ~mask;
     } else if (mode === 2) {
-      this.lcdRawVram[offset] = current ^ mask;
+      next = current ^ mask;
     } else {
-      this.lcdRawVram[offset] = current | mask;
+      next = current | mask;
     }
-    this.dirtyFrame = true;
+    if (next === current) {
+      return;
+    }
+    this.lcdRawVram[offset] = next;
+    if (this.dirtyFrame) {
+      return;
+    }
+    this.updateFrameBufferFromRawByte(mapping.x, mapping.page, next);
   }
 
   private readScreenPixel(x: number, y: number): boolean {
@@ -1731,6 +1763,24 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       page: (page + 4) & 0x07,
       bit
     };
+  }
+
+  private updateFrameBufferFromRawByte(rawX: number, rawPage: number, value: number): void {
+    if (rawX < 0 || rawX >= LCD_HALF_WIDTH || rawPage < 0 || rawPage >= 8) {
+      return;
+    }
+
+    const visibleX = rawPage < 4 ? rawX : LCD_HALF_WIDTH + (LCD_HALF_WIDTH - 1 - rawX);
+    const sourceBaseY = (rawPage & 0x03) * 8;
+    const verticalScroll = this.getDisplayStartLine();
+
+    for (let bit = 0; bit < 8; bit += 1) {
+      const sourceY = sourceBaseY + bit;
+      const visibleY = (sourceY - verticalScroll + LCD_HEIGHT) % LCD_HEIGHT;
+      this.frameBuffer[visibleY * LCD_WIDTH + visibleX] = (value >> bit) & 0x01;
+    }
+
+    this.frameRevision = (this.frameRevision + 1) >>> 0;
   }
 
   private normalizeFilePath(path: string): string {

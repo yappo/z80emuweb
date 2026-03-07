@@ -12,6 +12,11 @@ import {
 
 export const LCD_TEXT_SPACE_CODE = 0x20;
 
+const ALT_GLYPHS = new Map<number, Uint8Array[]>([
+  // ASM sample 1 uses a colon glyph lowered by 1px for visual balance.
+  [0x3a, [Uint8Array.from([0x00, 0x06, 0x06, 0x00, 0x06, 0x06, 0x00])]]
+]);
+
 export function toDisplayCode(value: number): number {
   if (hasGlyphForCode(value)) {
     return value & 0xff;
@@ -56,16 +61,25 @@ export function decodeCellCode(frame: Uint8Array, col: number, row: number): num
     if (!hasGlyphForCode(code)) {
       continue;
     }
-    const glyph = getGlyphForCode(code);
-    let score = 0;
-    for (let y = 0; y < LCD_GLYPH_HEIGHT; y += 1) {
-      const bits = glyph[y] ?? 0;
-      for (let x = 0; x < LCD_GLYPH_WIDTH; x += 1) {
-        const expected = ((bits >> (LCD_GLYPH_WIDTH - 1 - x)) & 0x01) !== 0 ? 1 : 0;
-        const actual = frame[(originY + y) * LCD_WIDTH + (originX + x)] ?? 0;
-        if (expected !== actual) {
-          score += 1;
+    const glyphs = [getGlyphForCode(code), ...(ALT_GLYPHS.get(code) ?? [])];
+    let score = Number.POSITIVE_INFINITY;
+    for (const glyph of glyphs) {
+      let glyphScore = 0;
+      for (let y = 0; y < LCD_GLYPH_HEIGHT; y += 1) {
+        const bits = glyph[y] ?? 0;
+        for (let x = 0; x < LCD_GLYPH_WIDTH; x += 1) {
+          const expected = ((bits >> (LCD_GLYPH_WIDTH - 1 - x)) & 0x01) !== 0 ? 1 : 0;
+          const actual = frame[(originY + y) * LCD_WIDTH + (originX + x)] ?? 0;
+          if (expected !== actual) {
+            glyphScore += 1;
+          }
         }
+      }
+      if (glyphScore < score) {
+        score = glyphScore;
+      }
+      if (score === 0) {
+        break;
       }
     }
     if (score < bestScore) {

@@ -535,7 +535,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 9060 PRINT "Press SPACE to END"
 9070 GOSUB 7100
 9080 END`;
-const ASM_SAMPLE = `ORG 0x0200
+const ASM_SAMPLE = `ORG 0x0300
 ENTRY START
 
 LCD_CMD1      EQU 0x58
@@ -546,32 +546,92 @@ LCD_HALF_COLS EQU 12
 LCD_PAGE_COLS EQU 72
 MAX_LEN       EQU 12
 LAST_COL      EQU 23
+CHAR_BS       EQU 0x08
+CHAR_CR       EQU 0x0D
+PROMPT_IN_COL EQU 12
+PROMPT_OUT_COL EQU 10
 
 START:
   CALL LCD_CLEAR_SCREEN
-  XOR A
-  LD (CUR_COL),A
-  LD (CUR_ROW),A
-  LD HL,PROMPT_IN
-  CALL PRINT_STR
-  LD D,1
+
+  LD D,0
   LD E,0
   CALL LCD_SET_CURSOR
-  LD HL,INPUT_WORD
+  LD HL,PROMPT_IN
   CALL PRINT_STR
-  LD D,2
+
+  LD D,1
   LD E,0
   CALL LCD_SET_CURSOR
   LD HL,PROMPT_OUT
   CALL PRINT_STR
-  LD D,3
-  LD E,0
+
+  LD D,0
+  LD E,PROMPT_IN_COL
   CALL LCD_SET_CURSOR
-  LD HL,OUTPUT_WORD
-  CALL PRINT_STR
+  LD HL,BUFFER
+  XOR A
+  LD (LEN),A
+
+READ_LOOP:
+  PUSH HL
+  CALL READ_KEY
+  POP HL
+  CP CHAR_CR
+  JR Z,INPUT_DONE
+  CP CHAR_BS
+  JR Z,HANDLE_BACKSPACE
+  CP 0x20
+  JR C,READ_LOOP
+
+  LD C,A
+  LD A,(LEN)
+  CP MAX_LEN
+  JR NC,READ_LOOP
+  LD A,C
+  LD (HL),A
+  INC HL
+  LD A,(LEN)
+  INC A
+  LD (LEN),A
+  LD A,C
+  CALL PRINT_CHAR
+  JR READ_LOOP
+
+HANDLE_BACKSPACE:
+  LD A,(LEN)
+  OR A
+  JR Z,READ_LOOP
+  DEC HL
+  DEC A
+  LD (LEN),A
+  CALL CURSOR_LEFT
+  CALL CLEAR_CELL
+  JR READ_LOOP
+
+INPUT_DONE:
+  LD D,1
+  LD E,PROMPT_OUT_COL
+  CALL LCD_SET_CURSOR
+
+  LD A,(LEN)
+  OR A
+  JR Z,DONE
+  LD B,A
+  LD HL,BUFFER
+  LD E,A
+  LD D,0
+  ADD HL,DE
+  DEC HL
+
+PRINT_REVERSED:
+  LD A,(HL)
+  CALL PRINT_CHAR
+  DEC HL
+  DJNZ PRINT_REVERSED
 
 DONE:
-  HALT
+  RET
 
 PRINT_STR:
   LD A,(HL)
@@ -725,12 +785,10 @@ LCD_CLEAR_COL:
 
 GET_GLYPH_PTR:
   CP 0x20
-  JR Z,GET_GLYPH_SPACE
-  CP 0x41
   JR C,GET_GLYPH_SPACE
-  CP 0x5B
+  CP 0x7F
   JR NC,GET_GLYPH_SPACE
-  SUB 0x41
+  SUB 0x20
   LD E,A
   LD D,0
   LD L,A
@@ -738,12 +796,12 @@ GET_GLYPH_PTR:
   ADD HL,HL
   ADD HL,HL
   ADD HL,DE
-  LD DE,FONT_UPPER
+  LD DE,FONT_ASCII
   ADD HL,DE
   RET
 
 GET_GLYPH_SPACE:
-  LD HL,FONT_SPACE
+  LD HL,FONT_ASCII
   RET
 
 READ_KEY:
@@ -831,13 +889,9 @@ TABLE_OK:
   RET
 
 PROMPT_IN:
-  DB "INPUT WORD",0
-INPUT_WORD:
-  DB "HELLO",0
+  DB "Input Word: ",0
 PROMPT_OUT:
-  DB "REVERSED",0
-OUTPUT_WORD:
-  DB "OLLEH",0
+  DB "Reversed: ",0
 CUR_COL:
   DB 0
 CUR_ROW:
@@ -847,9 +901,40 @@ LEN:
 BUFFER:
   DS 12,0
 
-FONT_SPACE:
+FONT_ASCII:
   DB 0x00,0x00,0x00,0x00,0x00
-FONT_UPPER:
+  DB 0x00,0x00,0x5f,0x00,0x00
+  DB 0x00,0x07,0x00,0x07,0x00
+  DB 0x12,0x3f,0x12,0x3f,0x12
+  DB 0x24,0x2a,0x7f,0x2a,0x12
+  DB 0x13,0x0b,0x34,0x32,0x01
+  DB 0x36,0x49,0x55,0x22,0x50
+  DB 0x00,0x0b,0x07,0x00,0x00
+  DB 0x00,0x1c,0x22,0x41,0x00
+  DB 0x00,0x41,0x22,0x1c,0x00
+  DB 0x08,0x2a,0x1c,0x2a,0x08
+  DB 0x08,0x08,0x3e,0x08,0x08
+  DB 0x00,0x00,0x50,0x30,0x00
+  DB 0x08,0x08,0x08,0x08,0x08
+  DB 0x00,0x00,0x60,0x60,0x00
+  DB 0x10,0x08,0x04,0x02,0x01
+  DB 0x3e,0x51,0x49,0x45,0x3e
+  DB 0x00,0x42,0x7f,0x40,0x00
+  DB 0x42,0x61,0x51,0x49,0x46
+  DB 0x41,0x49,0x49,0x49,0x36
+  DB 0x18,0x14,0x12,0x7f,0x10
+  DB 0x4f,0x49,0x49,0x49,0x31
+  DB 0x3e,0x49,0x49,0x49,0x30
+  DB 0x01,0x71,0x09,0x05,0x03
+  DB 0x36,0x49,0x49,0x49,0x36
+  DB 0x06,0x49,0x49,0x49,0x3e
+  DB 0x00,0x00,0x36,0x36,0x00
+  DB 0x00,0x00,0x5b,0x3b,0x00
+  DB 0x08,0x14,0x22,0x41,0x00
+  DB 0x0a,0x0a,0x0a,0x0a,0x0a
+  DB 0x00,0x41,0x22,0x14,0x08
+  DB 0x02,0x01,0x51,0x09,0x06
+  DB 0x32,0x49,0x79,0x41,0x3e
   DB 0x7e,0x09,0x09,0x09,0x7e
   DB 0x7f,0x49,0x49,0x49,0x36
   DB 0x3e,0x41,0x41,0x41,0x22
@@ -876,6 +961,42 @@ FONT_UPPER:
   DB 0x63,0x14,0x08,0x14,0x63
   DB 0x03,0x04,0x78,0x04,0x03
   DB 0x61,0x51,0x49,0x45,0x43
+  DB 0x00,0x7f,0x41,0x41,0x00
+  DB 0x01,0x02,0x04,0x08,0x10
+  DB 0x00,0x41,0x41,0x7f,0x00
+  DB 0x00,0x06,0x01,0x06,0x00
+  DB 0x40,0x40,0x40,0x40,0x40
+  DB 0x00,0x00,0x07,0x0b,0x00
+  DB 0x30,0x4a,0x4a,0x2a,0x7c
+  DB 0x7f,0x28,0x44,0x44,0x38
+  DB 0x3c,0x42,0x42,0x42,0x24
+  DB 0x38,0x44,0x44,0x28,0x7f
+  DB 0x3c,0x4a,0x4a,0x4a,0x2c
+  DB 0x08,0x7e,0x09,0x01,0x02
+  DB 0x0c,0x52,0x52,0x4c,0x3e
+  DB 0x7f,0x08,0x04,0x04,0x78
+  DB 0x00,0x44,0x7d,0x40,0x00
+  DB 0x20,0x40,0x44,0x3d,0x00
+  DB 0x7f,0x10,0x28,0x44,0x00
+  DB 0x00,0x41,0x7f,0x40,0x00
+  DB 0x7e,0x02,0x7c,0x02,0x7c
+  DB 0x7e,0x04,0x02,0x02,0x7c
+  DB 0x3c,0x42,0x42,0x42,0x3c
+  DB 0x7e,0x0c,0x12,0x12,0x0c
+  DB 0x0c,0x12,0x12,0x0c,0x7e
+  DB 0x7e,0x04,0x02,0x02,0x04
+  DB 0x44,0x4a,0x4a,0x4a,0x32
+  DB 0x04,0x3f,0x44,0x40,0x20
+  DB 0x3e,0x40,0x20,0x10,0x7e
+  DB 0x1e,0x20,0x40,0x20,0x1e
+  DB 0x3e,0x40,0x38,0x40,0x3e
+  DB 0x22,0x14,0x08,0x14,0x22
+  DB 0x0e,0x50,0x50,0x48,0x3e
+  DB 0x44,0x64,0x54,0x4c,0x44
+  DB 0x00,0x08,0x77,0x41,0x00
+  DB 0x00,0x00,0x7f,0x00,0x00
+  DB 0x00,0x41,0x77,0x08,0x00
+  DB 0x02,0x01,0x02,0x04,0x02
 
 NORMAL_TABLE:
   DB 0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48
@@ -888,91 +1009,788 @@ NORMAL_TABLE:
   DB 0x00,0x00,0x0D,0x08,0x20,0x00,0x00,0x00
 
 SHIFT_TABLE:
-  DB 0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48
-  DB 0x49,0x4A,0x4B,0x4C,0x4D,0x4E,0x4F,0x50
-  DB 0x51,0x52,0x53,0x54,0x55,0x56,0x57,0x58
-  DB 0x59,0x5A,0x00,0x00,0x00,0x00,0x00,0x00
-  DB 0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00
-  DB 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
-  DB 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+  DB 0x61,0x62,0x63,0x64,0x65,0x66,0x67,0x68
+  DB 0x69,0x6A,0x6B,0x6C,0x6D,0x6E,0x6F,0x70
+  DB 0x71,0x72,0x73,0x74,0x75,0x76,0x77,0x78
+  DB 0x79,0x7A,0x3A,0x22,0x7B,0x7D,0x7C,0x7E
+  DB 0x09,0x1B,0x08,0x00,0x00,0x00,0x00,0x00
+  DB 0x26,0x2A,0x28,0x5F,0x2B,0x3C,0x3E,0x3F
+  DB 0x00,0x29,0x21,0x40,0x23,0x24,0x25,0x5E
   DB 0x00,0x00,0x0D,0x08,0x20,0x00,0x00,0x00`;
-const ASM_SAMPLE_3D = `ORG 0x0200
+const ASM_SAMPLE_3D = `ORG 0x0300
 ENTRY START
 
-LCD_CMD_DUAL  EQU 0x50
-LCD_CMD1      EQU 0x58
-LCD_DATA1     EQU 0x5A
-LCD_CMD2      EQU 0x54
-LCD_DATA2     EQU 0x56
-LCD_PAGE_COLS EQU 72
+LCD_CMD     EQU 0x58
+LCD_DATA    EQU 0x5A
+
+CMD_FWD     EQU 0x00
+CMD_TURN_L  EQU 0x01
+CMD_TURN_R  EQU 0x02
+CMD_END     EQU 0xFF
+
+DIR_NORTH   EQU 0x00
+DIR_EAST    EQU 0x01
+DIR_SOUTH   EQU 0x02
+DIR_WEST    EQU 0x03
+
+RAY_COUNT   EQU 24
+DEPTH_LIMIT EQU 7
+MOVE_INTERVAL EQU 1
+FRAME_LIMIT EQU 40
 
 START:
+  LD A,0x01
+  OUT (LCD_CMD),A
+
+  LD A,1
+  LD (POS_X),A
+  LD A,1
+  LD (POS_Y),A
+  LD A,DIR_EAST
+  LD (DIR),A
   XOR A
-  LD (FRAME),A
+  LD (ROUTE_PTR),A
+  LD (FRAME_TICK),A
+  LD (MOVE_WAIT),A
 
 MAIN_LOOP:
-  LD A,(FRAME)
-  CALL DRAW_FRAME
-  LD A,(FRAME)
+  CALL UPDATE_CAMERA
+  CALL CAST_ALL_RAYS
+  CALL RENDER_FRAME
+  CALL BLIT_FRAME
+  CALL FRAME_DELAY
+
+  LD A,(FRAME_TICK)
   INC A
-  LD (FRAME),A
-  JR MAIN_LOOP
-
-DRAW_FRAME:
-  LD D,A
-  AND 0x07
-  LD C,A
-  LD A,D
-  AND 0x1F
-  OR 0xC0
-  OUT (LCD_CMD_DUAL),A
-  LD A,D
-  CALL MOD72
-  LD B,A
-  LD A,0x81
-  CALL LCD_WRITE_RAW_BYTE
-
-  LD A,D
-  ADD A,19
-  CALL MOD72
-  LD B,A
-  LD A,0x18
-  CALL LCD_WRITE_RAW_BYTE
+  LD (FRAME_TICK),A
+  CP FRAME_LIMIT
+  JR C,MAIN_LOOP
   RET
 
-MOD72:
-  CP 72
-  RET C
-  SUB 72
-  JR MOD72
+UPDATE_CAMERA:
+  LD A,(MOVE_WAIT)
+  INC A
+  CP MOVE_INTERVAL
+  JR C,WAIT_MORE
+  XOR A
+  LD (MOVE_WAIT),A
+  JR UPDATE_ROUTE
+WAIT_MORE:
+  LD (MOVE_WAIT),A
+  RET
 
-LCD_WRITE_RAW_BYTE:
+UPDATE_ROUTE:
+  LD A,(ROUTE_PTR)
+  LD E,A
+  LD D,0
+  LD HL,ROUTE_TABLE
+  ADD HL,DE
+  LD A,(HL)
+  CP CMD_END
+  JR NZ,ROUTE_READY
+
+  XOR A
+  LD (ROUTE_PTR),A
+  LD HL,ROUTE_TABLE
+  LD A,(HL)
+
+ROUTE_READY:
+  CP CMD_FWD
+  JR Z,ROUTE_FWD
+  CP CMD_TURN_L
+  JR Z,ROUTE_L
+  CP CMD_TURN_R
+  JR Z,ROUTE_R
+  JR ROUTE_NEXT
+
+ROUTE_FWD:
+  CALL TRY_FORWARD
+  JR ROUTE_NEXT
+
+ROUTE_L:
+  LD A,(DIR)
+  DEC A
+  AND 0x03
+  LD (DIR),A
+  JR ROUTE_NEXT
+
+ROUTE_R:
+  LD A,(DIR)
+  INC A
+  AND 0x03
+  LD (DIR),A
+
+ROUTE_NEXT:
+  LD A,(ROUTE_PTR)
+  INC A
+  LD (ROUTE_PTR),A
+  RET
+
+TRY_FORWARD:
+  LD A,(DIR)
+  AND 0x03
+  LD E,A
+  LD D,0
+
+  LD HL,FWD_DX
+  ADD HL,DE
+  LD A,(POS_X)
+  ADD A,(HL)
+  LD B,A
+
+  LD HL,FWD_DY
+  ADD HL,DE
+  LD A,(POS_Y)
+  ADD A,(HL)
+  LD C,A
+
+  CALL IS_WALL_BC
+  OR A
+  RET NZ
+
+  LD A,B
+  LD (POS_X),A
+  LD A,C
+  LD (POS_Y),A
+  RET
+
+CAST_ALL_RAYS:
+  XOR A
+  LD (RAY_INDEX),A
+
+CAST_RAY_LOOP:
+  LD A,(RAY_INDEX)
+  CP RAY_COUNT
+  RET NC
+
+  CALL CAST_ONE_RAY
+
+  LD A,(RAY_INDEX)
+  INC A
+  LD (RAY_INDEX),A
+  JR CAST_RAY_LOOP
+
+CAST_ONE_RAY:
+  LD A,(RAY_INDEX)
+  LD (CUR_RAY),A
+
+  LD A,(CUR_RAY)
+  LD B,A
+  ADD A,A
+  ADD A,A
+  LD C,A
+  LD A,B
+  ADD A,A
+  ADD A,C
+  LD E,A
+  LD D,0
+
+  LD HL,RAY_OFS_X
+  ADD HL,DE
+  LD (PTR_X),HL
+
+  LD HL,RAY_OFS_Y
+  ADD HL,DE
+  LD (PTR_Y),HL
+
+  LD A,1
+  LD (CUR_DEPTH),A
+
+CAST_DEPTH_LOOP:
+  LD HL,(PTR_X)
+  LD D,(HL)
+  INC HL
+  LD (PTR_X),HL
+
+  LD HL,(PTR_Y)
+  LD E,(HL)
+  INC HL
+  LD (PTR_Y),HL
+
+  CALL ROTATE_DE
+
+  LD A,(POS_X)
+  ADD A,D
+  LD B,A
+  LD (HIT_X),A
+
+  LD A,(POS_Y)
+  ADD A,E
+  LD C,A
+  LD (HIT_Y),A
+
+  CALL IS_WALL_BC
+  OR A
+  JR NZ,CAST_HIT
+
+  LD A,(CUR_DEPTH)
+  INC A
+  LD (CUR_DEPTH),A
+  CP DEPTH_LIMIT
+  JR C,CAST_DEPTH_LOOP
+
+  LD A,DEPTH_LIMIT
+  LD (DEPTH_WORK),A
+  XOR A
+  LD (OPEN_SIDE),A
+  JR CAST_STORE
+
+CAST_HIT:
+  LD A,(CUR_DEPTH)
+  LD (DEPTH_WORK),A
+
+  CALL CHECK_SIDE_OPEN
+  LD (OPEN_SIDE),A
+
+CAST_STORE:
+  LD A,(CUR_RAY)
+  LD E,A
+  LD D,0
+
+  LD HL,RAY_DEPTH
+  ADD HL,DE
+  LD A,(DEPTH_WORK)
+  LD (HL),A
+
+  LD HL,RAY_OPEN
+  ADD HL,DE
+  LD A,(OPEN_SIDE)
+  LD (HL),A
+  RET
+
+CHECK_SIDE_OPEN:
+  LD A,(CUR_RAY)
+  CP 12
+  JR C,CHECK_LEFT
+  CALL SIDE_VEC_RIGHT
+  JR CHECK_SIDE_VEC
+
+CHECK_LEFT:
+  CALL SIDE_VEC_LEFT
+
+CHECK_SIDE_VEC:
+  LD A,(HIT_X)
+  ADD A,D
+  LD B,A
+  LD A,(HIT_Y)
+  ADD A,E
+  LD C,A
+  CALL IS_WALL_BC
+  OR A
+  JR Z,SIDE_OPEN_YES
+  XOR A
+  RET
+
+SIDE_OPEN_YES:
+  LD A,1
+  RET
+
+ROTATE_DE:
+  LD A,(DIR)
+  AND 0x03
+  CP DIR_NORTH
+  RET Z
+  CP DIR_EAST
+  JR Z,ROT_EAST
+  CP DIR_SOUTH
+  JR Z,ROT_SOUTH
+
+ROT_WEST:
+  LD A,D
+  CPL
+  INC A
+  LD B,A
+  LD A,E
+  LD D,A
+  LD E,B
+  RET
+
+ROT_EAST:
+  LD A,E
+  CPL
+  INC A
+  LD B,A
+  LD A,D
+  LD E,A
+  LD D,B
+  RET
+
+ROT_SOUTH:
+  LD A,D
+  CPL
+  INC A
+  LD D,A
+  LD A,E
+  CPL
+  INC A
+  LD E,A
+  RET
+
+SIDE_VEC_LEFT:
+  LD A,(DIR)
+  AND 0x03
+  CP DIR_NORTH
+  JR Z,SIDE_L_N
+  CP DIR_EAST
+  JR Z,SIDE_L_E
+  CP DIR_SOUTH
+  JR Z,SIDE_L_S
+  LD D,0x00
+  LD E,0x01
+  RET
+SIDE_L_N:
+  LD D,0xFF
+  LD E,0x00
+  RET
+SIDE_L_E:
+  LD D,0x00
+  LD E,0xFF
+  RET
+SIDE_L_S:
+  LD D,0x01
+  LD E,0x00
+  RET
+
+SIDE_VEC_RIGHT:
+  LD A,(DIR)
+  AND 0x03
+  CP DIR_NORTH
+  JR Z,SIDE_R_N
+  CP DIR_EAST
+  JR Z,SIDE_R_E
+  CP DIR_SOUTH
+  JR Z,SIDE_R_S
+  LD D,0x00
+  LD E,0xFF
+  RET
+SIDE_R_N:
+  LD D,0x01
+  LD E,0x00
+  RET
+SIDE_R_E:
+  LD D,0x00
+  LD E,0x01
+  RET
+SIDE_R_S:
+  LD D,0xFF
+  LD E,0x00
+  RET
+
+IS_WALL_BC:
+  LD A,B
+  CP 8
+  JR NC,IS_WALL_TRUE
+  LD A,C
+  CP 8
+  JR NC,IS_WALL_TRUE
+
+  LD A,C
+  ADD A,A
+  ADD A,A
+  ADD A,A
+  ADD A,B
+  LD L,A
+  LD H,0
+  LD DE,MAZE_DATA
+  ADD HL,DE
+  LD A,(HL)
+  OR A
+  RET
+
+IS_WALL_TRUE:
+  LD A,1
+  RET
+
+RENDER_FRAME:
+  CALL CLEAR_FRAME
+  CALL DETECT_OPENINGS
+  CALL DRAW_BASE_FRAME
+  CALL DRAW_ROUTE_PATTERN
+  RET
+
+CLEAR_FRAME:
+  LD HL,FRAME_BUF
+  LD B,96
+  LD A,0x20
+CLEAR_LOOP:
+  LD (HL),A
+  INC HL
+  DJNZ CLEAR_LOOP
+  RET
+
+DETECT_OPENINGS:
+  LD A,(DIR)
+  CALL CHECK_OPEN_DIR
+  LD (OPEN_FRONT),A
+
+  LD A,(DIR)
+  ADD A,3
+  AND 0x03
+  CALL CHECK_OPEN_DIR
+  LD (OPEN_LEFT),A
+
+  LD A,(DIR)
+  INC A
+  AND 0x03
+  CALL CHECK_OPEN_DIR
+  LD (OPEN_RIGHT),A
+  RET
+
+CHECK_OPEN_DIR:
+  LD E,A
+  LD D,0
+
+  LD HL,FWD_DX
+  ADD HL,DE
+  LD A,(POS_X)
+  ADD A,(HL)
+  LD B,A
+
+  LD HL,FWD_DY
+  ADD HL,DE
+  LD A,(POS_Y)
+  ADD A,(HL)
+  LD C,A
+
+  CALL IS_WALL_BC
+  OR A
+  JR Z,OPEN_YES
+  XOR A
+  RET
+OPEN_YES:
+  LD A,1
+  RET
+
+DRAW_BASE_FRAME:
+  LD A,0x94
+  LD B,0
+  LD C,1
+  LD D,22
+  CALL DRAW_HLINE
+
+  LD A,0x95
+  LD B,3
+  LD C,1
+  LD D,22
+  CALL DRAW_HLINE
+
+  LD A,(OPEN_LEFT)
+  OR A
+  JR NZ,BASE_LEFT_OPEN
+  LD A,0x88
+  LD B,1
+  LD C,1
+  LD D,2
+  CALL DRAW_VLINE
+  LD A,0xEF
+  LD B,0
+  LD C,1
+  CALL PUT_XY
+  JR BASE_RIGHT
+BASE_LEFT_OPEN:
+  LD A,0xEF
+  LD B,0
+  LD C,4
+  CALL PUT_XY
+  LD A,0x88
+  LD B,1
+  LD C,4
+  LD D,2
+  CALL DRAW_VLINE
+
+BASE_RIGHT:
+  LD A,(OPEN_RIGHT)
+  OR A
+  JR NZ,BASE_RIGHT_OPEN
+  LD A,0x97
+  LD B,1
+  LD C,22
+  LD D,2
+  CALL DRAW_VLINE
+  LD A,0xEE
+  LD B,0
+  LD C,22
+  CALL PUT_XY
+  RET
+BASE_RIGHT_OPEN:
+  LD A,0xEE
+  LD B,0
+  LD C,19
+  CALL PUT_XY
+  LD A,0x97
+  LD B,1
+  LD C,19
+  LD D,2
+  CALL DRAW_VLINE
+  RET
+
+DRAW_ROUTE_PATTERN:
+  LD A,(OPEN_FRONT)
+  OR A
+  JR Z,DRAW_FRONT_BLOCK
+  CALL DRAW_FRONT_OPEN
+  RET
+
+DRAW_FRONT_BLOCK:
+  LD A,0x94
+  LD B,1
+  LD C,9
+  LD D,6
+  CALL DRAW_HLINE
+  LD A,0x95
+  LD B,2
+  LD C,9
+  LD D,6
+  CALL DRAW_HLINE
+  LD A,0x7C
+  LD B,1
+  LD C,9
+  LD D,2
+  CALL DRAW_VLINE
+  LD A,0x7C
+  LD B,1
+  LD C,14
+  LD D,2
+  CALL DRAW_VLINE
+  RET
+
+DRAW_FRONT_OPEN:
+  LD A,0x94
+  LD B,0
+  LD C,8
+  LD D,8
+  CALL DRAW_HLINE
+  LD A,0x95
+  LD B,2
+  LD C,9
+  LD D,6
+  CALL DRAW_HLINE
+
+  LD A,(OPEN_LEFT)
+  OR A
+  JR NZ,FRONT_LEFT_OPEN
+  LD A,0x88
+  LD B,1
+  LD C,8
+  LD D,2
+  CALL DRAW_VLINE
+  JR FRONT_RIGHT
+FRONT_LEFT_OPEN:
+  LD A,0xEF
+  LD B,0
+  LD C,8
+  CALL PUT_XY
+
+FRONT_RIGHT:
+  LD A,(OPEN_RIGHT)
+  OR A
+  JR NZ,FRONT_RIGHT_OPEN
+  LD A,0x97
+  LD B,1
+  LD C,15
+  LD D,2
+  CALL DRAW_VLINE
+  RET
+FRONT_RIGHT_OPEN:
+  LD A,0xEE
+  LD B,0
+  LD C,15
+  CALL PUT_XY
+  RET
+
+DRAW_HLINE:
+  LD E,A
+DRAW_H_LOOP:
+  LD A,D
+  OR A
+  RET Z
+  PUSH DE
+  LD A,E
+  CALL PUT_XY
+  POP DE
+  INC C
+  DEC D
+  JR DRAW_H_LOOP
+
+DRAW_VLINE:
+  LD E,A
+DRAW_V_LOOP:
+  LD A,D
+  OR A
+  RET Z
+  PUSH DE
+  LD A,E
+  CALL PUT_XY
+  POP DE
+  INC B
+  DEC D
+  JR DRAW_V_LOOP
+
+PUT_XY:
   PUSH AF
   LD A,B
-  CP 60
-  JR C,LCD_WRITE_SECONDARY
-  SUB 60
-  OR 0x40
-  OUT (LCD_CMD1),A
-  LD A,C
-  OR 0x80
-  OUT (LCD_CMD1),A
+  LD E,A
+  LD D,0
+  LD HL,ROW_BASE
+  ADD HL,DE
+  LD A,(HL)
+  ADD A,C
+  LD L,A
+  LD H,0
+  LD DE,FRAME_BUF
+  ADD HL,DE
   POP AF
-  OUT (LCD_DATA1),A
+  LD (HL),A
   RET
 
-LCD_WRITE_SECONDARY:
-  OR 0x40
-  OUT (LCD_CMD2),A
-  LD A,C
-  OR 0x80
-  OUT (LCD_CMD2),A
-  POP AF
-  OUT (LCD_DATA2),A
+BLIT_FRAME:
+  LD A,0x80
+  OUT (LCD_CMD),A
+  LD HL,FRAME_BUF
+  LD B,96
+BLIT_LOOP:
+  LD A,(HL)
+  OUT (LCD_DATA),A
+  INC HL
+  DJNZ BLIT_LOOP
   RET
 
-FRAME:
-  DB 0`;
+FRAME_DELAY:
+  LD BC,0x2200
+DELAY_LOOP:
+  DEC BC
+  LD A,B
+  OR C
+  JR NZ,DELAY_LOOP
+  RET
+
+POS_X:
+  DB 0
+POS_Y:
+  DB 0
+DIR:
+  DB 0
+ROUTE_PTR:
+  DB 0
+FRAME_TICK:
+  DB 0
+MOVE_WAIT:
+  DB 0
+
+RAY_INDEX:
+  DB 0
+CUR_RAY:
+  DB 0
+CUR_DEPTH:
+  DB 0
+DEPTH_WORK:
+  DB 0
+OPEN_SIDE:
+  DB 0
+OPEN_FRONT:
+  DB 0
+OPEN_LEFT:
+  DB 0
+OPEN_RIGHT:
+  DB 0
+HIT_X:
+  DB 0
+HIT_Y:
+  DB 0
+PTR_X:
+  DW 0
+PTR_Y:
+  DW 0
+
+RAY_DEPTH:
+  DS 24,0
+RAY_OPEN:
+  DS 24,0
+FRAME_BUF:
+  DS 96,0x20
+ROW_BASE:
+  DB 0,24,48,72
+
+FWD_DX:
+  DB 0,1,0,0xFF
+FWD_DY:
+  DB 0xFF,0,1,0
+
+RAY_OFS_X:
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFF,0xFE,0xFD,0xFC,0xFB
+  DB 0xFF,0xFF,0xFE,0xFD,0xFC,0xFB
+  DB 0xFF,0xFF,0xFE,0xFD,0xFC,0xFB
+  DB 0x00,0xFF,0xFF,0xFE,0xFD,0xFC
+  DB 0x00,0xFF,0xFF,0xFE,0xFD,0xFC
+  DB 0x00,0xFF,0xFF,0xFE,0xFD,0xFC
+  DB 0x00,0x00,0xFF,0xFF,0xFE,0xFD
+  DB 0x00,0x00,0xFF,0xFF,0xFE,0xFD
+  DB 0x00,0x00,0xFF,0xFF,0xFE,0xFD
+  DB 0x00,0x00,0x01,0x01,0x02,0x03
+  DB 0x00,0x00,0x01,0x01,0x02,0x03
+  DB 0x00,0x00,0x01,0x01,0x02,0x03
+  DB 0x00,0x01,0x01,0x02,0x03,0x04
+  DB 0x00,0x01,0x01,0x02,0x03,0x04
+  DB 0x00,0x01,0x01,0x02,0x03,0x04
+  DB 0x01,0x01,0x02,0x03,0x04,0x05
+  DB 0x01,0x01,0x02,0x03,0x04,0x05
+  DB 0x01,0x01,0x02,0x03,0x04,0x05
+  DB 0x01,0x02,0x03,0x04,0x05,0x06
+  DB 0x01,0x02,0x03,0x04,0x05,0x06
+  DB 0x01,0x02,0x03,0x04,0x05,0x06
+
+RAY_OFS_Y:
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+  DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
+
+MAZE_DATA:
+  DB 1,1,1,1,1,1,1,1
+  DB 1,0,0,0,1,0,0,1
+  DB 1,0,1,0,1,0,1,1
+  DB 1,0,1,0,0,0,0,1
+  DB 1,0,1,1,1,1,0,1
+  DB 1,0,0,0,0,1,0,1
+  DB 1,1,1,0,0,0,0,1
+  DB 1,1,1,1,1,1,1,1
+
+ROUTE_TABLE:
+  DB CMD_FWD,CMD_FWD,CMD_TURN_R
+  DB CMD_FWD,CMD_FWD,CMD_TURN_L
+  DB CMD_FWD,CMD_FWD,CMD_FWD,CMD_TURN_L
+  DB CMD_FWD,CMD_FWD,CMD_TURN_R
+  DB CMD_FWD,CMD_FWD,CMD_TURN_R
+  DB CMD_FWD,CMD_FWD,CMD_TURN_L
+  DB CMD_FWD,CMD_FWD,CMD_TURN_L
+  DB CMD_FWD,CMD_FWD,CMD_TURN_R
+  DB CMD_FWD,CMD_FWD,CMD_FWD,CMD_TURN_R
+  DB CMD_FWD,CMD_FWD,CMD_TURN_L
+  DB CMD_END
+`;
 let basicRunInFlight = false;
 let basicRunToken = 0;
 let z80RunAwaitingCompletion = false;
@@ -1569,6 +2387,8 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
       await waitForAnimationFrame();
     }
 
+    machine.setRuntimePumpEnabled(true);
+    machine.setImmediateInputToRuntimeEnabled(true);
     setAsmRunStatus('ok', 'Run OK');
     appendLog('ASM RUN ok');
     return { ok: true };
@@ -1578,10 +2398,11 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
     appendLog(`ASM RUN exception ${message}`);
     return { ok: false, errorLine: message };
   } finally {
-    machine.setImmediateInputToRuntimeEnabled(true);
     if (machine.getExecutionDomain() !== 'firmware') {
       machine.setExecutionDomain('firmware');
     }
+    machine.setRuntimePumpEnabled(true);
+    machine.setImmediateInputToRuntimeEnabled(true);
     setAsmRunInFlight(false);
   }
 }
@@ -2377,6 +3198,10 @@ window.addEventListener('keydown', (event) => {
   }
   const runningUserProgram =
     machine.getExecutionBackend() === 'z80-firmware' && machine.getExecutionDomain() === 'user-program';
+  const firmwareIdlePrompt =
+    machine.getExecutionBackend() === 'z80-firmware' &&
+    machine.getExecutionDomain() === 'firmware' &&
+    !machine.isRuntimeProgramRunning();
   if (isTextInputTarget(event.target)) {
     return;
   }
@@ -2402,7 +3227,9 @@ window.addEventListener('keydown', (event) => {
   const keydownBoost =
     runningUserProgram && resolvedCode === 'Space'
       ? SPACE_KEYDOWN_POLL_BOOST_TSTATES
-      : KEYDOWN_POLL_BOOST_TSTATES;
+      : firmwareIdlePrompt
+        ? 0
+        : KEYDOWN_POLL_BOOST_TSTATES;
   machine.tick(keydownBoost);
   pressedCodes.add(resolvedCode);
   appendLog(`DOWN ${resolvedCode}`);
@@ -2415,6 +3242,10 @@ window.addEventListener('keyup', (event) => {
   }
   const runningUserProgram =
     machine.getExecutionBackend() === 'z80-firmware' && machine.getExecutionDomain() === 'user-program';
+  const firmwareIdlePrompt =
+    machine.getExecutionBackend() === 'z80-firmware' &&
+    machine.getExecutionDomain() === 'firmware' &&
+    !machine.isRuntimeProgramRunning();
   if (isTextInputTarget(event.target)) {
     return;
   }
@@ -2431,7 +3262,7 @@ window.addEventListener('keyup', (event) => {
     }
     machine.setKeyState(resolvedCode, false);
     // 離上エッジ依存の判定を取りこぼさないよう解放側でも短く進める。
-    machine.tick(runningUserProgram && resolvedCode === 'Space' ? 4_000_000 : 256);
+    machine.tick(runningUserProgram && resolvedCode === 'Space' ? 4_000_000 : firmwareIdlePrompt ? 0 : 256);
     pressedCodes.delete(resolvedCode);
     pendingKeyRelease.delete(resolvedCode);
     appendLog(`UP   ${resolvedCode}`);
