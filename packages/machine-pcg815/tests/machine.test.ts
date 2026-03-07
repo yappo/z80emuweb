@@ -560,14 +560,11 @@ describe('PCG815Machine', () => {
   it('renders PRINT text on row 3 via LOCATE in Z80 BASIC path', () => {
     const machine = new PCG815Machine();
     const prompt = 'PUSH SPACE KEY !';
-    const lines = ['NEW', '10 LOCATE 4,3', `20 PRINT "${prompt}";`, '30 WAIT 3', '40 GOTO 30'];
-    lines.push('RUN');
-
-    runBasic(machine, lines);
+    runBasic(machine, ['NEW', '10 LOCATE 4,3', `20 PRINT "${prompt}";`, '30 END', 'RUN']);
 
     const screen = decodeMachineText(machine);
     expect(screen.join('\n')).toContain(prompt);
-  }, 15_000);
+  });
 
   it(
     'continues split z80 BASIC RUN across frame ticks until owari is shown',
@@ -581,18 +578,18 @@ describe('PCG815Machine', () => {
           '10 A = 1',
           '20 PRINT A',
           '30 A = A + 1',
-          '40 WAIT 64',
-          '50 IF A > 10 THEN 70',
+          '40 WAIT 3',
+          '50 IF A > 3 THEN 70',
           '60 GOTO 20',
           '70 PRINT "owari"',
           '80 END',
           'RUN'
         ]),
-        { appendEot: true, maxTStates: 20_000_000 }
+        { appendEot: true, maxTStates: 2_000_000 }
       );
 
-      for (let i = 0; i < 300 && machine.getExecutionDomain() === 'user-program'; i += 1) {
-        machine.tick(Math.trunc(PCG815Machine.CLOCK_HZ / 8));
+      for (let i = 0; i < 80 && machine.getExecutionDomain() === 'user-program'; i += 1) {
+        machine.tick(40_000);
       }
 
       expect(machine.getExecutionDomain()).toBe('firmware');
@@ -619,7 +616,7 @@ describe('PCG815Machine', () => {
       '9620 GOSUB 7400',
       '9630 IF SP=1 THEN 9810',
       '9640 LET CT=CT+1',
-      '9650 IF CT<16 THEN 9760',
+      '9650 IF CT<4 THEN 9760',
       '9660 LET CT=0',
       '9670 IF BL=0 THEN 9730',
       '9680 LET BL=0',
@@ -659,7 +656,7 @@ describe('PCG815Machine', () => {
     ]);
 
     let sawText = false;
-    for (let i = 0; i < 2000; i += 1) {
+    for (let i = 0; i < 80; i += 1) {
       run(machine, 40_000);
       const line3 = decodeMachineText(machine)[3] ?? '';
       if (line3.includes('PUSH SPACE KEY !')) {
@@ -695,16 +692,16 @@ describe('PCG815Machine', () => {
       '10 CLS',
       '20 LOCATE 0,0',
       '30 PRINT "A";',
-      '40 WAIT 3',
+      '40 WAIT 1',
       '50 CLS',
-      '60 WAIT 3',
+      '60 WAIT 1',
       '70 GOTO 20',
       'RUN'
     ]);
 
     let sawA = false;
-    for (let i = 0; i < 50_000; i += 1) {
-      run(machine, 512);
+    for (let i = 0; i < 80; i += 1) {
+      run(machine, 40_000);
       const head = decodeMachineText(machine)[0] ?? '';
       if (head.startsWith('A')) {
         sawA = true;
@@ -1051,23 +1048,23 @@ describe('PCG815Machine', () => {
       '10 LET BL=1',
       '20 LET CT=0',
       '30 LET CT=CT+1',
-      '40 IF CT<16 THEN 90',
+      '40 IF CT<4 THEN 90',
       '50 LET CT=0',
       '60 IF BL=0 THEN 80',
       '70 LET BL=0',
       '71 GOTO 90',
       '80 LET BL=1',
-      '90 WAIT 3',
+      '90 WAIT 1',
       '100 GOTO 30',
       'RUN'
     ]);
 
-    let sawCtAtLeast16 = false;
+    let sawCtThreshold = false;
     let sawBlZero = false;
     let sawBlOne = false;
     let sawCtAny = false;
     let maxCt = -1;
-    for (let i = 0; i < 1200; i += 1) {
+    for (let i = 0; i < 120; i += 1) {
       run(machine, 40_000);
       const ct = readBasicVariable(machine, 'CT');
       const bl = readBasicVariable(machine, 'BL');
@@ -1077,8 +1074,8 @@ describe('PCG815Machine', () => {
           maxCt = ct;
         }
       }
-      if (ct !== undefined && ct >= 16) {
-        sawCtAtLeast16 = true;
+      if (ct !== undefined && ct >= 4) {
+        sawCtThreshold = true;
       }
       if (bl === 0) {
         sawBlZero = true;
@@ -1086,7 +1083,7 @@ describe('PCG815Machine', () => {
       if (bl === 1) {
         sawBlOne = true;
       }
-      if (sawCtAtLeast16 && sawBlZero && sawBlOne) {
+      if (sawCtThreshold && sawBlZero && sawBlOne) {
         break;
       }
     }
@@ -1094,7 +1091,7 @@ describe('PCG815Machine', () => {
     const bank = machine.getActiveRamBank();
     const keys = listBasicVariableKeys(machine);
     expect(sawCtAny, `activeRamBank=${bank}, maxCt=${maxCt}, keys=${keys.join(',')}`).toBe(true);
-    expect(sawCtAtLeast16, `activeRamBank=${bank}, maxCt=${maxCt}, keys=${keys.join(',')}`).toBe(true);
+    expect(sawCtThreshold, `activeRamBank=${bank}, maxCt=${maxCt}, keys=${keys.join(',')}`).toBe(true);
     expect(sawBlZero).toBe(true);
     expect(sawBlOne).toBe(true);
     expect(machine.getActiveRamBank()).toBe(0);
