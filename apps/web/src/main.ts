@@ -1020,6 +1020,8 @@ SHIFT_TABLE:
 const ASM_SAMPLE_3D = `ORG 0x0300
 ENTRY START
 
+LCD_CMD2    EQU 0x54
+LCD_DATA2   EQU 0x56
 LCD_CMD     EQU 0x58
 LCD_DATA    EQU 0x5A
 
@@ -1036,7 +1038,6 @@ DIR_WEST    EQU 0x03
 RAY_COUNT   EQU 24
 DEPTH_LIMIT EQU 7
 MOVE_INTERVAL EQU 1
-FRAME_LIMIT EQU 40
 
 START:
   LD A,0x01
@@ -1063,9 +1064,7 @@ MAIN_LOOP:
   LD A,(FRAME_TICK)
   INC A
   LD (FRAME_TICK),A
-  CP FRAME_LIMIT
-  JR C,MAIN_LOOP
-  RET
+  JR MAIN_LOOP
 
 UPDATE_CAMERA:
   LD A,(MOVE_WAIT)
@@ -1644,15 +1643,152 @@ PUT_XY:
   RET
 
 BLIT_FRAME:
-  LD A,0x80
-  OUT (LCD_CMD),A
-  LD HL,FRAME_BUF
-  LD B,96
-BLIT_LOOP:
+  LD B,0
+BLIT_ROW_LOOP:
+  LD A,B
+  CP 4
+  RET NC
+  LD C,0
+BLIT_COL_LOOP:
+  LD A,C
+  CP 24
+  JR NC,BLIT_NEXT_ROW
+  PUSH BC
+  CALL BLIT_CELL_BC
+  POP BC
+  INC C
+  JR BLIT_COL_LOOP
+BLIT_NEXT_ROW:
+  INC B
+  JR BLIT_ROW_LOOP
+
+BLIT_CELL_BC:
+  LD A,B
+  LD (BLIT_ROW_TMP),A
+  LD A,C
+  LD (BLIT_COL_TMP),A
+
+  LD A,B
+  LD E,A
+  LD D,0
+  LD HL,ROW_BASE
+  ADD HL,DE
   LD A,(HL)
+  ADD A,C
+  LD L,A
+  LD H,0
+  LD DE,FRAME_BUF
+  ADD HL,DE
+  LD A,(HL)
+  CALL GET_BLIT_GLYPH_PTR
+  LD (BLIT_GLYPH_PTR),HL
+
+  LD E,0
+BLIT_GLYPH_LOOP:
+  LD A,E
+  CP 5
+  JR NC,BLIT_GLYPH_SPACER
+  LD HL,(BLIT_GLYPH_PTR)
+  LD D,0
+  ADD HL,DE
+  LD A,(HL)
+  JR BLIT_GLYPH_WRITE
+BLIT_GLYPH_SPACER:
+  XOR A
+BLIT_GLYPH_WRITE:
+  PUSH AF
+  LD A,(BLIT_COL_TMP)
+  ADD A,A
+  LD D,A
+  ADD A,A
+  ADD A,D
+  ADD A,E
+  CP 72
+  JR C,BLIT_GLYPH_LEFT
+  LD D,A
+  LD A,143
+  SUB D
+  LD B,A
+  LD A,(BLIT_ROW_TMP)
+  ADD A,4
+  LD C,A
+  POP AF
+  CALL LCD_WRITE_RAW_BYTE
+  JR BLIT_GLYPH_NEXT
+BLIT_GLYPH_LEFT:
+  LD B,A
+  LD A,(BLIT_ROW_TMP)
+  LD C,A
+  POP AF
+  CALL LCD_WRITE_RAW_BYTE
+BLIT_GLYPH_NEXT:
+  INC E
+  LD A,E
+  CP 6
+  JR C,BLIT_GLYPH_LOOP
+  RET
+
+GET_BLIT_GLYPH_PTR:
+  CP 0x94
+  JR Z,GET_GLYPH_TOP_LINE
+  CP 0x95
+  JR Z,GET_GLYPH_MID_LINE
+  CP 0x88
+  JR Z,GET_GLYPH_LEFT_WALL
+  CP 0x97
+  JR Z,GET_GLYPH_RIGHT_WALL
+  CP 0x7C
+  JR Z,GET_GLYPH_CENTER_WALL
+  CP 0xEE
+  JR Z,GET_GLYPH_DIAG_RIGHT
+  CP 0xEF
+  JR Z,GET_GLYPH_DIAG_LEFT
+  LD HL,GLYPH_SPACE
+  RET
+GET_GLYPH_TOP_LINE:
+  LD HL,GLYPH_TOP_LINE
+  RET
+GET_GLYPH_MID_LINE:
+  LD HL,GLYPH_MID_LINE
+  RET
+GET_GLYPH_LEFT_WALL:
+  LD HL,GLYPH_LEFT_WALL
+  RET
+GET_GLYPH_RIGHT_WALL:
+  LD HL,GLYPH_RIGHT_WALL
+  RET
+GET_GLYPH_CENTER_WALL:
+  LD HL,GLYPH_CENTER_WALL
+  RET
+GET_GLYPH_DIAG_RIGHT:
+  LD HL,GLYPH_DIAG_RIGHT
+  RET
+GET_GLYPH_DIAG_LEFT:
+  LD HL,GLYPH_DIAG_LEFT
+  RET
+
+LCD_WRITE_RAW_BYTE:
+  PUSH AF
+  LD A,B
+  CP 60
+  JR C,LCD_WRITE_RAW_BYTE_SECONDARY
+  SUB 60
+  OR 0x40
+  OUT (LCD_CMD),A
+  LD A,C
+  OR 0x80
+  OUT (LCD_CMD),A
+  POP AF
   OUT (LCD_DATA),A
-  INC HL
-  DJNZ BLIT_LOOP
+  RET
+LCD_WRITE_RAW_BYTE_SECONDARY:
+  OR 0x40
+  OUT (LCD_CMD2),A
+  LD A,C
+  OR 0x80
+  OUT (LCD_CMD2),A
+  POP AF
+  OUT (LCD_DATA2),A
   RET
 
 FRAME_DELAY:
@@ -1710,6 +1846,29 @@ FRAME_BUF:
   DS 96,0x20
 ROW_BASE:
   DB 0,24,48,72
+BLIT_ROW_TMP:
+  DB 0
+BLIT_COL_TMP:
+  DB 0
+BLIT_GLYPH_PTR:
+  DW 0
+
+GLYPH_SPACE:
+  DB 0x00,0x00,0x00,0x00,0x00
+GLYPH_LEFT_WALL:
+  DB 0x7F,0x00,0x00,0x00,0x00
+GLYPH_CENTER_WALL:
+  DB 0x00,0x00,0x7F,0x00,0x00
+GLYPH_RIGHT_WALL:
+  DB 0x00,0x00,0x00,0x00,0x7F
+GLYPH_TOP_LINE:
+  DB 0x01,0x01,0x01,0x01,0x01
+GLYPH_MID_LINE:
+  DB 0x08,0x08,0x08,0x08,0x08
+GLYPH_DIAG_RIGHT:
+  DB 0x20,0x10,0x08,0x04,0x02
+GLYPH_DIAG_LEFT:
+  DB 0x02,0x04,0x08,0x10,0x20
 
 FWD_DX:
   DB 0,1,0,0xFF
@@ -1800,6 +1959,7 @@ let z80RunPumpIterations = 0;
 let z80RunPumpExecutedTstates = 0;
 let asmRunInFlight = false;
 let asmRunToken = 0;
+let asmRunHasEnteredUserProgram = false;
 let asmBuildCache: AsmBuildCache | undefined;
 let currentEditorMode: EditorMode = 'basic';
 let lastMonitorRenderMs = 0;
@@ -1873,6 +2033,17 @@ function setAsmRunInFlight(inFlight: boolean): void {
   asmRunInFlight = inFlight;
   asmRunButton.disabled = inFlight;
   asmAssembleButton.disabled = inFlight;
+}
+
+function finishAsmRun(status: ProgramRunStatus, detail: string, logLine?: string): void {
+  machine.setRuntimePumpEnabled(true);
+  machine.setImmediateInputToRuntimeEnabled(true);
+  setAsmRunInFlight(false);
+  asmRunHasEnteredUserProgram = false;
+  setAsmRunStatus(status, detail);
+  if (logLine) {
+    appendLog(logLine);
+  }
 }
 
 function clearZ80RunTracking(): void {
@@ -2331,6 +2502,7 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
   }
 
   setAsmRunInFlight(true);
+  asmRunHasEnteredUserProgram = false;
   const runToken = ++asmRunToken;
   setAsmRunStatus('running', 'Running');
   appendLog('ASM RUN start');
@@ -2345,6 +2517,7 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
       };
     }
     const build = asmBuildCache;
+    setAsmRunStatus('running', 'Running');
 
     machine.reset(true);
     machine.loadProgram(build.binary, build.origin);
@@ -2362,48 +2535,24 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
     if (!running) {
       setRunningState(true);
     }
-
-    const timeoutMs = 20_000;
-    const start = performance.now();
-    while (true) {
-      if (asmRunToken !== runToken) {
-        setAsmRunStatus('idle', 'Stopped');
-        appendLog('ASM RUN stopped');
-        return { ok: false, errorLine: 'STOPPED' };
-      }
-      const cpu = machine.getCpuState();
-      if (cpu.halted && machine.getExecutionDomain() === 'user-program') {
-        machine.setProgramCounter(firmwareReturnAddress);
-        machine.setExecutionDomain('firmware');
-      }
-      if (machine.getExecutionDomain() === 'firmware') {
-        break;
-      }
-      if (performance.now() - start > timeoutMs) {
-        setAsmRunStatus('failed', 'Failed: RUN TIMEOUT');
-        appendLog('ASM RUN timeout');
-        return { ok: false, errorLine: 'RUN TIMEOUT' };
-      }
-      await waitForAnimationFrame();
+    await waitForAnimationFrame();
+    if (asmRunToken !== runToken) {
+      finishAsmRun('idle', 'Stopped', 'ASM RUN stopped');
+      return { ok: false, errorLine: 'STOPPED' };
     }
-
-    machine.setRuntimePumpEnabled(true);
-    machine.setImmediateInputToRuntimeEnabled(true);
-    setAsmRunStatus('ok', 'Run OK');
-    appendLog('ASM RUN ok');
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error';
-    setAsmRunStatus('failed', `Failed: ${message}`);
-    appendLog(`ASM RUN exception ${message}`);
+    finishAsmRun('failed', `Failed: ${message}`, `ASM RUN exception ${message}`);
     return { ok: false, errorLine: message };
   } finally {
-    if (machine.getExecutionDomain() !== 'firmware') {
-      machine.setExecutionDomain('firmware');
+    if (!asmRunInFlight) {
+      if (machine.getExecutionDomain() !== 'firmware') {
+        machine.setExecutionDomain('firmware');
+      }
+      machine.setRuntimePumpEnabled(true);
+      machine.setImmediateInputToRuntimeEnabled(true);
     }
-    machine.setRuntimePumpEnabled(true);
-    machine.setImmediateInputToRuntimeEnabled(true);
-    setAsmRunInFlight(false);
   }
 }
 
@@ -2942,6 +3091,7 @@ function frame(now: number): void {
     const litPixels = renderLcd();
     verifyHealth(elapsedMs, litPixels);
     syncZ80BasicRunStatus();
+    syncAsmRunStatus();
     updateDebugView();
   } catch (error) {
     fail('FAILED', 'Frame exception', error);
@@ -2989,6 +3139,30 @@ function syncZ80BasicRunStatus(): void {
   clearZ80RunTracking();
   setProgramRunStatus('ok', 'Run OK');
   appendLog('BASIC RUN ok');
+}
+
+function syncAsmRunStatus(): void {
+  if (!asmRunInFlight) {
+    asmRunHasEnteredUserProgram = false;
+    return;
+  }
+
+  const domain = machine.getExecutionDomain();
+  if (domain === 'user-program') {
+    asmRunHasEnteredUserProgram = true;
+    const cpu = machine.getCpuState();
+    if (cpu.halted) {
+      machine.setProgramCounter(machine.getFirmwareReturnAddress() & 0xffff);
+      machine.setExecutionDomain('firmware');
+    }
+    return;
+  }
+
+  if (!asmRunHasEnteredUserProgram || domain !== 'firmware') {
+    return;
+  }
+
+  finishAsmRun('ok', 'Run OK', 'ASM RUN ok');
 }
 
 function toggleRunState(): void {
@@ -3129,6 +3303,8 @@ asmStopButton.addEventListener('click', () => {
   machine.setImmediateInputToRuntimeEnabled(true);
   machine.setExecutionDomain('firmware');
   setRunningState(false);
+  setAsmRunInFlight(false);
+  asmRunHasEnteredUserProgram = false;
   setAsmRunStatus('idle', 'Stopped');
   appendLog('CPU STOP by asm editor');
 });

@@ -153,7 +153,7 @@ describe('asm samples', () => {
     expect(lines).toContain('k:');
   });
 
-  it('renders multiple frames and returns for the 3D sample', { timeout: 20_000 }, () => {
+  it('renders multiple frames and keeps running for the 3D sample', { timeout: 20_000 }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
     const { machine, returnAddress } = bootAsmSample(asm);
@@ -164,9 +164,11 @@ describe('asm samples', () => {
 
     expect(midFrame).not.toEqual(firstFrame);
 
-    runUntilProgramReturns(machine, returnAddress, { maxSteps: 80_000, quantum: 256 });
+    runFor(machine, 40_000, 256);
 
     const litPixels = machine.getFrameBuffer().reduce((sum, pixel) => sum + (pixel ? 1 : 0), 0);
     expect(litPixels).toBeGreaterThan(20);
+    expect(machine.getExecutionDomain()).toBe('user-program');
+    expect(machine.getCpuState().registers.pc & 0xffff).not.toBe(returnAddress & 0xffff);
   });
 });

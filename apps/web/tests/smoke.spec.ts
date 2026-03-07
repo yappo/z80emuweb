@@ -488,10 +488,10 @@ test('assembler sample returns to monitor ROM prompt without boot banner redraw'
         }),
       { timeout: 5_000, intervals: [100, 250, 500] }
     )
-    .toMatch(/^0x02(87|A3)$/i);
+    .toMatch(/^0x02(87|A3|A4)$/i);
 });
 
-test('assembler tab 3D sample runs and leaves a rendered frame', async ({ page }) => {
+test('assembler tab 3D sample keeps running and leaves animated frames', async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto('/');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
@@ -507,7 +507,7 @@ test('assembler tab 3D sample runs and leaves a rendered frame', async ({ page }
   await expect(page.locator('#asm-editor')).toHaveValue(/ROUTE_TABLE:/i);
 
   await page.locator('#asm-run').click();
-  await expect(page.locator('#asm-run-status')).toContainText(/Run OK/i, { timeout: 20_000 });
+  await expect(page.locator('#asm-run-status')).toContainText(/Running/i, { timeout: 10_000 });
   await expect
     .poll(
       async () =>
@@ -535,6 +535,10 @@ test('assembler tab 3D sample runs and leaves a rendered frame', async ({ page }
       { timeout: 5_000, intervals: [100, 250, 500] }
     )
     .toBeGreaterThan(200);
+  await page.waitForTimeout(1500);
+  await expect(page.locator('#asm-run-status')).toContainText(/Running/i);
+  await page.locator('#asm-stop').click();
+  await expect(page.locator('#asm-run-status')).toContainText(/Stopped/i);
 });
 
 test('basic load sample runs on fresh boot', async ({ page }) => {
