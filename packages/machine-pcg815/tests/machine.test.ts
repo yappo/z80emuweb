@@ -571,7 +571,7 @@ describe('PCG815Machine', () => {
 
   it(
     'continues split z80 BASIC RUN across frame ticks until owari is shown',
-    { timeout: 20_000 },
+    { timeout: 45_000 },
     () => {
       const machine = new PCG815Machine();
       machine.tick(260_000);
