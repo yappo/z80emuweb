@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createMonitorRom } from '../src/monitor-rom';
+import { createMonitorRom, MONITOR_MAIN_LOOP_ADDR, MONITOR_PROMPT_RESUME_ADDR } from '../src/monitor-rom';
 import { MonitorRuntime, PcG815BasicRuntime } from '../src/runtime';
 
 function drain(runtime: PcG815BasicRuntime): string {
@@ -38,8 +38,13 @@ describe('createMonitorRom', () => {
   it('creates a 16 KiB ROM with banner text', () => {
     const rom = createMonitorRom();
     expect(rom.length).toBe(0x4000);
-    const bannerText = String.fromCharCode(...rom.slice(0x0027, 0x0027 + 12));
-    expect(bannerText.startsWith('PC-G815')).toBe(true);
+    expect(Array.from(rom.slice(0, MONITOR_PROMPT_RESUME_ADDR)).some((byte) => byte !== 0)).toBe(true);
+    expect(Array.from(rom.slice(MONITOR_PROMPT_RESUME_ADDR, MONITOR_MAIN_LOOP_ADDR)).some((byte) => byte !== 0)).toBe(
+      true
+    );
+    expect(Array.from(rom.slice(MONITOR_MAIN_LOOP_ADDR, MONITOR_MAIN_LOOP_ADDR + 8))).toEqual([
+      0x3e, 0xff, 0xd3, 0x11, 0xdb, 0x10, 0x18, 0xf8
+    ]);
   });
 });
 

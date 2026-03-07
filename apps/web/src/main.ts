@@ -8,6 +8,7 @@ import {
   LCD_HEIGHT,
   LCD_WIDTH,
   PCG815Machine,
+  MONITOR_PROMPT_RESUME_ADDR,
   decodeMachineText
 } from '@z80emu/machine-pcg815';
 import { assemble } from '@z80emu/assembler-z80';
@@ -103,7 +104,11 @@ function mustContext2D(canvas: HTMLCanvasElement, name: string): CanvasRendering
   return ctx;
 }
 
-const machine = new PCG815Machine({ strictCpuOpcodes: strictMode, executionBackend });
+const machine = new PCG815Machine({
+  strictCpuOpcodes: strictMode,
+  executionBackend,
+  firmwareReturnAddress: MONITOR_PROMPT_RESUME_ADDR
+});
 
 const canvas = mustQuery<HTMLCanvasElement>('#lcd');
 const runToggleButton = mustQuery<HTMLButtonElement>('#run-toggle');

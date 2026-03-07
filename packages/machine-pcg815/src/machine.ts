@@ -11,6 +11,7 @@ import {
   type MonitorRuntimeSnapshot,
   MonitorRuntime
 } from '@z80emu/firmware-monitor';
+export { MONITOR_MAIN_LOOP_ADDR, MONITOR_PROMPT_RESUME_ADDR } from '@z80emu/firmware-monitor';
 import { getBasicInterpreterRomBundle } from '@z80emu/firmware-z80-basic';
 
 import {
@@ -335,7 +336,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private readonly basicRamEnd: number;
   private readonly basicInterpreterRomBank: number;
   private executionDomain: PCG815ExecutionDomain = 'firmware';
-  private firmwareReturnAddress = MONITOR_PROMPT_RESUME_ADDR;
+  private firmwareReturnAddress = MONITOR_MAIN_LOOP_ADDR;
 
   private readonly frameBuffer = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
   private readonly keyboardRows = new Uint8Array(8);
@@ -425,7 +426,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     const monitorRom = options?.rom ?? createMonitorRom();
     this.bootstrapImage = new Uint8Array(monitorRom);
     this.executionBackend = options?.executionBackend ?? 'z80-firmware';
-    this.firmwareReturnAddress = clamp16(options?.firmwareReturnAddress ?? MONITOR_PROMPT_RESUME_ADDR);
+    this.firmwareReturnAddress = clamp16(options?.firmwareReturnAddress ?? MONITOR_MAIN_LOOP_ADDR);
     this.basicInterpreterEntry = clamp16(options?.basicInterpreterEntry ?? basicBundle.entry ?? BASIC_INTERPRETER_DEFAULT_ENTRY);
     this.basicRamStart = clamp16(options?.basicRamStart ?? BASIC_INTERPRETER_DEFAULT_RAM_START);
     this.basicRamEnd = clamp16(options?.basicRamEnd ?? BASIC_INTERPRETER_DEFAULT_RAM_END);

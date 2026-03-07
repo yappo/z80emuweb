@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 import { assemble } from '@z80emu/assembler-z80';
-import { PCG815Machine, decodeMachineText } from '@z80emu/machine-pcg815';
+import { MONITOR_PROMPT_RESUME_ADDR, PCG815Machine, decodeMachineText } from '@z80emu/machine-pcg815';
 
 function extractAsmSample(source: string, name: 'ASM_SAMPLE' | 'ASM_SAMPLE_3D'): string {
   const marker = `const ${name} = \``;
@@ -49,7 +49,10 @@ function bootAsmSample(asm: string): { machine: PCG815Machine; returnAddress: nu
     throw new Error('assemble failed');
   }
 
-  const machine = new PCG815Machine({ strictCpuOpcodes: true });
+  const machine = new PCG815Machine({
+    strictCpuOpcodes: true,
+    firmwareReturnAddress: MONITOR_PROMPT_RESUME_ADDR
+  });
   machine.reset(true);
   machine.loadProgram(assembled.binary, assembled.origin);
   const firmwareReturnAddress = machine.getFirmwareReturnAddress() & 0xffff;
