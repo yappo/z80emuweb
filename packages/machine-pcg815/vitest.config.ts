@@ -12,6 +12,11 @@ export default defineConfig({
   },
   test: {
     include: ['tests/**/*.test.ts'],
-    fileParallelism: false
+    fileParallelism: false,
+    poolOptions: {
+      forks: {
+        singleFork: true
+      }
+    }
   }
 });
