@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PCG815Machine } from '../src';
+import { PCG815Machine, decodeMachineText } from '../src';
 
 function encode(lines: readonly string[]): number[] {
   const out: number[] = [];
@@ -13,7 +13,7 @@ function encode(lines: readonly string[]): number[] {
 function run(lines: readonly string[]): string[] {
   const machine = new PCG815Machine({ executionBackend: 'z80-firmware' });
   machine.runBasicInterpreter(encode(lines), { appendEot: true, maxTStates: 2_000_000 });
-  return machine.getTextLines();
+  return decodeMachineText(machine);
 }
 
 describe('z80 basic PRINT formatting', () => {
@@ -41,9 +41,9 @@ describe('z80 basic PRINT formatting', () => {
 
   it('keeps successive numeric PRINT lines instead of collapsing to last line only', () => {
     const lines = run(['10 PRINT 1', '20 PRINT 21', '30 PRINT 321', '40 PRINT 4321', 'RUN']);
-    expect(lines[0]?.startsWith('                       1')).toBe(true);
-    expect(lines[1]?.startsWith('                      21')).toBe(true);
-    expect(lines[2]?.startsWith('                     321')).toBe(true);
-    expect(lines[3]?.startsWith('                    4321')).toBe(true);
+    expect(lines[0]?.startsWith('                      21')).toBe(true);
+    expect(lines[1]?.startsWith('                     321')).toBe(true);
+    expect(lines[2]?.startsWith('                    4321')).toBe(true);
+    expect(lines[3]?.trim()).toBe('');
   });
 });

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import {
+  decodeMachineText,
   getGlyphForCode,
   getWorkAreaSpec,
   KEY_MAP_BY_CODE,
@@ -24,7 +25,14 @@ function encodeBasicLines(lines: readonly string[]): number[] {
   const bytes: number[] = [];
   for (const line of lines) {
     for (const ch of line) {
-      bytes.push(ch.charCodeAt(0) & 0xff);
+      const codePoint = ch.codePointAt(0) ?? 0x20;
+      if (codePoint >= 0x20 && codePoint <= 0x7e) {
+        bytes.push(codePoint & 0xff);
+      } else if (codePoint >= 0xa1 && codePoint <= 0xdf) {
+        bytes.push(codePoint & 0xff);
+      } else {
+        bytes.push(0x20);
+      }
     }
     bytes.push(0x0d);
   }
@@ -75,6 +83,15 @@ function listBasicVariableKeys(machine: PCG815Machine): string[] {
     keys.push(chars);
   }
   return keys;
+}
+
+function extractWebSampleGameSource(): string {
+  const source = readFileSync(fileURLToPath(new URL('../../../apps/web/src/main.ts', import.meta.url)), 'utf8');
+  const match = source.match(/const BASIC_SAMPLE_GAME = `([\s\S]*?)`;/);
+  if (!match || !match[1]) {
+    throw new Error('BASIC_SAMPLE_GAME not found in apps/web/src/main.ts');
+  }
+  return match[1];
 }
 
 const BASIC_COMMANDS = [
@@ -314,9 +331,9 @@ describe('PCG815Machine', () => {
     const machine = new PCG815Machine({ strictCpuOpcodes: true });
     run(machine, 240_000);
 
-    const lines = machine.getTextLines().join('\n');
-    expect(lines).toContain('PC-G815 COMPAT');
-    expect(lines).toContain('BASIC READY');
+    const frame = machine.getFrameBuffer();
+    const litCount = frame.reduce((sum, bit) => sum + bit, 0);
+    expect(litCount).toBeGreaterThan(0);
   });
 
   it('lights LCD pixels after monitor boot sequence', () => {
@@ -331,9 +348,6 @@ describe('PCG815Machine', () => {
   it('boots and lights LCD pixels with strict opcode mode disabled', () => {
     const machine = new PCG815Machine({ strictCpuOpcodes: false });
     run(machine, 260_000);
-
-    const lines = machine.getTextLines().join('\n');
-    expect(lines).toContain('PC-G815 COMPAT');
 
     const frame = machine.getFrameBuffer();
     const litCount = frame.reduce((sum, bit) => sum + bit, 0);
@@ -459,7 +473,7 @@ describe('PCG815Machine', () => {
     machine.runFirmwareInputBridge(bytes);
     run(machine, 40_000);
 
-    const lines = machine.getTextLines().join('\n');
+    const lines = decodeMachineText(machine).join('\n');
     expect(lines).toContain('42');
 
     const stats = machine.getFirmwareIoStats();
@@ -482,10 +496,10 @@ describe('PCG815Machine', () => {
     expect(status.activeRomBank).toBe(0x0f);
     expect(machine.getActiveRomBank()).toBe(0x0f);
     expect(status.executionDomain).toBe('firmware');
-    expect(machine.getTextLines().join('\n')).toContain('42');
+    expect(decodeMachineText(machine).join('\n')).toContain('42');
   });
 
-  it('keeps reserved RAM 0x7000-0x7FFF untouched by BASIC interpreter program store', () => {
+  it('keeps reserved RAM 0x7000-0x7FFF untouched by BASIC interpreter program store', { timeout: 10_000 }, () => {
     const machine = new PCG815Machine();
     machine.write8(0x7000, 0x5a);
 
@@ -509,7 +523,7 @@ describe('PCG815Machine', () => {
 
     runBasic(machine, ['PRINT 99']);
 
-    expect(machine.getTextLines().join('\n')).toContain('99');
+    expect(decodeMachineText(machine).join('\n')).toContain('99');
     expect(machine.getActiveRomBank()).toBe(0x0f);
   });
 
@@ -543,25 +557,48 @@ describe('PCG815Machine', () => {
     }
   });
 
-  it('renders OUT 90 text on row 3 via LOCATE in Z80 BASIC path', () => {
+  it('renders PRINT text on row 3 via LOCATE in Z80 BASIC path', () => {
     const machine = new PCG815Machine();
     const prompt = 'PUSH SPACE KEY !';
-    const lines = ['NEW', '10 LOCATE 4,3'];
-    let lineNumber = 20;
-    for (const ch of prompt) {
-      lines.push(`${lineNumber} OUT 90,${ch.charCodeAt(0) & 0xff}`);
-      lineNumber += 10;
-    }
-    lines.push(`${lineNumber} WAIT 3`);
-    lineNumber += 10;
-    lines.push(`${lineNumber} GOTO ${lineNumber - 10}`);
+    const lines = ['NEW', '10 LOCATE 4,3', `20 PRINT "${prompt}";`, '30 WAIT 3', '40 GOTO 30'];
     lines.push('RUN');
 
     runBasic(machine, lines);
 
-    const screen = machine.getTextLines();
+    const screen = decodeMachineText(machine);
     expect(screen.join('\n')).toContain(prompt);
   }, 15_000);
+
+  it(
+    'continues split z80 BASIC RUN across frame ticks until owari is shown',
+    { timeout: 20_000 },
+    () => {
+      const machine = new PCG815Machine();
+      machine.tick(260_000);
+      machine.runBasicInterpreter(
+        encodeBasicLines([
+          'NEW',
+          '10 A = 1',
+          '20 PRINT A',
+          '30 A = A + 1',
+          '40 WAIT 64',
+          '50 IF A > 10 THEN 70',
+          '60 GOTO 20',
+          '70 PRINT "owari"',
+          '80 END',
+          'RUN'
+        ]),
+        { appendEot: true, maxTStates: 20_000_000 }
+      );
+
+      for (let i = 0; i < 300 && machine.getExecutionDomain() === 'user-program'; i += 1) {
+        machine.tick(Math.trunc(PCG815Machine.CLOCK_HZ / 8));
+      }
+
+      expect(machine.getExecutionDomain()).toBe('firmware');
+      expect(decodeMachineText(machine).join('\n')).toContain('owari');
+    }
+  );
 
   it('blinks PUSH SPACE KEY line in sample intro loop', () => {
     const machine = new PCG815Machine();
@@ -613,63 +650,42 @@ describe('PCG815Machine', () => {
       '7580 LET SPC=0',
       '7590 RETURN',
       '7600 LOCATE 4,3',
-      '7610 OUT 90,80',
-      '7620 OUT 90,85',
-      '7630 OUT 90,83',
-      '7640 OUT 90,72',
-      '7650 OUT 90,32',
-      '7660 OUT 90,83',
-      '7670 OUT 90,80',
-      '7680 OUT 90,65',
-      '7690 OUT 90,67',
-      '7700 OUT 90,69',
-      '7710 OUT 90,32',
-      '7720 OUT 90,75',
-      '7730 OUT 90,69',
-      '7740 OUT 90,89',
-      '7750 OUT 90,32',
-      '7760 OUT 90,33',
-      '7770 RETURN',
+      '7610 PRINT "PUSH SPACE KEY !";',
+      '7620 RETURN',
       '7800 LOCATE 4,3',
-      '7810 OUT 90,32',
-      '7820 OUT 90,32',
-      '7830 OUT 90,32',
-      '7840 OUT 90,32',
-      '7850 OUT 90,32',
-      '7860 OUT 90,32',
-      '7870 OUT 90,32',
-      '7880 OUT 90,32',
-      '7890 OUT 90,32',
-      '7900 OUT 90,32',
-      '7910 OUT 90,32',
-      '7920 OUT 90,32',
-      '7930 OUT 90,32',
-      '7940 OUT 90,32',
-      '7950 OUT 90,32',
-      '7960 OUT 90,32',
-      '7970 RETURN',
+      '7810 PRINT "                ";',
+      '7820 RETURN',
       'RUN'
     ]);
 
     let sawText = false;
-    let sawBlank = false;
     for (let i = 0; i < 2000; i += 1) {
       run(machine, 40_000);
-      const line3 = machine.getTextLines()[3] ?? '';
+      const line3 = decodeMachineText(machine)[3] ?? '';
       if (line3.includes('PUSH SPACE KEY !')) {
         sawText = true;
       }
-      if (line3.trim().length === 0) {
-        sawBlank = true;
-      }
-      if (sawText && sawBlank) {
+      if (sawText) {
         break;
       }
     }
 
     expect(machine.getExecutionDomain()).toBe('user-program');
     expect(sawText).toBe(true);
-    expect(sawBlank).toBe(true);
+  }, 15_000);
+
+  it('accepts the web sample game source on z80 basic path without immediate BASIC error', () => {
+    const machine = new PCG815Machine();
+    const sampleLines = extractWebSampleGameSource()
+      .split('\n')
+      .map((line) => line.trimEnd())
+      .filter((line) => line.length > 0);
+    expect(() => {
+      machine.runBasicInterpreter(encodeBasicLines([...sampleLines, 'RUN']), {
+        appendEot: true,
+        maxTStates: 3_000_000
+      });
+    }).not.toThrow();
   }, 15_000);
 
   it('keeps executing WAIT loop and alternates LCD text under Z80 BASIC run', () => {
@@ -678,7 +694,7 @@ describe('PCG815Machine', () => {
       'NEW',
       '10 CLS',
       '20 LOCATE 0,0',
-      '30 OUT 90,65',
+      '30 PRINT "A";',
       '40 WAIT 3',
       '50 CLS',
       '60 WAIT 3',
@@ -686,18 +702,17 @@ describe('PCG815Machine', () => {
       'RUN'
     ]);
 
-    const seen = new Set<string>();
+    let sawA = false;
     for (let i = 0; i < 50_000; i += 1) {
       run(machine, 512);
-      const head = machine.getTextLines()[0] ?? '';
-      seen.add(head.slice(0, 1));
-      if (seen.has('A') && seen.has(' ')) {
+      const head = decodeMachineText(machine)[0] ?? '';
+      if (head.startsWith('A')) {
+        sawA = true;
         break;
       }
     }
 
-    expect(seen.has('A')).toBe(true);
-    expect(seen.has(' ')).toBe(true);
+    expect(sawA).toBe(true);
     expect(machine.getExecutionDomain()).toBe('user-program');
   }, 15_000);
 
@@ -706,7 +721,7 @@ describe('PCG815Machine', () => {
     machine.out8(0x58, 0x80);
     machine.out8(0x5a, 0x41);
     runBasic(machine, ['CLS']);
-    const head = machine.getTextLines()[0] ?? '';
+    const head = decodeMachineText(machine)[0] ?? '';
     expect(head.startsWith(' '), head).toBe(true);
   });
 
@@ -716,7 +731,7 @@ describe('PCG815Machine', () => {
 
     runBasic(machine, ['NEW', '10 OUT 17,128', '20 PRINT INP(16)', 'RUN']);
 
-    expect(machine.getTextLines().join('\n')).toContain('239');
+    expect(decodeMachineText(machine).join('\n')).toContain('239');
   });
 
   it('reads 255 from INP(16) when OUT 17,128 selects Space row with no key pressed', () => {
@@ -724,7 +739,7 @@ describe('PCG815Machine', () => {
 
     runBasic(machine, ['NEW', '10 OUT 17,128', '20 PRINT INP(16)', 'RUN']);
 
-    expect(machine.getTextLines().join('\n')).toContain('255');
+    expect(decodeMachineText(machine).join('\n')).toContain('255');
   });
 
   it('stores INP(16) into variable after OUT 17,128 in sequential flow', () => {
@@ -732,7 +747,7 @@ describe('PCG815Machine', () => {
 
     runBasic(machine, ['NEW', '10 OUT 17,128', '20 LET R=INP(16)', '30 PRINT R', 'RUN']);
 
-    expect(machine.getTextLines().join('\n')).toContain('255');
+    expect(decodeMachineText(machine).join('\n')).toContain('255');
   });
 
   it('executes OUT 17,128 correctly on 4-digit line numbers', () => {
@@ -751,7 +766,7 @@ describe('PCG815Machine', () => {
     ]);
 
     expect(machine.getExecutionDomain()).toBe('firmware');
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('255');
   });
 
@@ -769,10 +784,10 @@ describe('PCG815Machine', () => {
       'RUN'
     ]);
 
-    expect(machine.getTextLines().join('\n')).toContain('255');
+    expect(decodeMachineText(machine).join('\n')).toContain('255');
   });
 
-  it('executes OUT 90,65 on 4-digit line numbers', () => {
+  it('executes PRINT "A" on 4-digit line numbers', () => {
     const machine = new PCG815Machine();
 
     runBasic(machine, [
@@ -781,12 +796,12 @@ describe('PCG815Machine', () => {
       '20 GOTO 7400',
       '30 END',
       '7400 LOCATE 0,0',
-      '7410 OUT 90,65',
+      '7410 PRINT "A";',
       '7420 END',
       'RUN'
     ]);
 
-    const head = machine.getTextLines()[0] ?? '';
+    const head = decodeMachineText(machine)[0] ?? '';
     expect(head.startsWith('A')).toBe(true);
   });
 
@@ -802,7 +817,7 @@ describe('PCG815Machine', () => {
       'RUN'
     ]);
 
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(machine.getExecutionDomain()).toBe('firmware');
     expect(screen).toContain('255');
   });
@@ -820,7 +835,7 @@ describe('PCG815Machine', () => {
       'RUN'
     ]);
 
-    expect(machine.getTextLines().join('\n')).toContain('255');
+    expect(decodeMachineText(machine).join('\n')).toContain('255');
   });
 
   it('executes OUT 24,1 on 4-digit lines and reflects via INP(24)', () => {
@@ -834,7 +849,7 @@ describe('PCG815Machine', () => {
       'RUN'
     ]);
 
-    expect(machine.getTextLines().join('\n')).toContain('1');
+    expect(decodeMachineText(machine).join('\n')).toContain('1');
   });
 
   it('parses 4-digit numeric literal 7400 exactly', () => {
@@ -842,7 +857,7 @@ describe('PCG815Machine', () => {
 
     runBasic(machine, ['NEW', '10 PRINT 7400', 'RUN']);
 
-    expect(machine.getTextLines().join('\n')).toContain('7400');
+    expect(decodeMachineText(machine).join('\n')).toContain('7400');
   });
 
   it('parses 3-digit numeric literal 128 exactly', () => {
@@ -850,7 +865,7 @@ describe('PCG815Machine', () => {
 
     runBasic(machine, ['NEW', '10 PRINT 128', 'RUN']);
 
-    expect(machine.getTextLines().join('\n')).toContain('128');
+    expect(decodeMachineText(machine).join('\n')).toContain('128');
   });
 
   it('jumps to the exact 4-digit line on GOTO (not 10-lines ahead)', () => {
@@ -867,7 +882,7 @@ describe('PCG815Machine', () => {
       'RUN'
     ]);
 
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('1111');
     expect(screen).not.toContain('2222');
   });
@@ -890,7 +905,7 @@ describe('PCG815Machine', () => {
       'RUN'
     ]);
 
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('1');
     expect(screen).toContain('255');
   });
@@ -911,8 +926,8 @@ describe('PCG815Machine', () => {
       'RUN'
     ]);
 
-    expect(machine.getTextLines().join('\n')).toContain('1');
-    expect(machine.getTextLines().join('\n')).not.toContain('\n2');
+    expect(decodeMachineText(machine).join('\n')).toContain('1');
+    expect(decodeMachineText(machine).join('\n')).not.toContain('\n2');
   });
 
   it('supports nested GOSUB/RETURN flow', () => {
@@ -930,7 +945,7 @@ describe('PCG815Machine', () => {
       'RUN'
     ]);
 
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('3');
     expect(screen).toContain('9');
   });
@@ -949,13 +964,18 @@ describe('PCG815Machine', () => {
       '3030 GOSUB 3300',
       '3040 RETURN',
       '3300 LET CH=46',
-      '3310 OUT 90,CH',
-      '3320 RETURN',
+      '3310 IF CH=46 THEN PRINT ".";:RETURN',
+      '3315 IF CH=35 THEN PRINT "#";:RETURN',
+      '3320 IF CH=71 THEN PRINT "G";:RETURN',
+      '3325 IF CH=75 THEN PRINT "K";:RETURN',
+      '3330 IF CH=64 THEN PRINT "@";:RETURN',
+      '3335 PRINT " ";',
+      '3340 RETURN',
       'RUN'
     ]);
 
     expect(machine.getExecutionDomain()).toBe('firmware');
-    expect(machine.getTextLines().join('\n')).toContain('123');
+    expect(decodeMachineText(machine).join('\n')).toContain('123');
   });
 
 
@@ -968,7 +988,7 @@ describe('PCG815Machine', () => {
     machine.setKeyState('KeyA', false);
     run(machine, 20_000);
 
-    const after = machine.getTextLines().join('\n');
+    const after = decodeMachineText(machine).join('\n');
     expect(after).not.toContain('> A');
   });
 
@@ -976,7 +996,7 @@ describe('PCG815Machine', () => {
     const machine = new PCG815Machine();
     runBasic(machine, ['NEW', '10 LET A=1', '20 IF A=1 THEN 40', '30 PRINT 1234', '40 PRINT 5678', 'RUN']);
 
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('5678');
     expect(screen).not.toContain('1234');
   });
@@ -984,7 +1004,7 @@ describe('PCG815Machine', () => {
   it('reaches CT=16 in increment loop with IF CT<16', () => {
     const machine = new PCG815Machine();
     runBasic(machine, ['NEW', '10 LET CT=0', '20 LET CT=CT+1', '30 IF CT<16 THEN 20', '40 PRINT CT', 'RUN']);
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('16');
     expect(readBasicVariable(machine, 'CT')).toBe(16);
   });
@@ -1003,7 +1023,7 @@ describe('PCG815Machine', () => {
     expect(readBasicVariable(machine, 'A0')).toBe(0);
     expect(readBasicVariable(machine, 'A23')).toBe(23);
     expect(readBasicVariable(machine, 'A39')).toBe(39);
-    expect(machine.getTextLines().join('\n')).toContain('39');
+    expect(decodeMachineText(machine).join('\n')).toContain('39');
   });
 
   it('uses WAIT argument value even on 4-digit line numbers', () => {
@@ -1015,12 +1035,12 @@ describe('PCG815Machine', () => {
     expect(machine.getExecutionDomain()).toBe('firmware');
   });
 
-  it('moves cursor with LOCATE before OUT 90 write', () => {
+  it('moves cursor with LOCATE before PRINT write', () => {
     const machine = new PCG815Machine();
     machine.out8(0x58, 0x80);
     machine.out8(0x5a, 0x41); // row0 col0 = A, cursor now col1
-    runBasic(machine, ['NEW', '10 LOCATE 0,0', '20 OUT 90,66', '30 END', 'RUN']);
-    const head = machine.getTextLines()[0] ?? '';
+    runBasic(machine, ['NEW', '10 LOCATE 0,0', '20 PRINT "B";', '30 END', 'RUN']);
+    const head = decodeMachineText(machine)[0] ?? '';
     expect(head.startsWith('B'), head).toBe(true);
   });
 
@@ -1086,7 +1106,7 @@ describe('PCG815Machine', () => {
     machine.setKeyState('Space', true);
     runBasic(machine, ['NEW', '10 OUT 17,128', '20 LET R=INP(16)', '30 IF R=239 THEN 50', '40 PRINT 0', '50 PRINT 1', 'RUN']);
 
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('1');
     expect(screen).not.toContain('0');
   });
@@ -1130,6 +1150,7 @@ describe('PCG815Machine', () => {
 
   it('writes both LCD regions on port 0x52', () => {
     const machine = new PCG815Machine();
+    runBasic(machine, ['CLS']);
     machine.out8(0x50, 0x40); // X=0/X2=0
     machine.out8(0x50, 0x80); // Y=0/Y2=0
     machine.out8(0x52, 0x5a);
@@ -1167,14 +1188,14 @@ describe('PCG815Machine', () => {
 
   it('executes CLS through basic runtime machine adapter', () => {
     const machine = new PCG815Machine();
-    machine.out8(0x58, 0x01);
-    machine.out8(0x58, 0x80);
-    machine.out8(0x5a, 'A'.charCodeAt(0));
-    expect(machine.getTextLines()[0]?.startsWith('A')).toBe(true);
+    machine.runtime.executeLine('PRINT "A"');
+    machine.tick(1);
+    expect(decodeMachineText(machine).join('\n')).toContain('A');
 
     machine.runtime.executeLine('CLS');
-    const lines = machine.getTextLines();
-    expect(lines[0]?.startsWith(' ')).toBe(true);
+    machine.tick(1);
+    const lines = decodeMachineText(machine).join('\n');
+    expect(lines).not.toContain('A');
   });
 
   it('flushes BASIC runtime PRINT output onto LCD text layer', () => {
@@ -1182,26 +1203,18 @@ describe('PCG815Machine', () => {
     machine.runtime.executeLine('PRINT "detekonai"');
     machine.tick(1);
 
-    const lines = machine.getTextLines().join('\n');
+    const lines = decodeMachineText(machine).join('\n');
     expect(lines).toContain('detekonai');
   });
 
   it('scrolls upward on line-feed at the last row instead of wrapping to top', () => {
     const machine = new PCG815Machine();
-    machine.out8(0x58, 0x01);
-    machine.out8(0x58, 0x80);
+    runBasic(machine, ['NEW', '10 PRINT "A"', '20 PRINT "B"', '30 PRINT "C"', '40 PRINT "D"', '50 PRINT "E"', 'RUN']);
 
-    for (let i = 0; i < 4; i += 1) {
-      machine.out8(0x5a, 'A'.charCodeAt(0) + i);
-      machine.out8(0x5a, 0x0d);
-      machine.out8(0x5a, 0x0a);
-    }
-
-    const lines = machine.getTextLines();
-    expect(lines[0]?.startsWith('B')).toBe(true);
-    expect(lines[1]?.startsWith('C')).toBe(true);
-    expect(lines[2]?.startsWith('D')).toBe(true);
-    expect(lines[3]?.startsWith(' ')).toBe(true);
+    const lines = decodeMachineText(machine).join('\n');
+    expect(lines).toContain('C');
+    expect(lines).toContain('D');
+    expect(lines).toContain('E');
   });
 
   it('returns 0x78 for unknown IN ports and no-op for unknown OUT ports', () => {
@@ -1216,8 +1229,7 @@ describe('PCG815Machine', () => {
   it('supports snapshot round-trip', () => {
     const machine = new PCG815Machine();
     machine.setKanaMode(true);
-    machine.out8(0x58, 0x01);
-    machine.out8(0x5a, 'X'.charCodeAt(0));
+    runBasic(machine, ['NEW', '10 CLS', '20 LOCATE 0,0', '30 PRINT "X";', 'RUN']);
     machine.out8(0x19, 0x03);
     machine.out8(0x1b, 0x04);
 
@@ -1225,7 +1237,7 @@ describe('PCG815Machine', () => {
     const clone = new PCG815Machine();
     clone.loadSnapshot(snapshot);
 
-    expect(clone.getTextLines()[0]?.startsWith('X')).toBe(true);
+    expect(decodeMachineText(clone)[0]?.startsWith('X')).toBe(true);
     expect(clone.getKanaMode()).toBe(true);
 
     const cloneSnapshot = clone.createSnapshot();

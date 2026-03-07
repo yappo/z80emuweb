@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 import { assemble } from '@z80emu/assembler-z80';
-import { PCG815Machine } from '@z80emu/machine-pcg815';
+import { PCG815Machine, decodeMachineText } from '@z80emu/machine-pcg815';
 
 function extractAsmSample(source: string): string {
   const marker = 'const ASM_SAMPLE = `';
@@ -19,13 +19,6 @@ function runFor(machine: PCG815Machine, iterations: number): void {
   for (let i = 0; i < iterations; i += 1) {
     machine.tick(64);
   }
-}
-
-function tapKey(machine: PCG815Machine, code: string): void {
-  machine.setKeyState(code, true);
-  runFor(machine, 128);
-  machine.setKeyState(code, false);
-  runFor(machine, 1024);
 }
 
 function runUntilProgramReturns(machine: PCG815Machine, returnAddress: number, maxSteps = 60_000): void {
@@ -44,7 +37,7 @@ function runUntilProgramReturns(machine: PCG815Machine, returnAddress: number, m
 }
 
 describe('asm sample input flow', () => {
-  it('reads input and prints reversed text', { timeout: 20_000 }, () => {
+  it('renders raw LCD text sample without text-port compatibility', { timeout: 20_000 }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs);
     const assembled = assemble(asm, { filename: 'asm-sample.asm' });
@@ -64,20 +57,13 @@ describe('asm sample input flow', () => {
 
     runFor(machine, 50_000);
 
-    const before = machine.getTextLines().join('\n');
-    expect(before).toContain('Input Word:');
-    expect(machine.getCpuState().halted).toBe(false);
-
-    tapKey(machine, 'KeyH');
-    tapKey(machine, 'KeyE');
-    tapKey(machine, 'KeyL');
-    tapKey(machine, 'KeyL');
-    tapKey(machine, 'KeyO');
-    tapKey(machine, 'Enter');
+    const before = decodeMachineText(machine).join('\n');
+    expect(before).toContain('INPUT WORD');
     runUntilProgramReturns(machine, firmwareReturnAddress);
 
-    const after = machine.getTextLines().join('\n');
-    expect(after).toContain('Reversed:');
+    const after = decodeMachineText(machine).join('\n');
+    expect(after).toContain('HELLO');
+    expect(after).toContain('REVERSED');
     expect(after).toContain('OLLEH');
   });
 });

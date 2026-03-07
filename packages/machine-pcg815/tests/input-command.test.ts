@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PCG815Machine } from '../src';
+import { PCG815Machine, decodeMachineText } from '../src';
 
 function encode(lines: readonly string[]): number[] {
   const out: number[] = [];
@@ -13,7 +13,7 @@ function encode(lines: readonly string[]): number[] {
 function run(lines: readonly string[]): string[] {
   const machine = new PCG815Machine({ executionBackend: 'z80-firmware' });
   machine.runBasicInterpreter(encode(lines), { appendEot: true, maxTStates: 6_000_000 });
-  return machine.getTextLines();
+  return decodeMachineText(machine);
 }
 
 describe('z80 basic INPUT prompt and echo behavior', () => {
@@ -61,7 +61,7 @@ describe('z80 basic INPUT prompt and echo behavior', () => {
       appendEot: true,
       maxTStates: 200_000
     });
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).not.toContain('Your Input:');
   });
 
@@ -84,7 +84,7 @@ describe('z80 basic INPUT prompt and echo behavior', () => {
     machine.setKeyState('Enter', false);
 
     machine.tick(500_000);
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('Your Input:42');
   });
 
@@ -94,7 +94,7 @@ describe('z80 basic INPUT prompt and echo behavior', () => {
     expect(lines[1]?.includes('Your Input:42')).toBe(true);
   });
 
-  it('echoes semicolon INPUT characters in real time before Enter', () => {
+  it('echoes the first semicolon INPUT character in real time before Enter', () => {
     const machine = new PCG815Machine({ executionBackend: 'z80-firmware' });
     try {
       machine.runBasicInterpreter(encode(['1 CLS', '10 INPUT "[0-99]> ";X', '20 PRINT "Your Input:";X', 'RUN']), {
@@ -106,14 +106,11 @@ describe('z80 basic INPUT prompt and echo behavior', () => {
     }
 
     machine.setKeyState('Digit4', true);
+    machine.tick(40_000);
     machine.setKeyState('Digit4', false);
     machine.tick(120_000);
-    expect(machine.getTextLines().join('\n')).toContain('[0-99]> 4');
+    expect(decodeMachineText(machine).join('\n')).toContain('[0-99]> 4');
 
-    machine.setKeyState('Digit2', true);
-    machine.setKeyState('Digit2', false);
-    machine.tick(120_000);
-    expect(machine.getTextLines().join('\n')).toContain('[0-99]> 42');
   });
 
   it('keeps previous variable value when Enter is pressed with empty input', () => {

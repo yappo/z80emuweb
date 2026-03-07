@@ -5,6 +5,8 @@ import {
   type BasicMachineAdapter,
   createMonitorRom,
   MONITOR_MAIN_LOOP_ADDR,
+  MONITOR_PROMPT_CURSOR_COL,
+  MONITOR_PROMPT_CURSOR_ROW,
   type MonitorRuntimeSnapshot,
   MonitorRuntime
 } from '@z80emu/firmware-monitor';
@@ -12,7 +14,6 @@ import { getBasicInterpreterRomBundle } from '@z80emu/firmware-z80-basic';
 
 import {
   getGlyphForCode,
-  hasGlyphForCode,
   LCD_COLS,
   LCD_GLYPH_HEIGHT,
   LCD_GLYPH_PITCH_X,
@@ -22,6 +23,7 @@ import {
   LCD_ROWS,
   LCD_WIDTH
 } from './font5x7';
+import { toDisplayCode } from './lcd-text';
 import {
   getIoPortSpec,
   getMemoryRegionSpec,
@@ -40,22 +42,12 @@ import type {
   SnapshotV1
 } from './types';
 
-// グリフ未定義時の表示は空白にフォールバックする。
-const SPACE_CODE = 0x20;
-
 function clamp8(value: number): number {
   return value & 0xff;
 }
 
 function clamp16(value: number): number {
   return value & 0xffff;
-}
-
-function toDisplayCode(value: number): number {
-  if (hasGlyphForCode(value)) {
-    return value;
-  }
-  return SPACE_CODE;
 }
 
 const RAM_REGION = getMemoryRegionSpec('main-ram-window');
@@ -122,7 +114,6 @@ const PORT_LCD_STATUS_DUAL = getIoPortSpec('lcd-status-dual').port;
 const PORT_LCD_STATUS_SECONDARY = getIoPortSpec('lcd-status-secondary').port;
 
 const WORKAREA_DISPLAY_START_LINE = getWorkAreaSpec('display-start-line').address;
-const LCD_TEXT_COMPAT_FLAG_ADDRESS = (WORKAREA_DISPLAY_START_LINE + 1) & 0xffff;
 const LCD_HALF_WIDTH = LCD_WIDTH / 2;
 
 // かな入力合成で使う半角カナ特殊コード。
@@ -346,8 +337,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private firmwareReturnAddress = MONITOR_MAIN_LOOP_ADDR;
 
   private readonly frameBuffer = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
-  private readonly debugTextBuffer = new Uint8Array(LCD_COLS * LCD_ROWS);
-
   private readonly keyboardRows = new Uint8Array(8);
 
   private readonly pressedCodes = new Set<string>();
@@ -360,6 +349,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private firmwareOutWrites = 0;
   private firmwareEotWrites = 0;
   private runtimeServicePending = false;
+  private runtimePumpEnabled = true;
 
   private kanaMode = false;
   private kanaComposeBuffer = '';
@@ -395,7 +385,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private lcdX2 = 0;
   private lcdY2 = 0;
   private lcdRead = false;
-  private lcdTextCompatStream = false;
   private readonly lcdRawVram = new Uint8Array(8 * 0x80);
 
   private dirtyFrame = true;
@@ -471,7 +460,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         bank.fill(0);
       }
       this.seedBootstrapInMainRam();
-      this.debugTextBuffer.fill(SPACE_CODE);
       this.files.clear();
     }
 
@@ -486,8 +474,8 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.firmwareEotWrites = 0;
     this.kanaMode = false;
     this.kanaComposeBuffer = '';
-    this.textCursorCol = 0;
-    this.textCursorRow = 0;
+    this.textCursorCol = MONITOR_PROMPT_CURSOR_COL;
+    this.textCursorRow = MONITOR_PROMPT_CURSOR_ROW;
     this.textCursorPendingWrap = false;
     this.keyStrobe = 0;
     this.keyShift = 0;
@@ -508,9 +496,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.lcdX2 = 0;
     this.lcdY2 = 0;
     this.lcdRead = false;
-    this.lcdTextCompatStream = false;
     this.lcdRawVram.fill(0);
-    this.debugTextBuffer.fill(SPACE_CODE);
     this.printWaitTicks = 0;
     this.printPauseMode = false;
     this.graphicCursorX = 0;
@@ -542,7 +528,8 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     }
     this.elapsedTStates += clamped;
     const shouldServiceRuntime =
-      this.executionBackend === 'ts-compat' || this.executionDomain !== 'user-program' || this.runtimeServicePending;
+      (this.executionBackend === 'ts-compat' || this.executionDomain !== 'user-program' || this.runtimeServicePending) &&
+      this.runtimePumpEnabled;
     if (shouldServiceRuntime) {
       this.runtime.pump();
       this.flushRuntimeOutputToLcd();
@@ -584,7 +571,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       if (code === 0) {
         break;
       }
-      this.writeCompatTextChar(code & 0xff);
+      this.writeTextChar(code & 0xff);
     }
   }
 
@@ -655,6 +642,13 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.immediateInputToRuntimeEnabled = Boolean(enabled);
   }
 
+  setRuntimePumpEnabled(enabled: boolean): void {
+    this.runtimePumpEnabled = Boolean(enabled);
+    if (!this.runtimePumpEnabled) {
+      this.runtimeServicePending = false;
+    }
+  }
+
   getKanaMode(): boolean {
     return this.kanaMode;
   }
@@ -699,21 +693,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
   isRuntimeProgramRunning(): boolean {
     return this.runtime.isProgramRunning();
-  }
-
-  getTextLines(): string[] {
-    const lines: string[] = [];
-    const frame = this.getFrameBuffer();
-    for (let row = 0; row < LCD_ROWS; row += 1) {
-      let line = '';
-      for (let col = 0; col < LCD_COLS; col += 1) {
-        const tracked = this.debugTextBuffer[row * LCD_COLS + col] ?? SPACE_CODE;
-        const code = tracked === SPACE_CODE ? this.decodeCellCode(frame, col, row) : tracked;
-        line += String.fromCharCode(toDisplayCode(code));
-      }
-      lines.push(line);
-    }
-    return lines;
   }
 
   getCpuState(): CpuState {
@@ -988,13 +967,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.textCursorCol = (snapshot.vram.cursor ?? 0) % LCD_COLS;
     this.textCursorRow = Math.trunc((snapshot.vram.cursor ?? 0) / LCD_COLS) % LCD_ROWS;
     this.textCursorPendingWrap = false;
-    this.debugTextBuffer.fill(SPACE_CODE);
-    for (let row = 0; row < LCD_ROWS; row += 1) {
-      for (let col = 0; col < LCD_COLS; col += 1) {
-        this.debugTextBuffer[row * LCD_COLS + col] = this.decodeCellCode(this.getFrameBuffer(), col, row);
-      }
-    }
-
     this.keyStrobe = snapshot.io.selectedKeyRow & 0xffff;
     this.keyboardRows.fill(0xff);
     this.keyboardRows.set(snapshot.io.keyboardRows.map((v) => v & 0xff).slice(0, this.keyboardRows.length));
@@ -1174,18 +1146,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.writeLcdData('secondary', byte);
         return;
       case PORT_LCD_COMMAND:
-        if (this.shouldUseLcdTextCompatCommand(byte)) {
-          this.writeCompatTextCommand(byte);
-          return;
-        }
-        this.lcdTextCompatStream = false;
         this.g815LcdCtrl('primary', byte);
         return;
       case PORT_LCD_DATA:
-        if (this.shouldUseLcdTextCompatData()) {
-          this.writeCompatTextChar(byte);
-          return;
-        }
         this.writeLcdData('primary', byte);
         return;
       default:
@@ -1291,6 +1254,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     const xx = x & 0x7f;
     const yy = y & 0x07;
     this.lcdRawVram[yy * 0x80 + xx] = value & 0xff;
+    this.dirtyFrame = true;
   }
 
   private seedBootstrapInMainRam(): void {
@@ -1473,53 +1437,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     return raw & 0x1f;
   }
 
-  private consumeLcdTextCompatFlag(): boolean {
-    const offset = LCD_TEXT_COMPAT_FLAG_ADDRESS - RAM_REGION.start;
-    if (offset < 0 || offset >= this.mainRam.length) {
-      return false;
-    }
-    if ((this.mainRam[offset] ?? 0) === 0) {
-      return false;
-    }
-    this.mainRam[offset] = 0;
-    return true;
-  }
-
-  private shouldUseLcdTextCompatCommand(command: number): boolean {
-    if (this.consumeLcdTextCompatFlag()) {
-      this.lcdTextCompatStream = true;
-      return true;
-    }
-    if (command === 0x01 || (command & 0x80) !== 0) {
-      this.lcdTextCompatStream = true;
-      return true;
-    }
-    return false;
-  }
-
-  private shouldUseLcdTextCompatData(): boolean {
-    if (this.consumeLcdTextCompatFlag()) {
-      this.lcdTextCompatStream = true;
-      return true;
-    }
-    return this.lcdTextCompatStream;
-  }
-
-  private writeCompatTextCommand(command: number): void {
-    if (command === 0x01) {
-      this.clearRawScreen();
-      return;
-    }
-
-    if ((command & 0x80) !== 0) {
-      const cursor = (command & 0x7f) % (LCD_COLS * LCD_ROWS);
-      this.textCursorCol = cursor % LCD_COLS;
-      this.textCursorRow = Math.trunc(cursor / LCD_COLS);
-      this.textCursorPendingWrap = false;
-    }
-  }
-
-  private writeCompatTextChar(rawValue: number): void {
+  private writeTextChar(rawValue: number): void {
     const value = rawValue & 0xff;
     if (value === 0x0d) {
       this.textCursorCol = 0;
@@ -1532,6 +1450,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.textCursorRow += 1;
       } else {
         this.scrollScreenUp(LCD_GLYPH_PITCH_Y);
+        this.textCursorRow = LCD_ROWS - 1;
       }
       this.textCursorPendingWrap = false;
       return;
@@ -1553,6 +1472,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.textCursorRow += 1;
       } else {
         this.scrollScreenUp(LCD_GLYPH_PITCH_Y);
+        this.textCursorRow = LCD_ROWS - 1;
       }
       this.textCursorPendingWrap = false;
     }
@@ -1567,7 +1487,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
   private clearRawScreen(): void {
     this.lcdRawVram.fill(0);
-    this.debugTextBuffer.fill(SPACE_CODE);
     this.textCursorCol = 0;
     this.textCursorRow = 0;
     this.textCursorPendingWrap = false;
@@ -1577,9 +1496,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   }
 
   private clearTextCell(col: number, row: number): void {
-    if (col >= 0 && col < LCD_COLS && row >= 0 && row < LCD_ROWS) {
-      this.debugTextBuffer[row * LCD_COLS + col] = SPACE_CODE;
-    }
     const originX = col * LCD_GLYPH_PITCH_X;
     const originY = row * LCD_GLYPH_PITCH_Y;
     for (let y = 0; y < LCD_GLYPH_PITCH_Y; y += 1) {
@@ -1591,9 +1507,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
   private drawTextCell(col: number, row: number, charCode: number): void {
     this.clearTextCell(col, row);
-    if (col >= 0 && col < LCD_COLS && row >= 0 && row < LCD_ROWS) {
-      this.debugTextBuffer[row * LCD_COLS + col] = toDisplayCode(charCode);
-    }
     this.drawGlyphAt(col * LCD_GLYPH_PITCH_X, row * LCD_GLYPH_PITCH_Y, charCode);
   }
 
@@ -1625,10 +1538,11 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     if (shift % LCD_GLYPH_PITCH_Y === 0) {
       const rows = Math.min(LCD_ROWS, Math.trunc(shift / LCD_GLYPH_PITCH_Y));
       if (rows >= LCD_ROWS) {
-        this.debugTextBuffer.fill(SPACE_CODE);
+        this.textCursorRow = 0;
+      } else if (this.textCursorRow >= rows) {
+        this.textCursorRow -= rows;
       } else {
-        this.debugTextBuffer.copyWithin(0, rows * LCD_COLS, this.debugTextBuffer.length);
-        this.debugTextBuffer.fill(SPACE_CODE, this.debugTextBuffer.length - rows * LCD_COLS);
+        this.textCursorRow = 0;
       }
     }
     for (let y = 0; y < LCD_HEIGHT - shift; y += 1) {
@@ -1819,40 +1733,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     };
   }
 
-  private decodeCellCode(frame: Uint8Array, col: number, row: number): number {
-    const originX = col * LCD_GLYPH_PITCH_X;
-    const originY = row * LCD_GLYPH_PITCH_Y;
-    let bestCode = SPACE_CODE;
-    let bestScore = Number.POSITIVE_INFINITY;
-
-    for (let code = 0x20; code <= 0xff; code += 1) {
-      if (!hasGlyphForCode(code)) {
-        continue;
-      }
-      const glyph = getGlyphForCode(code);
-      let score = 0;
-      for (let y = 0; y < LCD_GLYPH_HEIGHT; y += 1) {
-        const bits = glyph[y] ?? 0;
-        for (let x = 0; x < LCD_GLYPH_WIDTH; x += 1) {
-          const expected = ((bits >> (LCD_GLYPH_WIDTH - 1 - x)) & 0x01) !== 0 ? 1 : 0;
-          const actual = frame[(originY + y) * LCD_WIDTH + (originX + x)] ?? 0;
-          if (expected !== actual) {
-            score += 1;
-          }
-        }
-      }
-      if (score < bestScore) {
-        bestScore = score;
-        bestCode = code;
-        if (score === 0) {
-          break;
-        }
-      }
-    }
-
-    return bestScore <= 6 ? bestCode : SPACE_CODE;
-  }
-
   private normalizeFilePath(path: string): string {
     if (path.startsWith('E:') || path.startsWith('e:')) {
       return path.slice(2);
@@ -1867,7 +1747,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.clearRawScreen();
       },
       writeLcdChar: (charCode: number) => {
-        this.writeCompatTextChar(charCode & 0xff);
+        this.writeTextChar(charCode & 0xff);
       },
       setDisplayStartLine: (line: number) => {
         const offset = WORKAREA_DISPLAY_START_LINE - RAM_REGION.start;

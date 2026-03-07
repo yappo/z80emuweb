@@ -194,8 +194,7 @@ flowchart LR
 現状実装の表示結果について:
 - 表示の正本は `lcdRawVram` であり、Canvas 向け framebuffer も raw LCD VRAM から直接復元する。
 - `0x54/0x56/0x57` 群と `0x58/0x5A/0x5B` 群は、独立座標を持つ LCD I/O として保持される。
-- BASIC ファームウェアの文字表示互換では、ファームウェア側が明示した場合に限り `0x58/0x5A` を raw LCD へのテキスト描画ストリームとして扱う。
-- 互換経路を使っても表示先は別テキスト層ではなく raw LCD VRAM である。
+- BASIC/monitor/ASM サンプルの文字表示も、最終的には raw LCD VRAM への byte/bit 書き込みだけで成立する。
 
 実装者向けの使い分け:
 1. 通常出力は `0x58/0x5A` を使う。
@@ -215,7 +214,7 @@ flowchart LR
   - `0xC0..0xFF` で表示開始行をワークエリアへ反映
 - data write 動作:
   - `0x56`: 条件を満たす時に raw VRAM へ書込み後、Xを進める
-  - `0x5A`: raw VRAM 書込みに加え、表示バッファ更新処理も実行
+  - `0x5A`: raw VRAM へ書込み後、Xを進める
   - `0x52`: `0x56` と `0x5A` を連続実行
 - data read 動作:
   - `0x57`,`0x5B` は初回読み取りで準備値 `0x00` を返し、以降で実データを返す
@@ -551,8 +550,9 @@ OUT (0x16),A      ; 読んだビットをクリア
 - `0x19/0x1B` はメモリ窓切替まで実装済み。bank 数と初期配置規則はMVP固定（`RAM=2`, `EXROM=8`, `banked ROM=16`）。
 - `0x5A` と `0x5B` のアドレス境界が非対称（`0x7B` 特例は write のみ）。
 - `0x51/0x55/0x59` の busy/status 値は依然として未確定で、固定値 `0x00` の暫定実装。
-- BASIC 互換のため `0x58/0x5A` にテキスト描画互換経路が残るが、描画結果は raw LCD VRAM にのみ反映される。
-- 将来方針: busy/status と icon/segment 領域の根拠を補強し、互換経路への依存をさらに減らす。
+- エミュレータ独自のテキスト層や `0x58/0x5A` の文字端末互換経路は持たない。
+- 画面検証や Web smoke test では machine 内部の文字配列を読まず、framebuffer を外側で decode した結果を使う。
+- 将来方針: busy/status と icon/segment 領域の根拠を補強する。
 
 ## 8. 補足: BASICでのI/O利用（簡潔）
 - BASIC `INP(port)` は内部で `machineAdapter.in8(port & 0xFF)` を呼びます。

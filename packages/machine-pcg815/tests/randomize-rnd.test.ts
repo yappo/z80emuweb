@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PCG815Machine } from '../src';
+import { PCG815Machine, decodeMachineText } from '../src';
 
 function encode(lines: string[]): number[] {
   const out: number[] = [];
@@ -13,7 +13,7 @@ function encode(lines: string[]): number[] {
 function run(lines: string[]): string[] {
   const m = new PCG815Machine({ executionBackend: 'z80-firmware' });
   m.runBasicInterpreter(encode(lines), { appendEot: true, maxTStates: 4_000_000 });
-  return m.getTextLines().map((line) => line.trim()).filter((line) => line.length > 0);
+  return decodeMachineText(m).map((line) => line.trim()).filter((line) => line.length > 0);
 }
 
 function runWithError(lines: string[]): { screen: string[]; error: Error | null } {
@@ -24,7 +24,7 @@ function runWithError(lines: string[]): { screen: string[]; error: Error | null 
   } catch (e) {
     error = e instanceof Error ? e : new Error(String(e));
   }
-  return { screen: m.getTextLines().map((line) => line.trim()).filter((line) => line.length > 0), error };
+  return { screen: decodeMachineText(m).map((line) => line.trim()).filter((line) => line.length > 0), error };
 }
 
 describe('z80 basic RANDOMIZE/RND', () => {

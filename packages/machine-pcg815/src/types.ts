@@ -68,6 +68,7 @@ export interface MachinePCG815 {
   getExecutionBackend(): PCG815ExecutionBackend;
   getExecutionDomain(): PCG815ExecutionDomain;
   setExecutionDomain(domain: PCG815ExecutionDomain): void;
+  setRuntimePumpEnabled(enabled: boolean): void;
   getFirmwareReturnAddress(): number;
   setFirmwareReturnAddress(address: number): void;
   getActiveRomBank(): number;
