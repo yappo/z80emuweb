@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BIOS_COLD_BOOT_ADDR,
   BIOS_JUMP_TABLE_ENTRY_COUNT,
   BIOS_ROM_BASE,
   BIOS_RESERVED_NOP_BYTES,
@@ -44,6 +45,7 @@ function typeLine(runtime: PcG815BasicRuntime, line: string): void {
 describe('createMonitorRom', () => {
   it('creates a 16 KiB ROM with banner text', () => {
     const rom = createMonitorRom();
+    const coldBootOffset = BIOS_COLD_BOOT_ADDR - BIOS_ROM_BASE;
     const promptOffset = MONITOR_PROMPT_RESUME_ADDR - BIOS_ROM_BASE;
     const mainLoopOffset = MONITOR_MAIN_LOOP_ADDR - BIOS_ROM_BASE;
     expect(rom.length).toBe(0x4000);
@@ -51,8 +53,12 @@ describe('createMonitorRom', () => {
     for (let entry = 0; entry < BIOS_JUMP_TABLE_ENTRY_COUNT; entry += 1) {
       expect(rom[BIOS_RESERVED_NOP_BYTES + entry * 3]).toBe(0xcd);
     }
+    expect(promptOffset).toBeGreaterThan(coldBootOffset);
     expect(Array.from(rom.slice(0, promptOffset)).some((byte) => byte !== 0)).toBe(true);
     expect(Array.from(rom.slice(promptOffset, mainLoopOffset)).some((byte) => byte !== 0)).toBe(true);
+    expect(Array.from(rom.slice(promptOffset, promptOffset + 10))).toEqual([
+      0x31, 0xff, 0x7f, 0x3a, 0xad, 0x6f, 0x57, 0x3a, 0xa8, 0x6f
+    ]);
     expect(Array.from(rom.slice(mainLoopOffset, mainLoopOffset + 8))).toEqual([
       0x3e, 0xff, 0xd3, 0x11, 0xdb, 0x10, 0x18, 0xf8
     ]);

@@ -10,14 +10,28 @@
 ; ルーチン: OUT_LCD_CHAR
 ; ----------------------------------------------------------------------------
 OUT_LCD_CHAR:
+  PUSH AF
+  PUSH BC
+  PUSH DE
+  PUSH HL
+  LD B,A
+  CALL LOAD_TEXT_CURSOR_DE
+  LD A,B
   CALL BIOS_CHAR_PUT_ENTRY
+  CALL STORE_TEXT_CURSOR_DE
+  POP HL
+  POP DE
+  POP BC
+  POP AF
   RET
 
 ; ----------------------------------------------------------------------------
 ; ルーチン: PRINT_CRLF
 ; ----------------------------------------------------------------------------
 PRINT_CRLF:
+  CALL LOAD_TEXT_CURSOR_DE
   CALL BIOS_CRLF_ENTRY
+  CALL STORE_TEXT_CURSOR_DE
   RET
 
 ; ----------------------------------------------------------------------------
@@ -25,14 +39,34 @@ PRINT_CRLF:
 ; ----------------------------------------------------------------------------
 PRINT_SPACE:
   LD A,CHAR_SPACE
-  CALL BIOS_CHAR_PUT_ENTRY
+  CALL OUT_LCD_CHAR
   RET
 
 ; ----------------------------------------------------------------------------
 ; ルーチン: PRINT_STRING_Z
 ; ----------------------------------------------------------------------------
 PRINT_STRING_Z:
-  CALL BIOS_STRING_PUT_Z_ENTRY
+  PUSH BC
+  PUSH DE
+  PUSH HL
+  PUSH HL
+  LD B,0
+PRINT_STRING_Z_COUNT_LOOP:
+  LD A,(HL)
+  OR A
+  JR Z,PRINT_STRING_Z_COUNT_DONE
+  INC HL
+  INC B
+  JR PRINT_STRING_Z_COUNT_LOOP
+PRINT_STRING_Z_COUNT_DONE:
+  POP HL
+  EX (SP),HL
+  CALL LOAD_TEXT_CURSOR_DE
+  CALL BIOS_STRING_PUT_ENTRY
+  CALL STORE_TEXT_CURSOR_DE
+  POP HL
+  POP DE
+  POP BC
   RET
 
 ; ----------------------------------------------------------------------------
@@ -119,15 +153,21 @@ LCD_SET_CURSOR_HOME:
   LD D,A
   LD E,A
   CALL BIOS_SET_CURSOR_ENTRY
+  CALL STORE_TEXT_CURSOR_DE
   RET
 
 ; 入力: D=row, E=col
 LCD_SET_CURSOR_DE:
   CALL BIOS_SET_CURSOR_ENTRY
+  CALL STORE_TEXT_CURSOR_DE
   RET
 
 LCD_CLEAR_SCREEN:
   CALL BIOS_CLEAR_SCREEN_ENTRY
+  XOR A
+  LD D,A
+  LD E,A
+  CALL STORE_TEXT_CURSOR_DE
   RET
 
 ; 入力: A=char, 出力: HL=glyph ptr
@@ -142,5 +182,26 @@ LCD_READ_RAW_BYTE:
 
 ; 入力: A=value, B=rawX(0..71), C=page(0..7)
 LCD_WRITE_RAW_BYTE:
+  LD (RAM_PRINT_DIGITS),A
+  LD D,B
+  LD E,C
+  LD HL,RAM_PRINT_DIGITS
+  LD B,1
   CALL BIOS_GRAPHICS_WRITE_RAW_ENTRY
+  RET
+
+LOAD_TEXT_CURSOR_DE:
+  LD A,(RAM_TEXT_ROW)
+  LD D,A
+  LD A,(RAM_TEXT_COL)
+  LD E,A
+  RET
+
+STORE_TEXT_CURSOR_DE:
+  LD A,E
+  LD (RAM_TEXT_COL),A
+  LD A,D
+  LD (RAM_TEXT_ROW),A
+  XOR A
+  LD (RAM_TEXT_WRAP),A
   RET

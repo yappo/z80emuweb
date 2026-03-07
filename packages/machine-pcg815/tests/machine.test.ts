@@ -14,6 +14,7 @@ import {
   PCG815_IO_MAP,
   PCG815_MEMORY_MAP,
   PCG815Machine,
+  MONITOR_PROMPT_RESUME_ADDR,
   validateHardwareMap
 } from '../src';
 
@@ -334,6 +335,13 @@ describe('PCG815Machine', () => {
     const frame = machine.getFrameBuffer();
     const litCount = frame.reduce((sum, bit) => sum + bit, 0);
     expect(litCount).toBeGreaterThan(0);
+    const lines = decodeMachineText(machine);
+    expect(lines[0]).toBe('PC-G815 COMPAT          ');
+    expect(lines[1]).toBe('BASIC READY             ');
+    expect(lines[2]).toBe('>                       ');
+
+    const snapshot = machine.createSnapshot();
+    expect(snapshot.vram.text.slice(0, 6)).toEqual([0x7f, 0x09, 0x09, 0x09, 0x06, 0x00]);
   });
 
   it('lights LCD pixels after monitor boot sequence', () => {
@@ -597,6 +605,44 @@ describe('PCG815Machine', () => {
     }
   );
 
+  it('returns BASIC programs to prompt-resume without redrawing the boot banner', () => {
+    const machine = new PCG815Machine();
+    machine.tick(260_000);
+
+    runBasic(machine, ['NEW', '10 CLS', '20 PRINT "OWARI"', '30 END', 'RUN']);
+
+    const screen = decodeMachineText(machine).join('\n');
+    expect(machine.getExecutionDomain()).toBe('firmware');
+    expect(machine.getFirmwareReturnAddress()).toBe(MONITOR_PROMPT_RESUME_ADDR);
+    expect(screen).toContain('OWARI');
+    expect(screen).toContain('> ');
+    expect(screen).not.toContain('BASIC READY');
+    expect(screen).not.toContain('PC-G815 COMPAT');
+  });
+
+  it('advances prompt cursor after BASIC return so typed characters do not overwrite each other', () => {
+    const machine = new PCG815Machine();
+    machine.tick(260_000);
+
+    runBasic(machine, ['NEW', '10 CLS', '20 PRINT "OWARI"', '30 END', 'RUN']);
+
+    machine.setKeyState('KeyA', true);
+    machine.tick(40_000);
+    machine.setKeyState('KeyA', false);
+    machine.tick(40_000);
+    machine.setKeyState('KeyS', true);
+    machine.tick(40_000);
+    machine.setKeyState('KeyS', false);
+    machine.tick(40_000);
+    machine.setKeyState('KeyD', true);
+    machine.tick(40_000);
+    machine.setKeyState('KeyD', false);
+    machine.tick(40_000);
+
+    const screen = decodeMachineText(machine).join('\n');
+    expect(screen).toContain('> ASD');
+  });
+
   it('blinks PUSH SPACE KEY line in sample intro loop', () => {
     const machine = new PCG815Machine();
     runBasic(machine, [
@@ -719,7 +765,7 @@ describe('PCG815Machine', () => {
     machine.out8(0x5a, 0x41);
     runBasic(machine, ['CLS']);
     const head = decodeMachineText(machine)[0] ?? '';
-    expect(head.startsWith(' '), head).toBe(true);
+    expect(head.startsWith('> '), head).toBe(true);
   });
 
   it('supports OUT 17 + INP(16) keyboard scan compatibility for Space key', () => {

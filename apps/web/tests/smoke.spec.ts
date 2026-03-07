@@ -488,7 +488,7 @@ test('assembler sample returns to monitor ROM prompt without boot banner redraw'
         }),
       { timeout: 5_000, intervals: [100, 250, 500] }
     )
-    .toMatch(/^0x02(87|A3|A4)$/i);
+    .toMatch(/^0x80F[ABCDEF]$/i);
 });
 
 test('assembler tab 3D sample keeps running and leaves animated frames', async ({ page }) => {

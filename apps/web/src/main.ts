@@ -2057,6 +2057,7 @@ function clearZ80RunTracking(): void {
   z80RunPumpActive = false;
   z80RunPumpIterations = 0;
   z80RunPumpExecutedTstates = 0;
+  machine.setRuntimePumpEnabled(true);
   machine.setImmediateInputToRuntimeEnabled(true);
 }
 
