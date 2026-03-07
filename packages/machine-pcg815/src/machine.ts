@@ -2,6 +2,7 @@ import type { CpuState, Z80PinsOut } from '@z80emu/core-z80';
 import { Z80Cpu } from '@z80emu/core-z80';
 import { BasicChipset, type IoDevice, type MemoryDevice } from '@z80emu/machine-chipsets';
 import {
+  BIOS_COLD_BOOT_ADDR,
   type BasicMachineAdapter,
   createMonitorRom,
   MONITOR_MAIN_LOOP_ADDR,
@@ -72,6 +73,7 @@ const BASIC_INTERPRETER_DEFAULT_RAM_START = 0x4000;
 const BASIC_INTERPRETER_DEFAULT_RAM_END = 0x6fff;
 const BASIC_INTERPRETER_DEFAULT_ROM_BANK = 0x0f;
 const USER_PROGRAM_RETURN_STACK = 0x7ffc;
+const BOOT_VECTOR_SIZE = 0x0300;
 const FIRMWARE_BRIDGE_BINARY = Uint8Array.from([
   0xdb,
   0x1d, // IN A,(1Dh)
@@ -116,7 +118,18 @@ const PORT_LCD_STATUS_DUAL = getIoPortSpec('lcd-status-dual').port;
 const PORT_LCD_STATUS_SECONDARY = getIoPortSpec('lcd-status-secondary').port;
 
 const WORKAREA_DISPLAY_START_LINE = getWorkAreaSpec('display-start-line').address;
+const BIOS_WORKAREA_TEXT_COL = 0x6fa8;
+const BIOS_WORKAREA_TEXT_ROW = 0x6fad;
+const BIOS_WORKAREA_TEXT_WRAP = 0x6fae;
 const LCD_HALF_WIDTH = LCD_WIDTH / 2;
+
+function createBootVectorImage(targetAddress: number): Uint8Array {
+  const image = new Uint8Array(BOOT_VECTOR_SIZE);
+  image[0] = 0xc3; // JP nn
+  image[1] = targetAddress & 0xff;
+  image[2] = (targetAddress >> 8) & 0xff;
+  return image;
+}
 
 // かな入力合成で使う半角カナ特殊コード。
 const HALF_WIDTH_KANA_DAKUTEN = 0xde;
@@ -321,7 +334,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
   private readonly chipset: BasicChipset;
 
-  private readonly bootstrapImage: Uint8Array;
+  private readonly bootVectorImage: Uint8Array;
+  private readonly systemRomImage: Uint8Array;
+  private readonly legacyRomSeedImage?: Uint8Array;
 
   private readonly mainRamBanks = Array.from({ length: MAIN_RAM_BANKS }, () => new Uint8Array(PCG815_RAM_BYTES));
 
@@ -336,7 +351,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private readonly basicRamEnd: number;
   private readonly basicInterpreterRomBank: number;
   private executionDomain: PCG815ExecutionDomain = 'firmware';
-  private firmwareReturnAddress = MONITOR_MAIN_LOOP_ADDR;
+  private firmwareReturnAddress = MONITOR_PROMPT_RESUME_ADDR;
 
   private readonly frameBuffer = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
   private readonly keyboardRows = new Uint8Array(8);
@@ -424,9 +439,11 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   constructor(options?: PCG815MachineOptions) {
     const basicBundle = getBasicInterpreterRomBundle();
     const monitorRom = options?.rom ?? createMonitorRom();
-    this.bootstrapImage = new Uint8Array(monitorRom);
+    this.systemRomImage = new Uint8Array(monitorRom);
+    this.legacyRomSeedImage = options?.rom ? new Uint8Array(options.rom) : undefined;
+    this.bootVectorImage = createBootVectorImage(BIOS_COLD_BOOT_ADDR);
     this.executionBackend = options?.executionBackend ?? 'z80-firmware';
-    this.firmwareReturnAddress = clamp16(options?.firmwareReturnAddress ?? MONITOR_MAIN_LOOP_ADDR);
+    this.firmwareReturnAddress = clamp16(options?.firmwareReturnAddress ?? MONITOR_PROMPT_RESUME_ADDR);
     this.basicInterpreterEntry = clamp16(options?.basicInterpreterEntry ?? basicBundle.entry ?? BASIC_INTERPRETER_DEFAULT_ENTRY);
     this.basicRamStart = clamp16(options?.basicRamStart ?? BASIC_INTERPRETER_DEFAULT_RAM_START);
     this.basicRamEnd = clamp16(options?.basicRamEnd ?? BASIC_INTERPRETER_DEFAULT_RAM_END);
@@ -522,6 +539,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       if (this.executionDomain === 'user-program') {
         const reachedReturnAddress = this.chipset.tickWithInstructionFetchWatch(clamped, this.firmwareReturnAddress);
         if (reachedReturnAddress) {
+          this.restoreFirmwareDisplayStateAfterUserProgram();
           this.executionDomain = 'firmware';
         }
       } else {
@@ -568,6 +586,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   }
 
   private flushRuntimeOutputToLcd(): void {
+    this.syncTextCursorFromBiosWorkArea();
     while (true) {
       const code = this.runtime.popOutputChar();
       if (code === 0) {
@@ -778,6 +797,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
       const cpu = this.getCpuState();
       if (cpu.halted && this.executionDomain === 'user-program') {
+        this.restoreFirmwareDisplayStateAfterUserProgram();
         this.setCpuProgramCounter(firmwareReturnAddress);
         this.setExecutionDomain('firmware');
         break;
@@ -928,6 +948,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
       const cpu = this.getCpuState();
       if (cpu.halted && this.executionDomain === 'user-program') {
+        this.restoreFirmwareDisplayStateAfterUserProgram();
         this.setProgramCounter(firmwareReturnAddress);
         this.setExecutionDomain('firmware');
         break;
@@ -1287,7 +1308,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     if (!bootRam) {
       return;
     }
-    bootRam.set(this.bootstrapImage.subarray(0, Math.min(this.bootstrapImage.length, bootRam.length)), 0);
+    bootRam.set(this.bootVectorImage.subarray(0, Math.min(this.bootVectorImage.length, bootRam.length)), 0);
   }
 
   private seedRomWindows(): void {
@@ -1298,36 +1319,38 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       bank.fill(0);
     }
 
-    let offset = 0;
-    const loadBank = (target: Uint8Array): void => {
-      if (offset >= this.bootstrapImage.length) {
-        return;
-      }
-      const end = Math.min(this.bootstrapImage.length, offset + target.length);
-      target.set(this.bootstrapImage.subarray(offset, end), 0);
-      offset = end;
-    };
-
-    // Compatibility mapping: image[0] -> system bank0, image[1] -> banked bank0.
     const systemBank0 = this.systemRomBanks[0];
-    const bankedBank0 = this.bankedRomBanks[0];
-    if (systemBank0) {
-      loadBank(systemBank0);
-    }
-    if (bankedBank0) {
-      loadBank(bankedBank0);
-    }
+    if (this.legacyRomSeedImage && this.legacyRomSeedImage.length > SYSTEM_ROM_SIZE) {
+      let offset = 0;
+      const loadBank = (target: Uint8Array): void => {
+        if (offset >= this.legacyRomSeedImage!.length) {
+          return;
+        }
+        const end = Math.min(this.legacyRomSeedImage!.length, offset + target.length);
+        target.set(this.legacyRomSeedImage!.subarray(offset, end), 0);
+        offset = end;
+      };
 
-    const interleavedBankCount = Math.max(this.systemRomBanks.length, this.bankedRomBanks.length);
-    for (let bank = 1; bank < interleavedBankCount; bank += 1) {
-      const system = this.systemRomBanks[bank];
-      if (system) {
-        loadBank(system);
+      if (systemBank0) {
+        loadBank(systemBank0);
       }
-      const banked = this.bankedRomBanks[bank];
-      if (banked) {
-        loadBank(banked);
+      const bankedBank0 = this.bankedRomBanks[0];
+      if (bankedBank0) {
+        loadBank(bankedBank0);
       }
+      const interleavedBankCount = Math.max(this.systemRomBanks.length, this.bankedRomBanks.length);
+      for (let bank = 1; bank < interleavedBankCount; bank += 1) {
+        const system = this.systemRomBanks[bank];
+        if (system) {
+          loadBank(system);
+        }
+        const banked = this.bankedRomBanks[bank];
+        if (banked) {
+          loadBank(banked);
+        }
+      }
+    } else if (systemBank0) {
+      systemBank0.set(this.systemRomImage.subarray(0, Math.min(this.systemRomImage.length, systemBank0.length)), 0);
     }
 
     this.installBasicInterpreterRomImage();
@@ -1462,11 +1485,38 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     return raw & 0x1f;
   }
 
+  private syncTextCursorFromBiosWorkArea(): void {
+    if (this.executionBackend !== 'z80-firmware') {
+      return;
+    }
+    this.textCursorCol = Math.max(0, Math.min(LCD_COLS - 1, this.read8(BIOS_WORKAREA_TEXT_COL) & 0xff));
+    this.textCursorRow = Math.max(0, Math.min(LCD_ROWS - 1, this.read8(BIOS_WORKAREA_TEXT_ROW) & 0xff));
+    this.textCursorPendingWrap = (this.read8(BIOS_WORKAREA_TEXT_WRAP) & 0x01) !== 0;
+  }
+
+  private syncBiosWorkAreaFromTextCursor(): void {
+    if (this.executionBackend !== 'z80-firmware') {
+      return;
+    }
+    this.write8(BIOS_WORKAREA_TEXT_COL, this.textCursorCol & 0xff);
+    this.write8(BIOS_WORKAREA_TEXT_ROW, this.textCursorRow & 0xff);
+    this.write8(BIOS_WORKAREA_TEXT_WRAP, this.textCursorPendingWrap ? 1 : 0);
+  }
+
+  private restoreFirmwareDisplayStateAfterUserProgram(): void {
+    if (this.executionBackend !== 'z80-firmware') {
+      return;
+    }
+    this.write8(WORKAREA_DISPLAY_START_LINE, 0);
+    this.syncTextCursorFromBiosWorkArea();
+  }
+
   private writeTextChar(rawValue: number): void {
     const value = rawValue & 0xff;
     if (value === 0x0d) {
       this.textCursorCol = 0;
       this.textCursorPendingWrap = false;
+      this.syncBiosWorkAreaFromTextCursor();
       return;
     }
 
@@ -1478,6 +1528,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.textCursorRow = LCD_ROWS - 1;
       }
       this.textCursorPendingWrap = false;
+      this.syncBiosWorkAreaFromTextCursor();
       return;
     }
 
@@ -1488,6 +1539,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.textCursorCol -= 1;
       }
       this.clearTextCell(this.textCursorCol, this.textCursorRow);
+      this.syncBiosWorkAreaFromTextCursor();
       return;
     }
 
@@ -1508,6 +1560,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     } else {
       this.textCursorPendingWrap = true;
     }
+    this.syncBiosWorkAreaFromTextCursor();
   }
 
   private clearRawScreen(): void {
@@ -1517,6 +1570,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.textCursorPendingWrap = false;
     this.graphicCursorX = 0;
     this.graphicCursorY = 0;
+    this.syncBiosWorkAreaFromTextCursor();
     this.dirtyFrame = true;
   }
 
@@ -1809,6 +1863,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.textCursorCol = Math.max(0, Math.min(LCD_COLS - 1, col | 0));
         this.textCursorRow = Math.max(0, Math.min(LCD_ROWS - 1, row | 0));
         this.textCursorPendingWrap = false;
+        this.syncBiosWorkAreaFromTextCursor();
       },
       getDisplayStartLine: () => this.getDisplayStartLine(),
       readKeyMatrix: (row: number) => this.keyboardRows[row & 0x07] ?? 0xff,

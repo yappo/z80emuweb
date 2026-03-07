@@ -488,7 +488,7 @@ test('assembler sample returns to monitor ROM prompt without boot banner redraw'
         }),
       { timeout: 5_000, intervals: [100, 250, 500] }
     )
-    .toMatch(/^0x02(87|A3|A4)$/i);
+    .toMatch(/^0x80F[ABCDEF]$/i);
 });
 
 test('assembler tab 3D sample keeps running and leaves animated frames', async ({ page }) => {
@@ -502,7 +502,7 @@ test('assembler tab 3D sample keeps running and leaves animated frames', async (
   await page.locator('#asm-new').click();
   await page.locator('#asm-load-3d-sample').click();
   await expect(page.locator('#asm-run-status')).toContainText(/3D sample loaded/i);
-  await expect(page.locator('#asm-editor')).toHaveValue(/ORG 0x0300/i);
+  await expect(page.locator('#asm-editor')).toHaveValue(/ORG 0x0100/i);
   await expect(page.locator('#asm-editor')).toHaveValue(/RAY_COUNT/i);
   await expect(page.locator('#asm-editor')).toHaveValue(/ROUTE_TABLE:/i);
 
