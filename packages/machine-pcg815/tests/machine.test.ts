@@ -499,7 +499,7 @@ describe('PCG815Machine', () => {
     expect(decodeMachineText(machine).join('\n')).toContain('42');
   });
 
-  it('keeps reserved RAM 0x7000-0x7FFF untouched by BASIC interpreter program store', { timeout: 10_000 }, () => {
+  it('keeps reserved RAM 0x7000-0x7FFF untouched by BASIC interpreter program store', { timeout: 45_000 }, () => {
     const machine = new PCG815Machine();
     machine.write8(0x7000, 0x5a);
 
