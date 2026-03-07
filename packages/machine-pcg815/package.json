@@ -12,7 +12,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run tests/machine.test.ts && vitest run tests/basic-command-spec.test.ts && vitest run tests/char-function.test.ts tests/input-command.test.ts tests/label-support.test.ts tests/print-format.test.ts tests/print-semicolon.test.ts tests/randomize-rnd.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }
