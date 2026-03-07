@@ -14,7 +14,7 @@
 - ステータス定義:
   - `LOCKED`: 現在ビルドで安定採用
   - `TBD`: 実装済みだが暫定
-- 機械可読テーブルは `packages/machine-pcg815/src/hardware-map.ts` に集約し、ロード時/テスト時に検証する
+- 機械可読テーブルは `packages/machine-pcg815/src/hardware-map.ts` に集約し、LCD 実装本体は `packages/lcd-144x32` に置く
 
 ## 根拠インデックス
 
@@ -47,7 +47,7 @@
 | ドット解像度 | `144 x 32` | `CONFIRMED` | `z88dk-platform-sharp-pc` | `LOCKED` | 互換ターゲットの基準 |
 | 文字グリッド | `24 x 4` | `CONFIRMED` | `z88dk-platform-sharp-pc` | `LOCKED` | 96文字セル |
 | グリフモデル | `5 x 7` | `CONFIRMED` | `z88dk-platform-sharp-pc` | `LOCKED` | `6 x 8` ピッチで描画 |
-| フレームバッファモデル | raw LCD VRAM を正本とする 1bpp モノクロ | `DERIVED` | `ver0-js`, `ver0-root` | `LOCKED` | 描画は text layer 合成ではなく raw LCD VRAM から復元する |
+| フレームバッファモデル | raw LCD VRAM を正本とする 1bpp モノクロ | `DERIVED` | `ver0-js`, `ver0-root` | `LOCKED` | `packages/lcd-144x32` が raw VRAM から framebuffer を復元する |
 
 ## メモリ
 
@@ -85,6 +85,7 @@
 - LCDアイコンセグメントと独自記号は未だ実機厳密ではない
 - BASIC/monitor/ASM を含む全描画は raw LCD VRAM への byte/bit 書き込みで成立する
 - テスト/デバッグの文字観測は machine 内部テキストVRAMではなく、framebuffer を外側で decode する方式へ移行した
+- LCD font5x7 と framebuffer 文字 decode は `packages/lcd-144x32` に集約した
 
 ## BASIC互換ポリシー
 

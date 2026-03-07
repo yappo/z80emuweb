@@ -17,13 +17,6 @@ const ALT_GLYPHS = new Map<number, Uint8Array[]>([
   [0x3a, [Uint8Array.from([0x00, 0x06, 0x06, 0x00, 0x06, 0x06, 0x00])]]
 ]);
 
-export function toDisplayCode(value: number): number {
-  if (hasGlyphForCode(value)) {
-    return value & 0xff;
-  }
-  return LCD_TEXT_SPACE_CODE;
-}
-
 export function decodeLcdTextFrame(frame: Uint8Array): string[] {
   const lines: string[] = [];
   for (let row = 0; row < LCD_ROWS; row += 1) {

@@ -8,19 +8,22 @@
 エミュレータの中では、次の順で責務を分けています。
 
 1. 端末層: 画面を描き、キー入力を受ける
-2. マシン層: RAM/ROM/LCD/キーボード状態を持つ
-3. chipset層: CPU の pin 信号を読み解いて、メモリ/I/O に橋渡しする
-4. CPU層: Z80 命令を 1T ずつ実行して pin 信号を出す
+2. マシン層: RAM/ROM/キーボード/PC-G815 固有 I/O 状態を持つ
+3. LCD層: raw VRAM・LCD ポート・framebuffer を扱う
+4. chipset層: CPU の pin 信号を読み解いて、メモリ/I/O に橋渡しする
+5. CPU層: Z80 命令を 1T ずつ実行して pin 信号を出す
 
 ```mermaid
 flowchart LR
   UI["端末層\nWeb UI (画面・キー入力・実行ボタン)"]
-  MACH["マシン層\nPCG815Machine\n(RAM/ROM/LCD/キーボード状態を保持)"]
+  MACH["マシン層\nPCG815Machine\n(RAM/ROM/キーボード/PC-G815 I/O を保持)"]
+  LCD["LCD層\nLcd144x32\n(raw VRAM / LCD port / framebuffer)"]
   CHIP["chipset層\nBasicChipset\n(CPU pin とメモリ/I/Oを仲介)"]
   CPU["CPU層\nZ80Cpu\n(命令実行と pin 出力)"]
   FW["ファームウェア層\nMonitorRuntime / ROM"]
 
   UI -->|"tick・キー入力・状態取得"| MACH
+  MACH -->|"LCD 命令/状態取得"| LCD
   MACH -->|"memory / io デバイスを登録"| CHIP
   CHIP -->|"Z80PinsIn を渡す"| CPU
   CPU -->|"Z80PinsOut を返す"| CHIP
@@ -71,7 +74,8 @@ flowchart LR
 | 層 | 主コンポーネント | 主責務 | 下位層との接続 |
 |---|---|---|---|
 | 端末層 | Web UI（Canvas/Key入力/Editor） | 画面描画、キーイベント、実行操作 | `PCG815Machine` API を呼ぶ |
-| マシン層 | `PCG815Machine` | RAM/ROM/LCD/Keyboard/I/Oレジスタ管理、スナップショット管理 | `BasicChipset` に memory/io を登録 |
+| マシン層 | `PCG815Machine` | RAM/ROM/Keyboard/I/Oレジスタ管理、BIOS workarea 同期、スナップショット管理 | `BasicChipset` と `Lcd144x32` を束ねる |
+| LCD層 | `Lcd144x32` | raw VRAM、LCD command/data、graphics、framebuffer 生成 | マシン層から display start line と port 操作を受ける |
 | chipset層 | `BasicChipset` | CPU pin 解釈、メモリ/I/O ルーティング、INT/WAIT/RESET 等入力供給、read位相ラッチ、cycle trace 出力 | `Z80Core.tick()` を T-state 単位で駆動 |
 | CPU層 | `Z80Cpu` | 命令デコード、timing定義テーブル参照、M/T サイクル進行、pin出力生成 | `Z80PinsIn/Out` 契約でのみ通信 |
 | firmware層 | `MonitorRuntime` + ROM | BASIC/モニタ動作ロジック | machine adapter 経由でマシン資源を操作 |
@@ -110,7 +114,7 @@ flowchart LR
 flowchart TD
   CPU["CPU (Z80Cpu)"] -->|"mreq/iorq + rd/wr + addr + dataOut"| CHIP["chipset (BasicChipset)"]
   CHIP -->|"read8 / write8"| MEM["メモリデバイス\nRAM/ROM window"]
-  CHIP -->|"in8 / out8"| IO["I/Oデバイス\nキーボード/LCD/システムポート"]
+  CHIP -->|"in8 / out8"| IO["I/Oデバイス\nキーボード/システムポート/LCD port 配線"]
   MEM -->|"読み出し値"| CHIP
   IO -->|"読み出し値"| CHIP
   CHIP -->|"data / int / wait など"| CPU
@@ -153,7 +157,7 @@ sequenceDiagram
 3. CPU が I/O 読み取り命令でキーボードポートを読む  
 4. chipset が `in8(port)` を呼び、キーマトリクス値を返す  
 5. CPU/ランタイムが文字として処理し、LCD 用の I/O 書き込みを行う  
-6. マシン層の LCD バッファが更新され、端末層が描画する  
+6. LCD層の raw VRAM / framebuffer が更新され、端末層が描画する  
 
 ## 6. 接続を理解するための最小用語
 

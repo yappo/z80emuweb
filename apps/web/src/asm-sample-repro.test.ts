@@ -3,7 +3,8 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 import { assemble } from '@z80emu/assembler-z80';
-import { MONITOR_PROMPT_RESUME_ADDR, PCG815Machine, decodeMachineText } from '@z80emu/machine-pcg815';
+import { decodeMachineText } from '@z80emu/lcd-144x32';
+import { MONITOR_PROMPT_RESUME_ADDR, PCG815Machine } from '@z80emu/machine-pcg815';
 
 function extractAsmSample(source: string, name: 'ASM_SAMPLE' | 'ASM_SAMPLE_3D'): string {
   const marker = `const ${name} = \``;

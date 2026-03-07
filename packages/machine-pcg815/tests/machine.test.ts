@@ -2,14 +2,11 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import { decodeMachineText, getGlyphForCode, LCD_HEIGHT, LCD_WIDTH } from '@z80emu/lcd-144x32';
 
 import {
-  decodeMachineText,
-  getGlyphForCode,
   getWorkAreaSpec,
   KEY_MAP_BY_CODE,
-  LCD_HEIGHT,
-  LCD_WIDTH,
   PCG815_DISPLAY_SPEC,
   PCG815_IO_MAP,
   PCG815_MEMORY_MAP,
@@ -102,19 +99,6 @@ const BASIC_COMMANDS = [
   'WEND', 'LNINPUT', 'CLEAR', 'DELETE', 'ERASE', 'ON', 'RANDOMIZE', 'RENUM', 'USING', 'MON', 'OPEN', 'CLOSE', 'LOAD',
   'SAVE', 'LFILES', 'LCOPY', 'KILL', 'CALL', 'GCURSOR', 'GPRINT', 'LINE', 'PSET', 'PRESET', 'ELSE', 'EMPTY'
 ] as const;
-
-const FONT5X7_GOLDEN = JSON.parse(
-  readFileSync(fileURLToPath(new URL('./fixtures/font5x7-line-seed-20-ff.json', import.meta.url)), 'utf8')
-) as Record<string, string[]>;
-
-function toRowBits(glyph: Uint8Array): string[] {
-  const rows: string[] = [];
-  for (let y = 0; y < 7; y += 1) {
-    const bits = glyph[y] ?? 0;
-    rows.push(bits.toString(2).padStart(5, '0').slice(-5));
-  }
-  return rows;
-}
 
 function countLitPixels(glyph: Uint8Array): number {
   let total = 0;
@@ -272,14 +256,6 @@ describe('PCG815 hardware map metadata', () => {
     const fallback = [...getGlyphForCode(0x01)];
     for (let code = 0xe0; code <= 0xff; code += 1) {
       expect([...getGlyphForCode(code)]).not.toEqual(fallback);
-    }
-  });
-
-  it('matches committed font5x7 golden glyphs for complete range 0x20-0xFF', () => {
-    for (let code = 0x20; code <= 0xff; code += 1) {
-      const expected = FONT5X7_GOLDEN[code.toString(16)];
-      expect(expected, `missing golden for 0x${code.toString(16)}`).toBeDefined();
-      expect(toRowBits(getGlyphForCode(code))).toEqual(expected);
     }
   });
 
