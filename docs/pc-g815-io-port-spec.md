@@ -7,9 +7,9 @@
 
 ## 2. 背景
 - CPU コア（`packages/core-z80`）は pin 駆動で、`IN/OUT` は `iorq/rd/wr/addr` pin で表現します。
-- マシン依存の具体挙動（キーボード、LCD、システムポート）は `packages/machine-pcg815` に実装されています。
+- マシン依存の具体挙動（キーボード、LCD 配線、システムポート）は `packages/machine-pcg815` と `packages/lcd-144x32` に分かれて実装されています。
 - 仕様の優先順位は次の通りです。
-  1. `packages/machine-pcg815/src/machine.ts` の実装事実
+  1. `packages/machine-pcg815/src/machine.ts` と `packages/lcd-144x32/src/lcd.ts` の実装事実
   2. `packages/machine-pcg815/src/hardware-map.ts` の公開ポート定義
   3. CPU側前提は `docs/z80-cpu-spec-sheet.md`
 
@@ -30,7 +30,7 @@
 
 補足:
 - CPU はポート実装を直接持たず、必ず pin 信号経由で要求を出します。
-- ポートごとの実処理（キーマトリクス、LCD、システムレジスタ）は `PCG815Machine` 側で実装されます。
+- ポートごとの実処理は、キーマトリクス/システムレジスタを `PCG815Machine`、LCD port 本体を `Lcd144x32` が担当します。
 
 ```mermaid
 flowchart LR
@@ -57,7 +57,7 @@ flowchart LR
 
 ### 3.3 LCD 前提
 - `0x57` / `0x5B` のデータ読み出しは、初回 `IN` で `0x00` を返し、その後に実データ読み出しへ進む動作です。
-- LCD 制御コマンド（`0x50/0x54/0x58`）は `g815LcdCtrl` で解釈されます。
+- LCD 制御コマンド（`0x50/0x54/0x58`）は `Lcd144x32.applyCommand()` で解釈されます。
   - `0x40..0x7F`: X 設定
   - `0x80..0xBF`: Y 設定
   - `0xC0..0xFF`: 表示開始行設定（RAMワークエリア `0x790D` の下位 5bit 更新）
@@ -192,7 +192,7 @@ flowchart LR
 2. `0x50/0x52` が、上記2つのポート群へ同じ command/data を同時適用するため。
 
 現状実装の表示結果について:
-- 表示の正本は `lcdRawVram` であり、Canvas 向け framebuffer も raw LCD VRAM から直接復元する。
+- 表示の正本は `Lcd144x32` 内の raw VRAM であり、Canvas 向け framebuffer も raw LCD VRAM から直接復元する。
 - `0x54/0x56/0x57` 群と `0x58/0x5A/0x5B` 群は、独立座標を持つ LCD I/O として保持される。
 - BASIC/monitor/ASM サンプルの文字表示も、最終的には raw LCD VRAM への byte/bit 書き込みだけで成立する。
 
@@ -207,7 +207,7 @@ flowchart LR
   - 同時適用ポート: `0x50`（command）, `0x52`（data write）
 - 内部状態:
   - 座標レジスタ: `lcdX/lcdY`（`0x58/0x5A/0x5B` 群）, `lcdX2/lcdY2`（`0x54/0x56/0x57` 群）
-  - raw VRAM: 8 x 0x80 バイト (`lcdRawVram`)
+  - raw VRAM: 8 x 0x80 バイト（`Lcd144x32` が保持）
 - command 動作（`0x50`,`0x54`,`0x58`）:
   - `0x40..0x7F` で X 設定
   - `0x80..0xBF` で Y 設定
@@ -566,4 +566,5 @@ OUT (0x16),A      ; 読んだビットをクリア
 ## 参考実装
 - `packages/machine-pcg815/src/hardware-map.ts`
 - `packages/machine-pcg815/src/machine.ts`
+- `packages/lcd-144x32/src/lcd.ts`
 - `docs/z80-cpu-spec-sheet.md`

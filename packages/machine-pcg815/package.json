@@ -8,6 +8,7 @@
     "@z80emu/core-z80": "file:../core-z80",
     "@z80emu/firmware-z80-basic": "file:../firmware-z80-basic",
     "@z80emu/firmware-monitor": "file:../firmware-monitor",
+    "@z80emu/lcd-144x32": "file:../lcd-144x32",
     "@z80emu/machine-chipsets": "file:../machine-chipsets"
   },
   "scripts": {

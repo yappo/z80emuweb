@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { PCG815Machine, decodeMachineText } from '../src';
+import { decodeMachineText } from '@z80emu/lcd-144x32';
+import { PCG815Machine } from '../src';
 
 function encode(lines: readonly string[]): number[] {
   const bytes: number[] = [];
@@ -62,4 +63,3 @@ describe('z80 basic label support', () => {
     expect(machine.read8(0x6fa2)).toBe(1);
   });
 });
-

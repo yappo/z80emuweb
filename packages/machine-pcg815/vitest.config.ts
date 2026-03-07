@@ -7,6 +7,7 @@ export default defineConfig({
     alias: {
       '@z80emu/core-z80': path.resolve(__dirname, '../core-z80/src/index.ts'),
       '@z80emu/firmware-monitor': path.resolve(__dirname, '../firmware-monitor/src/index.ts'),
+      '@z80emu/lcd-144x32': path.resolve(__dirname, '../lcd-144x32/src/index.ts'),
       '@z80emu/machine-chipsets': path.resolve(__dirname, '../machine-chipsets/src/index.ts')
     }
   },

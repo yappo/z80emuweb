@@ -61,8 +61,9 @@ npm run dev
 - `apps/web`: ViteベースのWebアプリ（Canvas2D UI）
 - `packages/assembler-z80`: Web/CLI共通のZ80アセンブラ
 - `packages/core-z80`: pin入出力 + T-state 単位で進むZ80コア
+- `packages/lcd-144x32`: 144x32 LCD パッケージ（raw VRAM、framebuffer、font5x7、LCD I/O）
 - `packages/machine-chipsets`: CPU pin とマシンデバイスを接続する中間層
-- `packages/machine-pcg815`: マシン層（メモリマップ、LCD、キーボード）
+- `packages/machine-pcg815`: マシン層（メモリマップ、キーボード、PC-G815 固有 I/O 配線）
 - `packages/firmware-monitor`: モニタ + 小規模BASICランタイム
 - `docs/hardware-spec.md`: ハード仕様前提とマッピング
 - `docs/hardware-layer-overview.md`: 端末 - chipset - CPU の接続レイヤー概要
@@ -99,6 +100,7 @@ npm run generate -w @z80emu/firmware-z80-basic
 npm run build -w @z80emu/firmware-z80-basic
 
 # 3) 依存先のマシン層をビルド（Webが参照する配布物を更新）
+npm run build -w @z80emu/lcd-144x32
 npm run build -w @z80emu/machine-pcg815
 
 # 4) Webを起動して確認

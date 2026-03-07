@@ -9,7 +9,7 @@ const packageRoot = path.resolve(__dirname, '..');
 const asmDir = path.resolve(packageRoot, 'asm');
 const kernelFile = path.resolve(asmDir, 'kernel.asm');
 const outFile = path.resolve(packageRoot, 'src/generated/basic_firmware.ts');
-const fontSourceFile = path.resolve(packageRoot, '..', 'machine-pcg815', 'src', 'font5x7.ts');
+const fontSourceFile = path.resolve(packageRoot, '..', 'lcd-144x32', 'src', 'font5x7.ts');
 const fontAsmFile = path.resolve(asmDir, 'generated_font5x7.asm');
 
 function parseFontRows(source) {

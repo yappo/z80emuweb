@@ -14,6 +14,7 @@ export default defineConfig({
         __dirname,
         '../../packages/firmware-z80-basic/src/index.ts'
       ),
+      '@z80emu/lcd-144x32': path.resolve(__dirname, '../../packages/lcd-144x32/src/index.ts'),
       '@z80emu/machine-chipsets': path.resolve(
         __dirname,
         '../../packages/machine-chipsets/src/index.ts'

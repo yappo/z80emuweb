@@ -1,14 +1,11 @@
-import { PCG815_DISPLAY_SPEC } from './hardware-map';
-
-// ハードウェア仕様から描画定数をそのまま再公開する。
-export const LCD_WIDTH = PCG815_DISPLAY_SPEC.width;
-export const LCD_HEIGHT = PCG815_DISPLAY_SPEC.height;
-export const LCD_COLS = PCG815_DISPLAY_SPEC.textCols;
-export const LCD_ROWS = PCG815_DISPLAY_SPEC.textRows;
-export const LCD_GLYPH_WIDTH = PCG815_DISPLAY_SPEC.glyphWidth;
-export const LCD_GLYPH_HEIGHT = PCG815_DISPLAY_SPEC.glyphHeight;
-export const LCD_GLYPH_PITCH_X = PCG815_DISPLAY_SPEC.glyphPitchX;
-export const LCD_GLYPH_PITCH_Y = PCG815_DISPLAY_SPEC.glyphPitchY;
+export const LCD_WIDTH = 144;
+export const LCD_HEIGHT = 32;
+export const LCD_COLS = 24;
+export const LCD_ROWS = 4;
+export const LCD_GLYPH_WIDTH = 5;
+export const LCD_GLYPH_HEIGHT = 7;
+export const LCD_GLYPH_PITCH_X = 6;
+export const LCD_GLYPH_PITCH_Y = 8;
 
 function row(bits: string): number {
   return Number.parseInt(bits, 2) & 0x1f;

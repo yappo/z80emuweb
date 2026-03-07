@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { PCG815Machine, decodeMachineText } from '../src';
+import { decodeMachineText } from '@z80emu/lcd-144x32';
+import { PCG815Machine } from '../src';
 
 type CommandName =
   | 'AUTO'

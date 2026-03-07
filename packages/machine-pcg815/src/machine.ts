@@ -14,19 +14,17 @@ import {
 } from '@z80emu/firmware-monitor';
 export { MONITOR_MAIN_LOOP_ADDR, MONITOR_PROMPT_RESUME_ADDR } from '@z80emu/firmware-monitor';
 import { getBasicInterpreterRomBundle } from '@z80emu/firmware-z80-basic';
-
 import {
-  getGlyphForCode,
+  hasGlyphForCode,
   LCD_COLS,
-  LCD_GLYPH_HEIGHT,
   LCD_GLYPH_PITCH_X,
   LCD_GLYPH_PITCH_Y,
-  LCD_GLYPH_WIDTH,
   LCD_HEIGHT,
   LCD_ROWS,
-  LCD_WIDTH
-} from './font5x7';
-import { toDisplayCode } from './lcd-text';
+  LCD_WIDTH,
+  Lcd144x32
+} from '@z80emu/lcd-144x32';
+
 import {
   getIoPortSpec,
   getMemoryRegionSpec,
@@ -51,6 +49,10 @@ function clamp8(value: number): number {
 
 function clamp16(value: number): number {
   return value & 0xffff;
+}
+
+function normalizeDisplayCode(value: number): number {
+  return hasGlyphForCode(value) ? (value & 0xff) : 0x20;
 }
 
 const RAM_REGION = getMemoryRegionSpec('main-ram-window');
@@ -121,8 +123,6 @@ const WORKAREA_DISPLAY_START_LINE = getWorkAreaSpec('display-start-line').addres
 const BIOS_WORKAREA_TEXT_COL = 0x6fa8;
 const BIOS_WORKAREA_TEXT_ROW = 0x6fad;
 const BIOS_WORKAREA_TEXT_WRAP = 0x6fae;
-const LCD_HALF_WIDTH = LCD_WIDTH / 2;
-
 function createBootVectorImage(targetAddress: number): Uint8Array {
   const image = new Uint8Array(BOOT_VECTOR_SIZE);
   image[0] = 0xc3; // JP nn
@@ -353,7 +353,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   private executionDomain: PCG815ExecutionDomain = 'firmware';
   private firmwareReturnAddress = MONITOR_PROMPT_RESUME_ADDR;
 
-  private readonly frameBuffer = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
+  private readonly lcd = new Lcd144x32();
   private readonly keyboardRows = new Uint8Array(8);
 
   private readonly pressedCodes = new Set<string>();
@@ -397,25 +397,12 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     intDataBus: 0xff
   };
 
-  private lcdX = 0;
-  private lcdY = 0;
-  private lcdX2 = 0;
-  private lcdY2 = 0;
-  private lcdRead = false;
-  private readonly lcdRawVram = new Uint8Array(8 * 0x80);
-
-  private dirtyFrame = true;
-  private frameRevision = 0;
-
   private elapsedTStates = 0;
   private wasRuntimeProgramRunning = false;
 
   private printWaitTicks = 0;
   private printPauseMode = false;
   private immediateInputToRuntimeEnabled = true;
-
-  private graphicCursorX = 0;
-  private graphicCursorY = 0;
 
   private readonly printerLines: string[] = [];
 
@@ -510,23 +497,16 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     this.battChk = 0;
     this.keyBreak = 0;
     this.pin11In = 0;
-    this.lcdX = 0;
-    this.lcdY = 0;
-    this.lcdX2 = 0;
-    this.lcdY2 = 0;
-    this.lcdRead = false;
-    this.lcdRawVram.fill(0);
+    this.lcd.reset();
+    this.lcd.setDisplayStartLine(0);
     this.printWaitTicks = 0;
     this.printPauseMode = false;
-    this.graphicCursorX = 0;
-    this.graphicCursorY = 0;
     this.printerLines.length = 0;
     this.openFiles.clear();
     this.nextFileHandle = 1;
 
     this.runtime.reset(cold);
     this.chipset.reset();
-    this.dirtyFrame = true;
     this.elapsedTStates = 0;
     this.wasRuntimeProgramRunning = false;
     this.executionDomain = 'firmware';
@@ -641,17 +621,13 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   }
 
   getFrameBuffer(): Uint8Array {
-    if (this.dirtyFrame) {
-      this.renderFrameBuffer();
-    }
-    return this.frameBuffer;
+    this.syncLcdDisplayStartLine();
+    return this.lcd.getFrameBuffer();
   }
 
   getFrameRevision(): number {
-    if (this.dirtyFrame) {
-      this.renderFrameBuffer();
-    }
-    return this.frameRevision;
+    this.syncLcdDisplayStartLine();
+    return this.lcd.getFrameRevision();
   }
 
   writeDisplayTextAt(col: number, row: number, text: string): void {
@@ -853,7 +829,6 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       const addr = start + i;
       this.mainRam[addr - RAM_REGION.start] = byte & 0xff;
     }
-    this.dirtyFrame = true;
   }
 
   setProgramCounter(entry: number): void {
@@ -966,7 +941,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       cpu: this.chipset.getCpuState(),
       ram: [...this.mainRam],
       vram: {
-        text: [...this.lcdRawVram],
+        text: [...this.lcd.getRawVram()],
         icons: [],
         cursor: (this.textCursorRow * LCD_COLS + this.textCursorCol) & 0x7f
       },
@@ -1000,8 +975,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       bank.set(ramBytes.slice(0, bank.length));
     }
 
-    this.lcdRawVram.fill(0);
-    this.lcdRawVram.set(snapshot.vram.text.map((v) => v & 0xff).slice(0, this.lcdRawVram.length));
+    this.lcd.loadRawVram(snapshot.vram.text);
     this.textCursorCol = (snapshot.vram.cursor ?? 0) % LCD_COLS;
     this.textCursorRow = Math.trunc((snapshot.vram.cursor ?? 0) / LCD_COLS) % LCD_ROWS;
     this.textCursorPendingWrap = false;
@@ -1025,7 +999,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
     this.chipset.loadCpuState(snapshot.cpu);
     this.elapsedTStates = snapshot.timestampTStates;
-    this.dirtyFrame = true;
+    this.syncLcdDisplayStartLine();
   }
 
   read8(addr: number): number {
@@ -1056,7 +1030,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
 
     this.mainRam[address - RAM_REGION.start] = byte;
     if (address === WORKAREA_DISPLAY_START_LINE) {
-      this.dirtyFrame = true;
+      this.lcd.setDisplayStartLine(byte);
     }
   }
 
@@ -1106,9 +1080,9 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       case PORT_LCD_STATUS_MIRROR:
         return 0x00;
       case PORT_LCD_READ_SECONDARY:
-        return this.readLcdData(false);
+        return this.lcd.readData(false);
       case PORT_LCD_STATUS:
-        return this.readLcdData(true);
+        return this.lcd.readData(true);
       default:
         return 0x78;
     }
@@ -1170,24 +1144,24 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       case PORT_SYS_1f:
         return;
       case PORT_LCD_COMMAND_DUAL:
-        this.g815LcdCtrl('secondary', byte);
-        this.g815LcdCtrl('primary', byte);
+        this.applyLcdCommand('secondary', byte);
+        this.applyLcdCommand('primary', byte);
         return;
       case PORT_LCD_DATA_DUAL:
-        this.writeLcdData('secondary', byte);
-        this.writeLcdData('primary', byte);
+        this.lcd.writeData('secondary', byte);
+        this.lcd.writeData('primary', byte);
         return;
       case PORT_LCD_COMMAND_SECONDARY:
-        this.g815LcdCtrl('secondary', byte);
+        this.applyLcdCommand('secondary', byte);
         return;
       case PORT_LCD_DATA_SECONDARY:
-        this.writeLcdData('secondary', byte);
+        this.lcd.writeData('secondary', byte);
         return;
       case PORT_LCD_COMMAND:
-        this.g815LcdCtrl('primary', byte);
+        this.applyLcdCommand('primary', byte);
         return;
       case PORT_LCD_DATA:
-        this.writeLcdData('primary', byte);
+        this.lcd.writeData('primary', byte);
         return;
       default:
         return;
@@ -1212,95 +1186,15 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
     return out & 0xff;
   }
 
-  private g815LcdCtrl(target: 'primary' | 'secondary', command: number): void {
-    this.lcdRead = false;
-    switch (command & 0xc0) {
-      case 0x00:
-        return;
-      case 0x40:
-        if (target === 'secondary') {
-          this.lcdX2 = command & 0x3f;
-        } else {
-          this.lcdX = command & 0x3f;
-        }
-        return;
-      case 0x80:
-        if (target === 'secondary') {
-          this.lcdY2 = command & 0x07;
-        } else {
-          this.lcdY = command & 0x07;
-        }
-        return;
-      case 0xc0: {
-        const line = (command >> 3) & 0x07;
-        const offset = WORKAREA_DISPLAY_START_LINE - RAM_REGION.start;
-        this.mainRam[offset] = line & 0x1f;
-        this.dirtyFrame = true;
-        return;
-      }
-    }
+  private syncLcdDisplayStartLine(): void {
+    this.lcd.setDisplayStartLine(this.getDisplayStartLine());
   }
 
-  private writeLcdData(target: 'primary' | 'secondary', value: number): void {
-    this.lcdRead = false;
-    if (target === 'secondary') {
-      if (this.lcdX2 < 0x3c && this.lcdY2 < 8) {
-        this.writeRawLcdAt(this.lcdX2, this.lcdY2, value);
-        this.lcdX2 = (this.lcdX2 + 1) & 0xff;
-      }
-      return;
+  private applyLcdCommand(target: 'primary' | 'secondary', command: number): void {
+    const nextLine = this.lcd.applyCommand(target, command);
+    if (nextLine !== undefined) {
+      this.write8(WORKAREA_DISPLAY_START_LINE, nextLine);
     }
-
-    const address = 0x3c + this.lcdX;
-    if ((address < 0x49 || address === 0x7b) && this.lcdY < 8) {
-      this.writeRawLcdAt(address, this.lcdY, value);
-      this.lcdX = (this.lcdX + 1) & 0xff;
-    }
-  }
-
-  private readLcdData(primary: boolean): number {
-    if (!this.lcdRead) {
-      this.lcdRead = true;
-      return 0x00;
-    }
-
-    if (!primary) {
-      if (this.lcdX2 < 0x3c && this.lcdY2 < 8) {
-        const value = this.readRawLcdAt(this.lcdX2, this.lcdY2);
-        this.lcdX2 = (this.lcdX2 + 1) & 0xff;
-        return value;
-      }
-      return 0x00;
-    }
-
-    const address = 0x3c + this.lcdX;
-    if (address < 0x49 && this.lcdY < 8) {
-      const value = this.readRawLcdAt(address, this.lcdY);
-      this.lcdX = (this.lcdX + 1) & 0xff;
-      return value;
-    }
-    return 0x00;
-  }
-
-  private readRawLcdAt(x: number, y: number): number {
-    const xx = x & 0x7f;
-    const yy = y & 0x07;
-    return this.lcdRawVram[yy * 0x80 + xx] ?? 0x00;
-  }
-
-  private writeRawLcdAt(x: number, y: number, value: number): void {
-    const xx = x & 0x7f;
-    const yy = y & 0x07;
-    const offset = yy * 0x80 + xx;
-    const next = value & 0xff;
-    if ((this.lcdRawVram[offset] ?? 0) === next) {
-      return;
-    }
-    this.lcdRawVram[offset] = next;
-    if (this.dirtyFrame) {
-      return;
-    }
-    this.updateFrameBufferFromRawByte(xx, yy, next);
   }
 
   private seedBootstrapInMainRam(): void {
@@ -1538,7 +1432,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       } else if (this.textCursorCol > 0) {
         this.textCursorCol -= 1;
       }
-      this.clearTextCell(this.textCursorCol, this.textCursorRow);
+      this.lcd.clearTextCell(this.textCursorCol, this.textCursorRow);
       this.syncBiosWorkAreaFromTextCursor();
       return;
     }
@@ -1554,7 +1448,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       this.textCursorPendingWrap = false;
     }
 
-    this.drawTextCell(this.textCursorCol, this.textCursorRow, toDisplayCode(value));
+    this.lcd.drawTextCell(this.textCursorCol, this.textCursorRow, normalizeDisplayCode(value));
     if (this.textCursorCol < LCD_COLS - 1) {
       this.textCursorCol += 1;
     } else {
@@ -1564,56 +1458,16 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
   }
 
   private clearRawScreen(): void {
-    this.lcdRawVram.fill(0);
+    this.lcd.clear();
     this.textCursorCol = 0;
     this.textCursorRow = 0;
     this.textCursorPendingWrap = false;
-    this.graphicCursorX = 0;
-    this.graphicCursorY = 0;
     this.syncBiosWorkAreaFromTextCursor();
-    this.dirtyFrame = true;
-  }
-
-  private clearTextCell(col: number, row: number): void {
-    const originX = col * LCD_GLYPH_PITCH_X;
-    const originY = row * LCD_GLYPH_PITCH_Y;
-    for (let y = 0; y < LCD_GLYPH_PITCH_Y; y += 1) {
-      for (let x = 0; x < LCD_GLYPH_PITCH_X; x += 1) {
-        this.writeScreenPixel(originX + x, originY + y, 0);
-      }
-    }
-  }
-
-  private drawTextCell(col: number, row: number, charCode: number): void {
-    this.clearTextCell(col, row);
-    this.drawGlyphAt(col * LCD_GLYPH_PITCH_X, row * LCD_GLYPH_PITCH_Y, charCode);
-  }
-
-  private drawGlyphAt(originX: number, originY: number, charCode: number): void {
-    const glyph = getGlyphForCode(charCode);
-    for (let y = 0; y < LCD_GLYPH_HEIGHT; y += 1) {
-      const bits = glyph[y] ?? 0;
-      for (let x = 0; x < LCD_GLYPH_WIDTH; x += 1) {
-        if (((bits >> (LCD_GLYPH_WIDTH - 1 - x)) & 0x01) === 0) {
-          continue;
-        }
-        this.writeScreenPixel(originX + x, originY + y, 1);
-      }
-    }
+    this.syncLcdDisplayStartLine();
   }
 
   private scrollScreenUp(lines: number): void {
     const shift = Math.max(0, Math.min(LCD_HEIGHT, Math.trunc(lines)));
-    if (shift === 0) {
-      return;
-    }
-    const snapshot = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
-    for (let y = 0; y < LCD_HEIGHT; y += 1) {
-      for (let x = 0; x < LCD_WIDTH; x += 1) {
-        snapshot[y * LCD_WIDTH + x] = this.readScreenPixel(x, y) ? 1 : 0;
-      }
-    }
-    this.lcdRawVram.fill(0);
     if (shift % LCD_GLYPH_PITCH_Y === 0) {
       const rows = Math.min(LCD_ROWS, Math.trunc(shift / LCD_GLYPH_PITCH_Y));
       if (rows >= LCD_ROWS) {
@@ -1624,218 +1478,7 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
         this.textCursorRow = 0;
       }
     }
-    for (let y = 0; y < LCD_HEIGHT - shift; y += 1) {
-      for (let x = 0; x < LCD_WIDTH; x += 1) {
-        if (snapshot[(y + shift) * LCD_WIDTH + x] !== 0) {
-          this.writeScreenPixel(x, y, 1);
-        }
-      }
-    }
-    this.dirtyFrame = true;
-  }
-
-  private renderFrameBuffer(): void {
-    const verticalScroll = this.getDisplayStartLine();
-    for (let y = 0; y < LCD_HEIGHT; y += 1) {
-      const sourceY = (y + verticalScroll) % LCD_HEIGHT;
-      for (let x = 0; x < LCD_WIDTH; x += 1) {
-        this.frameBuffer[y * LCD_WIDTH + x] = this.readScreenPixel(x, sourceY) ? 1 : 0;
-      }
-    }
-    this.dirtyFrame = false;
-    this.frameRevision = (this.frameRevision + 1) >>> 0;
-  }
-
-  private setGraphicsPixel(x: number, y: number, mode = 1): void {
-    this.writeScreenPixel(Math.trunc(x), Math.trunc(y), mode);
-  }
-
-  private drawGraphicsLine(x1: number, y1: number, x2: number, y2: number, mode = 1): void {
-    let cx = Math.trunc(x1);
-    let cy = Math.trunc(y1);
-    const tx = Math.trunc(x2);
-    const ty = Math.trunc(y2);
-
-    const dx = Math.abs(tx - cx);
-    const sx = cx < tx ? 1 : -1;
-    const dy = -Math.abs(ty - cy);
-    const sy = cy < ty ? 1 : -1;
-    let err = dx + dy;
-
-    while (true) {
-      this.setGraphicsPixel(cx, cy, mode);
-      if (cx === tx && cy === ty) {
-        break;
-      }
-      const e2 = err * 2;
-      if (e2 >= dy) {
-        err += dy;
-        cx += sx;
-      }
-      if (e2 <= dx) {
-        err += dx;
-        cy += sy;
-      }
-    }
-  }
-
-  private fillGraphicsArea(x: number, y: number, pattern = 6): void {
-    const sx = Math.trunc(x);
-    const sy = Math.trunc(y);
-    if (sx < 0 || sx >= LCD_WIDTH || sy < 0 || sy >= LCD_HEIGHT) {
-      return;
-    }
-
-    const seedOffset = sy * LCD_WIDTH + sx;
-    const target = this.readScreenPixel(sx, sy) ? 1 : 0;
-    const queue: number[] = [seedOffset];
-    const visited = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
-
-    const shouldPaint = (px: number, py: number): boolean => {
-      if (pattern <= 1 || pattern >= 6) {
-        return true;
-      }
-      const sum = Math.abs(px + py);
-      return sum % pattern === 0;
-    };
-
-    while (queue.length > 0) {
-      const offset = queue.pop();
-      if (offset === undefined || visited[offset]) {
-        continue;
-      }
-      visited[offset] = 1;
-
-      const px = offset % LCD_WIDTH;
-      const py = Math.trunc(offset / LCD_WIDTH);
-      if ((this.readScreenPixel(px, py) ? 1 : 0) !== target) {
-        continue;
-      }
-      if (shouldPaint(px, py)) {
-        this.writeScreenPixel(px, py, 1);
-      }
-
-      if (px > 0) {
-        queue.push(offset - 1);
-      }
-      if (px + 1 < LCD_WIDTH) {
-        queue.push(offset + 1);
-      }
-      if (py > 0) {
-        queue.push(offset - LCD_WIDTH);
-      }
-      if (py + 1 < LCD_HEIGHT) {
-        queue.push(offset + LCD_WIDTH);
-      }
-    }
-  }
-
-  private drawGraphicsText(text: string): void {
-    for (const ch of text) {
-      const code = ch.charCodeAt(0) & 0xff;
-      if (code === 0x0d) {
-        this.graphicCursorX = 0;
-        continue;
-      }
-      if (code === 0x0a) {
-        this.graphicCursorX = 0;
-        this.graphicCursorY += LCD_GLYPH_PITCH_Y;
-        continue;
-      }
-
-      const glyph = getGlyphForCode(code);
-      for (let y = 0; y < LCD_GLYPH_HEIGHT; y += 1) {
-        const bits = glyph[y] ?? 0;
-        for (let x = 0; x < LCD_GLYPH_WIDTH; x += 1) {
-          if (((bits >> (LCD_GLYPH_WIDTH - 1 - x)) & 0x01) === 0) {
-            continue;
-          }
-          this.setGraphicsPixel(this.graphicCursorX + x, this.graphicCursorY + y, 1);
-        }
-      }
-
-      this.graphicCursorX += LCD_GLYPH_PITCH_X;
-      if (this.graphicCursorX + LCD_GLYPH_WIDTH >= LCD_WIDTH) {
-        this.graphicCursorX = 0;
-        this.graphicCursorY += LCD_GLYPH_PITCH_Y;
-      }
-      if (this.graphicCursorY + LCD_GLYPH_HEIGHT >= LCD_HEIGHT) {
-        this.graphicCursorY = 0;
-      }
-    }
-  }
-
-  private writeScreenPixel(x: number, y: number, mode = 1): void {
-    const mapping = this.mapScreenPixel(x, y);
-    if (!mapping) {
-      return;
-    }
-
-    const offset = mapping.page * 0x80 + mapping.x;
-    const mask = 1 << mapping.bit;
-    const current = this.lcdRawVram[offset] ?? 0;
-    let next = current;
-    if (mode === 0) {
-      next = current & ~mask;
-    } else if (mode === 2) {
-      next = current ^ mask;
-    } else {
-      next = current | mask;
-    }
-    if (next === current) {
-      return;
-    }
-    this.lcdRawVram[offset] = next;
-    if (this.dirtyFrame) {
-      return;
-    }
-    this.updateFrameBufferFromRawByte(mapping.x, mapping.page, next);
-  }
-
-  private readScreenPixel(x: number, y: number): boolean {
-    const mapping = this.mapScreenPixel(x, y);
-    if (!mapping) {
-      return false;
-    }
-    const value = this.lcdRawVram[mapping.page * 0x80 + mapping.x] ?? 0;
-    return (value & (1 << mapping.bit)) !== 0;
-  }
-
-  private mapScreenPixel(x: number, y: number): { x: number; page: number; bit: number } | null {
-    const ix = Math.trunc(x);
-    const iy = Math.trunc(y);
-    if (ix < 0 || ix >= LCD_WIDTH || iy < 0 || iy >= LCD_HEIGHT) {
-      return null;
-    }
-
-    const page = iy >> 3;
-    const bit = iy & 0x07;
-    if (ix < LCD_HALF_WIDTH) {
-      return { x: ix & 0x7f, page, bit };
-    }
-    return {
-      x: (LCD_HALF_WIDTH - 1 - (ix - LCD_HALF_WIDTH)) & 0x7f,
-      page: (page + 4) & 0x07,
-      bit
-    };
-  }
-
-  private updateFrameBufferFromRawByte(rawX: number, rawPage: number, value: number): void {
-    if (rawX < 0 || rawX >= LCD_HALF_WIDTH || rawPage < 0 || rawPage >= 8) {
-      return;
-    }
-
-    const visibleX = rawPage < 4 ? rawX : LCD_HALF_WIDTH + (LCD_HALF_WIDTH - 1 - rawX);
-    const sourceBaseY = (rawPage & 0x03) * 8;
-    const verticalScroll = this.getDisplayStartLine();
-
-    for (let bit = 0; bit < 8; bit += 1) {
-      const sourceY = sourceBaseY + bit;
-      const visibleY = (sourceY - verticalScroll + LCD_HEIGHT) % LCD_HEIGHT;
-      this.frameBuffer[visibleY * LCD_WIDTH + visibleX] = (value >> bit) & 0x01;
-    }
-
-    this.frameRevision = (this.frameRevision + 1) >>> 0;
+    this.lcd.scrollUp(lines);
   }
 
   private normalizeFilePath(path: string): string {
@@ -1851,13 +1494,8 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       clearLcd: () => {
         this.clearRawScreen();
       },
-      writeLcdChar: (charCode: number) => {
-        this.writeTextChar(charCode & 0xff);
-      },
       setDisplayStartLine: (line: number) => {
-        const offset = WORKAREA_DISPLAY_START_LINE - RAM_REGION.start;
-        this.mainRam[offset] = line & 0x1f;
-        this.dirtyFrame = true;
+        this.write8(WORKAREA_DISPLAY_START_LINE, line & 0x1f);
       },
       setTextCursor: (col: number, row: number) => {
         this.textCursorCol = Math.max(0, Math.min(LCD_COLS - 1, col | 0));
@@ -1929,20 +1567,19 @@ export class PCG815Machine implements MachinePCG815, MemoryDevice, IoDevice {
       },
       callMachine: (_address: number, _args: number[]) => 0,
       setGraphicCursor: (x: number, y: number) => {
-        this.graphicCursorX = Math.max(0, Math.min(LCD_WIDTH - 1, Math.trunc(x)));
-        this.graphicCursorY = Math.max(0, Math.min(LCD_HEIGHT - 1, Math.trunc(y)));
+        this.lcd.setGraphicCursor(x, y);
       },
       drawLine: (x1: number, y1: number, x2: number, y2: number, mode = 1) => {
-        this.drawGraphicsLine(x1, y1, x2, y2, mode);
+        this.lcd.drawLine(x1, y1, x2, y2, mode);
       },
       drawPoint: (x: number, y: number, mode = 1) => {
-        this.setGraphicsPixel(x, y, mode);
+        this.lcd.drawPoint(x, y, mode);
       },
       paintArea: (x: number, y: number, pattern = 6) => {
-        this.fillGraphicsArea(x, y, pattern);
+        this.lcd.paintArea(x, y, pattern);
       },
       printGraphicText: (text: string) => {
-        this.drawGraphicsText(text);
+        this.lcd.printGraphicText(text);
       },
       readInkey: () => {
         const code = this.asciiQueue.shift();

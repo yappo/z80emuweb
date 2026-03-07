@@ -34,7 +34,6 @@ export type SnapshotArray = SnapshotNumberArray | SnapshotStringArray;
 // エミュレータ本体に依存しすぎない最小限の機械アダプタ。
 export interface BasicMachineAdapter {
   clearLcd?(): void;
-  writeLcdChar?(charCode: number): void;
   setDisplayStartLine?(line: number): void;
   getDisplayStartLine?(): number;
   setTextCursor?(col: number, row: number): void;
