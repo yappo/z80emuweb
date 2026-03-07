@@ -84,7 +84,7 @@ function tapShiftedKey(machine: PCG815Machine, code: string): void {
 }
 
 describe('asm samples', () => {
-  it('assembles samples outside the firmware bootstrap area', () => {
+  it('assembles both samples at origin 0x0100', () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     for (const name of ['ASM_SAMPLE', 'ASM_SAMPLE_3D'] as const) {
       const asm = extractAsmSample(mainTs, name);
@@ -95,7 +95,7 @@ describe('asm samples', () => {
       }
       const origin = assembled.origin & 0xffff;
       const end = (origin + assembled.binary.length - 1) & 0xffff;
-      expect(origin).toBeGreaterThanOrEqual(0x0300);
+      expect(origin).toBe(0x0100);
       expect(end).toBeLessThan(0x7ffc);
     }
   });
