@@ -170,6 +170,8 @@ TOKEN_NEW:
   DB "NEW",0
 TOKEN_RUN:
   DB "RUN",0
+TOKEN_RETURN:
+  DB "RETURN",0
 
 ; ----------------------------------------------------------------------------
 ; ルーチン: CLASSIFY_COMMAND
@@ -241,6 +243,8 @@ MATCH_TOKEN_LOOP:
 MATCH_TOKEN_DONE:
   LD A,(HL)
   CP CHAR_SPACE
+  JR Z,MATCH_TOKEN_OK
+  CP CHAR_CR
   JR Z,MATCH_TOKEN_OK
   CP CHAR_COLON
   JR Z,MATCH_TOKEN_OK

@@ -33,6 +33,10 @@ BASIC_ENTRY:
 IN_PORT      EQU 0x1D
 LCD_PORT     EQU 0x5A
 LCD_CMD_PORT EQU 0x58
+LCD_PORT2    EQU 0x56
+LCD_CMD2_PORT EQU 0x54
+LCD_READ_PORT EQU 0x5B
+LCD_READ2_PORT EQU 0x57
 
 ; -------------------------------
 ; 文字コード
@@ -149,6 +153,9 @@ RAM_INPUT_FLAGS         EQU 0x6FA9
 RAM_INPUT_PROMPT_LEN    EQU 0x6FAA
 RAM_INPUT_DELIM         EQU 0x6FAB
 RAM_INPUT_ECHO          EQU 0x6FAC
+RAM_TEXT_ROW            EQU 0x6FAD
+RAM_TEXT_WRAP           EQU 0x6FAE
+RAM_IF_SKIP_LINE        EQU 0x6FAF
 RAM_FILE_TABLE      EQU 0x6FB1
 FILE_NAME_MAX       EQU 15
 FILE_MAX_ENTRIES    EQU 4
@@ -158,6 +165,7 @@ VAR_MAX_ENTRIES     EQU 64
 
 INCLUDE "command_tokens.asm"
 INCLUDE "line_input.asm"
+INCLUDE "generated_font5x7.asm"
 INCLUDE "runtime_io.asm"
 INCLUDE "program_store.asm"
 INCLUDE "runtime_exec.asm"

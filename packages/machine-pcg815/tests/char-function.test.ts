@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PCG815Machine } from '../src';
+import { PCG815Machine, decodeMachineText } from '../src';
 
 function encode(lines: readonly string[]): number[] {
   const out: number[] = [];
@@ -17,7 +17,7 @@ describe('z80 basic CHAR$/CHR$ print', () => {
       encode(['10 PRINT CHAR$(38)', '20 PRINT CHAR$(33)', '30 PRINT CHAR$(37)', 'RUN']),
       { appendEot: true, maxTStates: 2_000_000 }
     );
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('&');
     expect(screen).toContain('!');
     expect(screen).toContain('%');
@@ -30,7 +30,7 @@ describe('z80 basic CHAR$/CHR$ print', () => {
       appendEot: true,
       maxTStates: 2_000_000
     });
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('AB');
   });
 });

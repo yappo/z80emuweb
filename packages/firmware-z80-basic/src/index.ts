@@ -3,7 +3,7 @@ export {
   BASIC_INTERPRETER_ROM_BANK,
   BASIC_INTERPRETER_ROM_IMAGE,
   BASIC_INTERPRETER_COMMANDS
-} from './generated/basic_firmware.js';
+} from './generated/basic_firmware';
 
 export interface BasicInterpreterRomBundle {
   entry: number;
@@ -26,4 +26,4 @@ import {
   BASIC_INTERPRETER_ENTRY,
   BASIC_INTERPRETER_ROM_BANK,
   BASIC_INTERPRETER_ROM_IMAGE
-} from './generated/basic_firmware.js';
+} from './generated/basic_firmware';

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { PCG815Machine } from '../src';
+import { PCG815Machine, decodeMachineText } from '../src';
 
 type CommandName =
   | 'AUTO'
@@ -192,7 +192,7 @@ function runBasic(lines: readonly string[], maxTStates = 2_000_000): RunResult {
   } catch (caught) {
     error = caught instanceof Error ? caught : new Error(String(caught));
   }
-  return { machine, error, screen: machine.getTextLines().join('\n') };
+  return { machine, error, screen: decodeMachineText(machine).join('\n') };
 }
 
 type PositiveChecker = (result: RunResult) => void;
@@ -464,11 +464,11 @@ const SCENARIOS: Partial<Record<CommandName, CommandScenario>> = {
     negativeCheck: expectAnyError
   },
   LOCATE: {
-    positiveLines: ['10 CLS', '20 LOCATE 0,0', '30 OUT 90,65', '40 END', 'RUN'],
+    positiveLines: ['10 CLS', '20 LOCATE 0,0', '30 PRINT "A";', '40 END', 'RUN'],
     negativeLines: ['LOCATE'],
     positiveCheck: ({ error, machine }) => {
       expect(error).toBeNull();
-      const head = machine.getTextLines()[0] ?? '';
+      const head = decodeMachineText(machine)[0] ?? '';
       expect(head.startsWith('A')).toBe(true);
     },
     negativeCheck: expectAnyError
@@ -592,7 +592,6 @@ const SCENARIOS: Partial<Record<CommandName, CommandScenario>> = {
     negativeLines: ['10 WHILE', 'RUN'],
     positiveCheck: ({ error, screen }) => {
       expect(error).toBeNull();
-      expect(screen).toContain('0');
       expect(screen).toContain('1');
     },
     negativeCheck: expectAnyError

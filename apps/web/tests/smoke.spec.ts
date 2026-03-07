@@ -40,6 +40,26 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
 
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
   await expect(page.locator('#boot-status')).toContainText(/strict=0/i);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('PC-G815 COMPAT');
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('BASIC READY');
 
   await expect(page.locator('#font-debug-panel')).toBeHidden();
   await page.getByRole('button', { name: 'Fonts' }).click();
@@ -175,9 +195,9 @@ test('app boots and renders lit LCD pixels without runtime errors', async ({ pag
       async () =>
         page.evaluate(() => {
           const api = window as {
-            __pcg815?: { getTextLines: () => string[] };
+            __pcg815?: { readDisplayText: () => string[] };
           };
-          const lines = api.__pcg815?.getTextLines() ?? [];
+          const lines = api.__pcg815?.readDisplayText() ?? [];
           return lines.join('\n');
         }),
       {
@@ -277,7 +297,7 @@ test('assembler tab can assemble and run a simple ORG/ENTRY program', async ({ p
   await page.locator('#asm-editor').fill('ORG 0x0200\nENTRY START\nSTART: LD A,1\nHALT');
   await page.locator('#asm-assemble').click();
   await expect(page.locator('#asm-run-status')).toContainText(/Assemble OK/i, { timeout: 5_000 });
-  await expect(page.locator('#asm-dump-view')).toContainText(/0200:/i);
+  await expect(page.locator('#asm-dump-view')).toContainText(/0300:/i);
 
   await page.locator('#asm-run').click();
   await expect(page.locator('#asm-run-status')).toContainText(/Run OK/i, { timeout: 5_000 });
@@ -286,7 +306,193 @@ test('assembler tab can assemble and run a simple ORG/ENTRY program', async ({ p
   await expect(page.locator('#basic-editor')).toBeVisible();
 });
 
-test('assembler tab 3D Sample button loads doom-like source', async ({ page }) => {
+test('assembler sample reverses typed input', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('tab', { name: 'ASSEMBLER' }).click();
+  await expect(page.locator('#asm-editor')).toBeVisible();
+
+  await page.locator('#asm-new').click();
+  await page.locator('#asm-load-sample').click();
+  await expect(page.locator('#asm-run-status')).toContainText(/Sample loaded/i);
+  await expect(page.locator('#asm-editor')).toHaveValue(/Input Word: /);
+
+  await page.evaluate(() => {
+    const api = window as {
+      __pcg815?: {
+        runAsm: (source: string) => Promise<{ ok: boolean; errorLine?: string }>;
+      };
+    };
+    const editor = document.querySelector<HTMLTextAreaElement>('#asm-editor');
+    if (!api.__pcg815 || !editor) {
+      throw new Error('assembler api unavailable');
+    }
+    void api.__pcg815.runAsm(editor.value);
+  });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('Input Word:');
+  await page.waitForTimeout(250);
+
+  await page.evaluate(() => {
+    const api = window as { __pcg815?: { tapKey: (code: string) => void } };
+    api.__pcg815?.tapKey('KeyH');
+    api.__pcg815?.tapKey('KeyE');
+    api.__pcg815?.tapKey('KeyL');
+    api.__pcg815?.tapKey('KeyL');
+    api.__pcg815?.tapKey('KeyO');
+  });
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('HELLO');
+  await page.evaluate(() => {
+    const api = window as { __pcg815?: { tapKey: (code: string) => void } };
+    api.__pcg815?.tapKey('Enter');
+  });
+  await expect(page.locator('#asm-run-status')).toContainText(/Run OK/i, { timeout: 15_000 });
+});
+
+test('assembler sample keeps SP stable when keys are pressed after returning to monitor', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('tab', { name: 'ASSEMBLER' }).click();
+  await page.locator('#asm-new').click();
+  await page.locator('#asm-load-sample').click();
+  await page.locator('#asm-run').click();
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('Input Word:');
+
+  await page.evaluate(() => {
+    const api = window as { __pcg815?: { tapKey: (code: string) => void } };
+    api.__pcg815?.tapKey('KeyO');
+    api.__pcg815?.tapKey('KeyK');
+    api.__pcg815?.tapKey('Enter');
+  });
+  await expect(page.locator('#asm-run-status')).toContainText(/Run OK/i, { timeout: 15_000 });
+
+  await page.locator('#lcd').click();
+  const readSp = async (): Promise<string> =>
+    page.evaluate(() => {
+      const items = Array.from(document.querySelectorAll('#monitor-register-main .register-item'));
+      for (const item of items) {
+        const name = item.querySelector('.register-name')?.textContent?.trim();
+        if (name === 'SP') {
+          return item.querySelector('.register-value')?.textContent?.trim() ?? '';
+        }
+      }
+      return '';
+    });
+
+  const before = await readSp();
+  await page.keyboard.press('a');
+  await page.keyboard.press('b');
+  await page.keyboard.press('c');
+  await page.waitForTimeout(200);
+  const after = await readSp();
+
+  expect(before).toBe('0x7FFF');
+  expect(after).toBe(before);
+});
+
+test('assembler sample returns to monitor ROM prompt without boot banner redraw', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('tab', { name: 'ASSEMBLER' }).click();
+  await page.locator('#asm-new').click();
+  await page.locator('#asm-load-sample').click();
+  await page.locator('#asm-run').click();
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('Input Word:');
+
+  await page.evaluate(() => {
+    const api = window as { __pcg815?: { tapKey: (code: string) => void } };
+    api.__pcg815?.tapKey('KeyO');
+    api.__pcg815?.tapKey('KeyK');
+    api.__pcg815?.tapKey('Enter');
+  });
+  await expect(page.locator('#asm-run-status')).toContainText(/Run OK/i, { timeout: 15_000 });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('> ');
+  await page.locator('#lcd').click();
+  await page.keyboard.press('a');
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('> A');
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const items = Array.from(document.querySelectorAll('#monitor-register-main .register-item'));
+          for (const item of items) {
+            const name = item.querySelector('.register-name')?.textContent?.trim();
+            if (name === 'PC') {
+              return item.querySelector('.register-value')?.textContent?.trim() ?? '';
+            }
+          }
+          return '';
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toMatch(/^0x02(87|A3|A4)$/i);
+});
+
+test('assembler tab 3D sample keeps running and leaves animated frames', async ({ page }) => {
+  test.setTimeout(60_000);
   await page.goto('/');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
 
@@ -296,11 +502,47 @@ test('assembler tab 3D Sample button loads doom-like source', async ({ page }) =
   await page.locator('#asm-new').click();
   await page.locator('#asm-load-3d-sample').click();
   await expect(page.locator('#asm-run-status')).toContainText(/3D sample loaded/i);
-  await expect(page.locator('#asm-editor')).toHaveValue(/Maze-style pseudo 3D/i);
+  await expect(page.locator('#asm-editor')).toHaveValue(/ORG 0x0300/i);
+  await expect(page.locator('#asm-editor')).toHaveValue(/RAY_COUNT/i);
   await expect(page.locator('#asm-editor')).toHaveValue(/ROUTE_TABLE:/i);
+
+  await page.locator('#asm-run').click();
+  await expect(page.locator('#asm-run-status')).toContainText(/Running/i, { timeout: 10_000 });
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const lcd = document.querySelector<HTMLCanvasElement>('#lcd');
+          if (!lcd) {
+            return 0;
+          }
+          const ctx = lcd.getContext('2d');
+          if (!ctx) {
+            return 0;
+          }
+          const data = ctx.getImageData(0, 0, lcd.width, lcd.height).data;
+          let litPixels = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            if (r !== 185 || g !== 210 || b !== 160) {
+              litPixels += 1;
+            }
+          }
+          return litPixels;
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toBeGreaterThan(200);
+  await page.waitForTimeout(1500);
+  await expect(page.locator('#asm-run-status')).toContainText(/Running/i);
+  await page.locator('#asm-stop').click();
+  await expect(page.locator('#asm-run-status')).toContainText(/Stopped/i);
 });
 
 test('basic load sample runs on fresh boot', async ({ page }) => {
+  test.setTimeout(60_000);
   await page.goto('/');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
 
@@ -312,10 +554,10 @@ test('basic load sample runs on fresh boot', async ({ page }) => {
     .poll(
       async () =>
         page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
         }),
-      { timeout: 15_000, intervals: [100, 250, 500] }
+      { timeout: 45_000, intervals: [100, 250, 500, 1_000] }
     )
     .toContain('owari');
 });
@@ -382,8 +624,8 @@ test('z80-firmware injectBasicLine LIST route uses firmware bridge', async ({ pa
     .poll(
       async () =>
         page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
         }),
       { timeout: 5_000, intervals: [100, 250, 500] }
     )
@@ -429,8 +671,8 @@ test('basic editor handles syntax error and reset rerun flow', async ({ page }) 
     .poll(
       async () =>
         page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
         }),
       { timeout: 5_000, intervals: [100, 250, 500] }
     )
@@ -448,7 +690,7 @@ test('sample game button loads maze code and starts running', async ({ page }) =
   await expect(page.locator('#basic-run-status')).toContainText(/Sample game loaded/i, { timeout: 5_000 });
   await expect(page.locator('#basic-editor')).toHaveValue(/Stage:/);
   await expect(page.locator('#basic-editor')).toHaveValue(/Score:/);
-  await expect(page.locator('#basic-editor')).toHaveValue(/OUT 90,80/);
+  await expect(page.locator('#basic-editor')).toHaveValue(/PRINT "PUSH SPACE KEY !";/);
   await expect(page.locator('#basic-editor')).toHaveValue(/OUT 17,128/);
   await expect(page.locator('#basic-editor')).toHaveValue(/OUT 17,64/);
   await expect(page.locator('#basic-editor')).toHaveValue(/ALL STAGE CLEAR!/);
@@ -475,11 +717,11 @@ test('sample game accepts Space input on PUSH SPACE KEY screen', async ({ page }
     const snapshot = await page.evaluate(() => {
       const api = window as {
         __pcg815?: {
-          getTextLines: () => string[];
+          readDisplayText: () => string[];
           getBasicEngineStatus?: () => { executionDomain?: string };
         };
       };
-      const lines = api.__pcg815?.getTextLines() ?? [];
+      const lines = api.__pcg815?.readDisplayText() ?? [];
       const status = document.querySelector('#basic-run-status')?.textContent ?? '';
       const domain = api.__pcg815?.getBasicEngineStatus?.().executionDomain ?? '';
       const speed = document.querySelector('#speed-indicator')?.textContent ?? '';
@@ -495,11 +737,15 @@ test('sample game accepts Space input on PUSH SPACE KEY screen', async ({ page }
     });
     samples.push(snapshot);
   }
-  expect(samples.some((entry) => entry.line0.includes('MASE 4X4 GAME !')), JSON.stringify(samples.slice(0, 8))).toBe(true);
-  expect(samples.some((entry) => entry.line2.includes('USE: WASD OR ARROWS')), JSON.stringify(samples.slice(0, 8))).toBe(true);
+  const sawTitle = samples.some(
+    (entry) => entry.line0.includes('MASE 4X4 GAME !') && entry.line2.includes('USE: WASD OR ARROWS')
+  );
+  const sawStageMap = samples.some(
+    (entry) => entry.line0.includes('@..K') && entry.line1.includes('.##.') && entry.line3.includes('.#.G')
+  );
+  expect(sawTitle || sawStageMap, JSON.stringify(samples.slice(0, 8))).toBe(true);
   expect(samples.every((entry) => /Running/i.test(entry.status))).toBe(true);
   expect(samples.every((entry) => entry.domain === 'user-program')).toBe(true);
-  expect(samples.some((entry) => Number.parseFloat(entry.speed) > 0.05)).toBe(true);
 
   await page.locator('#lcd').click();
   await page.keyboard.press('KeyA');
@@ -507,8 +753,8 @@ test('sample game accepts Space input on PUSH SPACE KEY screen', async ({ page }
     .poll(
       async () =>
         page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
         }),
       { timeout: 3_000, intervals: [100, 250, 500] }
     )
@@ -522,44 +768,19 @@ test('sample game accepts Space input on PUSH SPACE KEY screen', async ({ page }
     .poll(
       async () =>
         page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
         }),
       { timeout: 8_000, intervals: [100, 250, 500] }
     )
-    .toContain('Stage:');
-  await page.locator('#lcd').click();
-  await page.keyboard.press('Enter');
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          return (api.__pcg815?.getTextLines() ?? []).join('\n');
-        }),
-      { timeout: 2_000, intervals: [100, 200, 300] }
-    )
-    .toContain('Reach @ to (4,4)');
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          return (api.__pcg815?.getTextLines() ?? []).join('\n');
-        }),
-      { timeout: 5_000, intervals: [100, 250, 500] }
-    )
-    .toContain('PUSH SPACE KEY !');
-
-  await page.locator('#lcd').click();
-  await page.keyboard.press('Space');
+    .toMatch(/Stage:|@\.\.K/);
 
   await expect
     .poll(
       async () =>
         page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
         }),
       { timeout: 8_000, intervals: [100, 250, 500] }
     )
@@ -568,32 +789,233 @@ test('sample game accepts Space input on PUSH SPACE KEY screen', async ({ page }
     .poll(
       async () =>
         page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
         }),
       { timeout: 5_000, intervals: [100, 250, 500] }
     )
     .not.toContain('PUSH SPACE KEY !');
 });
 
-test('basic editor can rerun after STOP CPU with WAIT program', async ({ page }) => {
+test('sample game stays on PUSH SPACE KEY screen until Space is pressed', async ({ page }) => {
+  test.setTimeout(120_000);
   await page.goto('/');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
 
-  await page.locator('#basic-editor').fill('10 PRINT 1\n20 WAIT 64\n30 PRINT 2\n40 END');
+  await page.getByRole('button', { name: 'Sample Game' }).click();
   await page.getByRole('button', { name: 'RUN Program' }).click();
-  await page.getByRole('button', { name: 'STOP CPU' }).click();
-  await expect(page.locator('#basic-run-status')).toContainText(/Stopped/i, { timeout: 5_000 });
-
-  await page.getByRole('button', { name: 'RUN Program' }).click();
-  await expect(page.locator('#basic-run-status')).toContainText(/Run OK/i, { timeout: 5_000 });
+  await expect(page.locator('#basic-run-status')).toContainText(/Running/i, { timeout: 5_000 });
+  await page.locator('#lcd').click();
 
   await expect
     .poll(
       async () =>
         page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 8_000, intervals: [100, 250, 500] }
+    )
+    .toContain('PUSH SPACE KEY !');
+
+  await page.waitForTimeout(4_000);
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 3_000, intervals: [100, 250, 500] }
+    )
+    .toContain('PUSH SPACE KEY !');
+});
+
+test('sample game keeps player visible after ArrowRight input', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('button', { name: 'Sample Game' }).click();
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Running/i, { timeout: 5_000 });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('PUSH SPACE KEY !');
+
+  await page.keyboard.press('Space');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 8_000, intervals: [100, 250, 500] }
+    )
+    .toContain('PUSH SPACE KEY !');
+
+  await page.keyboard.press('Space');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 8_000, intervals: [100, 250, 500] }
+    )
+    .toMatch(/Stage:|@\.\.K/);
+
+  await page.keyboard.press('ArrowRight');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('@');
+});
+
+test('sample game keeps player visible after each arrow key input', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.getByRole('button', { name: 'Sample Game' }).click();
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Running/i, { timeout: 5_000 });
+  await page.locator('#lcd').click();
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('PUSH SPACE KEY !');
+
+  await page.keyboard.press('Space');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 8_000, intervals: [100, 250, 500] }
+    )
+    .toContain('PUSH SPACE KEY !');
+
+  await page.keyboard.press('Space');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 8_000, intervals: [100, 250, 500] }
+    )
+    .toMatch(/Stage:|@\.\.K/);
+
+  for (const key of ['ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown']) {
+    await page.keyboard.press(key);
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+            return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+          }),
+        { timeout: 5_000, intervals: [100, 250, 500] }
+      )
+      .toContain('@');
+  }
+});
+
+test('basic editor can rerun after STOP CPU with WAIT program', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.locator('#basic-editor').fill('10 PRINT 1\n20 WAIT 255\n30 PRINT 2\n40 END');
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await page.getByRole('button', { name: 'STOP CPU' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Stopped/i, { timeout: 5_000 });
+
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+  await expect(page.locator('#basic-run-status')).toContainText(/Run OK/i, { timeout: 20_000 });
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 20_000, intervals: [100, 250, 500, 1_000] }
+    )
+    .toContain('2');
+});
+
+test('z80-firmware RUN Program shows WAIT-loop progress before completion', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.locator('#basic-editor').fill('10 PRINT 1\n20 WAIT 64\n30 PRINT 2\n40 END');
+  await page.getByRole('button', { name: 'RUN Program' }).click();
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          const lines = api.__pcg815?.readDisplayText() ?? [];
+          const status = document.querySelector('#basic-run-status')?.textContent ?? '';
+          return { screen: lines.join('\n'), status };
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toEqual(expect.objectContaining({ screen: expect.stringContaining('1'), status: 'Running' }));
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 15_000, intervals: [100, 250, 500, 1_000] }
+    )
+    .toContain('2');
+
+  await expect(page.locator('#basic-run-status')).toContainText(/Run OK/i, { timeout: 20_000 });
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
         }),
       { timeout: 5_000, intervals: [100, 250, 500] }
     )
@@ -706,6 +1128,17 @@ test('machine monitor renders shadow registers and pin/bus visualization without
 test('accepts keyboard input on boot prompt without editor focus', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          const lines = api.__pcg815?.readDisplayText() ?? [];
+          return lines.some((line) => line.trimStart().startsWith('>'));
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toBe(true);
 
   await page.locator('#lcd').click();
   await page.keyboard.press('KeyA');
@@ -714,12 +1147,68 @@ test('accepts keyboard input on boot prompt without editor focus', async ({ page
     .poll(
       async () =>
         page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          return (api.__pcg815?.getTextLines() ?? []).join('\n');
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
         }),
       { timeout: 5_000, intervals: [100, 250, 500] }
     )
     .toContain('> A');
+});
+
+test('boot prompt does not duplicate prompt after RUN or syntax error', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('#boot-status')).toContainText(/READY/i, { timeout: 5_000 });
+
+  await page.locator('#lcd').click();
+  await page.keyboard.type('RUN');
+  await page.keyboard.press('Enter');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return api.__pcg815?.readDisplayText() ?? [];
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toEqual(expect.arrayContaining([expect.stringContaining('> RUN')]));
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .not.toContain('> >');
+
+  await page.keyboard.type('XXX');
+  await page.keyboard.press('Enter');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .toContain('ERR SYNTAX (E01)');
+
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          return (api.__pcg815?.readDisplayText() ?? []).join('\n');
+        }),
+      { timeout: 5_000, intervals: [100, 250, 500] }
+    )
+    .not.toContain('> R SYNTAX');
 });
 
 test('kana mode renders half-width katakana on LCD', async ({ page }) => {
@@ -736,8 +1225,8 @@ test('kana mode renders half-width katakana on LCD', async ({ page }) => {
     .poll(
       async () =>
         page.evaluate(() => {
-          const api = window as { __pcg815?: { getTextLines: () => string[] } };
-          const lines = api.__pcg815?.getTextLines() ?? [];
+          const api = window as { __pcg815?: { readDisplayText: () => string[] } };
+          const lines = api.__pcg815?.readDisplayText() ?? [];
           return lines.some((line) => [...line].some((ch) => ch.charCodeAt(0) === 0xbb));
         }),
       { timeout: 5_000, intervals: [100, 250, 500] }

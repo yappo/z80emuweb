@@ -7,7 +7,9 @@ import {
   LCD_GLYPH_WIDTH,
   LCD_HEIGHT,
   LCD_WIDTH,
-  PCG815Machine
+  PCG815Machine,
+  MONITOR_PROMPT_RESUME_ADDR,
+  decodeMachineText
 } from '@z80emu/machine-pcg815';
 import { assemble } from '@z80emu/assembler-z80';
 
@@ -58,7 +60,7 @@ declare global {
     __pcg815?: {
       injectBasicLine: (line: string) => void;
       runBasicProgram: (source: string, options?: RunBasicProgramOptions) => Promise<RunBasicProgramResult>;
-      getTextLines: () => string[];
+      readDisplayText: () => string[];
       getBootState: () => BootState;
       getExecutionBackend: () => 'z80-firmware' | 'ts-compat';
       setKanaMode: (enabled: boolean) => void;
@@ -102,7 +104,11 @@ function mustContext2D(canvas: HTMLCanvasElement, name: string): CanvasRendering
   return ctx;
 }
 
-const machine = new PCG815Machine({ strictCpuOpcodes: strictMode, executionBackend });
+const machine = new PCG815Machine({
+  strictCpuOpcodes: strictMode,
+  executionBackend,
+  firmwareReturnAddress: MONITOR_PROMPT_RESUME_ADDR
+});
 
 const canvas = mustQuery<HTMLCanvasElement>('#lcd');
 const runToggleButton = mustQuery<HTMLButtonElement>('#run-toggle');
@@ -210,11 +216,11 @@ let cachedLitPixels = 0;
 const inputLog: string[] = [];
 const pressedCodes = new Set<string>();
 const pendingKeyRelease = new Map<string, number>();
-const KEYDOWN_POLL_BOOST_TSTATES = 64;
-const SPACE_KEYDOWN_POLL_BOOST_TSTATES = 2_500_000;
+const KEYDOWN_POLL_BOOST_TSTATES = 512;
+const SPACE_KEYDOWN_POLL_BOOST_TSTATES = 12_000_000;
 // サンプルゲーム系のポーリング入力で短押しが取りこぼされないよう、
 // 解放反映を遅らせて押下パルス幅を確保する。
-const KEY_RELEASE_LATCH_MS = 120;
+const KEY_RELEASE_LATCH_MS = 220;
 const BASIC_SAMPLE = `10 A = 1
 20 PRINT A
 30 A = A + 1
@@ -403,34 +409,31 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 3090 LET CX=W1X-1
 3100 LET CY=W1Y-1
 3110 LOCATE CX,CY
-3120 OUT 90,35
+3120 PRINT "#";
 3130 LET CX=W2X-1
 3140 LET CY=W2Y-1
 3150 LOCATE CX,CY
-3160 OUT 90,35
+3160 PRINT "#";
 3170 LET CX=W3X-1
 3180 LET CY=W3Y-1
 3190 LOCATE CX,CY
-3200 OUT 90,35
+3200 PRINT "#";
 3210 LET CX=GX-1
 3220 LET CY=GY-1
 3230 LOCATE CX,CY
-3240 OUT 90,71
+3240 PRINT "G";
 3250 IF K<>0 THEN 3300
 3260 LET CX=KX-1
 3270 LET CY=KY-1
 3280 LOCATE CX,CY
-3290 OUT 90,75
+3290 PRINT "K";
 3300 LET CX=X-1
 3310 LET CY=Y-1
 3320 LOCATE CX,CY
-3330 OUT 90,64
+3330 PRINT "@";
 3340 RETURN
 3350 LOCATE 0,CY
-3360 OUT 90,46
-3370 OUT 90,46
-3380 OUT 90,46
-3390 OUT 90,46
+3360 PRINT "....";
 3400 RETURN
 4000 LET CH=46
 4010 IF AX<>W1X THEN 4040
@@ -457,8 +460,13 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 4290 LET CX=AX-1
 4300 LET CY=AY-1
 4310 LOCATE CX,CY
-4320 OUT 90,CH
-4330 RETURN
+4320 IF CH=46 THEN PRINT ".";:RETURN
+4330 IF CH=35 THEN PRINT "#";:RETURN
+4340 IF CH=71 THEN PRINT "G";:RETURN
+4350 IF CH=75 THEN PRINT "K";:RETURN
+4360 IF CH=64 THEN PRINT "@";:RETURN
+4370 PRINT " ";
+4380 RETURN
 4990 REM タイトル画面
 5000 CLS
 5010 LOCATE 0,0
@@ -498,8 +506,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 7330 RETURN
 7350 OUT 17,128
 7360 LET R=INP(16)
-7370 IF R=239 THEN 7380
-7372 IF R=235 THEN 7380
+7370 IF R<>255 THEN 7380
 7374 GOTO 7390
 7380 WAIT 1
 7385 GOTO 7350
@@ -508,8 +515,7 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 7400 LET SP=0
 7410 OUT 17,128
 7420 LET R=INP(16)
-7430 IF R=239 THEN 7480
-7432 IF R=235 THEN 7480
+7430 IF R<>255 THEN 7480
 7440 IF SPH=0 THEN 7490
 7450 LET SP=1
 7460 LET SPH=0
@@ -518,42 +524,12 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 7490 RETURN
 7590 REM 点滅 ON 表示: PUSH SPACE KEY !
 7600 LOCATE 4,3
-7610 OUT 90,80
-7620 OUT 90,85
-7630 OUT 90,83
-7640 OUT 90,72
-7650 OUT 90,32
-7660 OUT 90,83
-7670 OUT 90,80
-7680 OUT 90,65
-7690 OUT 90,67
-7700 OUT 90,69
-7710 OUT 90,32
-7720 OUT 90,75
-7730 OUT 90,69
-7740 OUT 90,89
-7750 OUT 90,32
-7760 OUT 90,33
-7770 RETURN
+7610 PRINT "PUSH SPACE KEY !";
+7620 RETURN
 7790 REM 点滅 OFF 表示
 7800 LOCATE 4,3
-7810 OUT 90,32
-7820 OUT 90,32
-7830 OUT 90,32
-7840 OUT 90,32
-7850 OUT 90,32
-7860 OUT 90,32
-7870 OUT 90,32
-7880 OUT 90,32
-7890 OUT 90,32
-7900 OUT 90,32
-7910 OUT 90,32
-7920 OUT 90,32
-7930 OUT 90,32
-7940 OUT 90,32
-7950 OUT 90,32
-7960 OUT 90,32
-7970 RETURN
+7810 PRINT "                ";
+7820 RETURN
 8990 REM クリア画面
 9000 CLS
 9010 LOCATE 0,0
@@ -564,17 +540,40 @@ const BASIC_SAMPLE_GAME = `90 REM SAMPLE_GAME_V6
 9060 PRINT "Press SPACE to END"
 9070 GOSUB 7100
 9080 END`;
-const ASM_SAMPLE = `ORG 0x0200
+const ASM_SAMPLE = `ORG 0x0300
 ENTRY START
 
+LCD_CMD1      EQU 0x58
+LCD_DATA1     EQU 0x5A
+LCD_CMD2      EQU 0x54
+LCD_DATA2     EQU 0x56
+LCD_HALF_COLS EQU 12
+LCD_PAGE_COLS EQU 72
+MAX_LEN       EQU 12
+LAST_COL      EQU 23
+CHAR_BS       EQU 0x08
+CHAR_CR       EQU 0x0D
+PROMPT_IN_COL EQU 12
+PROMPT_OUT_COL EQU 10
+
 START:
-  LD A,0x40
-  OUT (0x58),A
-  LD A,0x80
-  OUT (0x58),A
+  CALL LCD_CLEAR_SCREEN
+
+  LD D,0
+  LD E,0
+  CALL LCD_SET_CURSOR
   LD HL,PROMPT_IN
   CALL PRINT_STR
 
+  LD D,1
+  LD E,0
+  CALL LCD_SET_CURSOR
+  LD HL,PROMPT_OUT
+  CALL PRINT_STR
+
+  LD D,0
+  LD E,PROMPT_IN_COL
+  CALL LCD_SET_CURSOR
   LD HL,BUFFER
   XOR A
   LD (LEN),A
@@ -583,14 +582,16 @@ READ_LOOP:
   PUSH HL
   CALL READ_KEY
   POP HL
-  CP 0x0D
+  CP CHAR_CR
   JR Z,INPUT_DONE
-  CP 0x08
-  JR Z,HANDLE_BS
+  CP CHAR_BS
+  JR Z,HANDLE_BACKSPACE
+  CP 0x20
+  JR C,READ_LOOP
 
   LD C,A
   LD A,(LEN)
-  CP 24
+  CP MAX_LEN
   JR NC,READ_LOOP
   LD A,C
   LD (HL),A
@@ -599,31 +600,28 @@ READ_LOOP:
   INC A
   LD (LEN),A
   LD A,C
-  OUT (0x5A),A
+  CALL PRINT_CHAR
   JR READ_LOOP
 
-HANDLE_BS:
+HANDLE_BACKSPACE:
   LD A,(LEN)
   OR A
   JR Z,READ_LOOP
   DEC HL
   DEC A
   LD (LEN),A
-  LD A,0x08
-  OUT (0x5A),A
+  CALL CURSOR_LEFT
+  CALL CLEAR_CELL
   JR READ_LOOP
 
 INPUT_DONE:
-  LD A,0x0D
-  OUT (0x5A),A
-  LD A,0x0A
-  OUT (0x5A),A
-  LD HL,PROMPT_OUT
-  CALL PRINT_STR
+  LD D,1
+  LD E,PROMPT_OUT_COL
+  CALL LCD_SET_CURSOR
 
   LD A,(LEN)
   OR A
-  JR Z,PRINT_EOL
+  JR Z,DONE
   LD B,A
   LD HL,BUFFER
   LD E,A
@@ -631,17 +629,11 @@ INPUT_DONE:
   ADD HL,DE
   DEC HL
 
-REV_LOOP:
+PRINT_REVERSED:
   LD A,(HL)
-  OUT (0x5A),A
+  CALL PRINT_CHAR
   DEC HL
-  DJNZ REV_LOOP
-
-PRINT_EOL:
-  LD A,0x0D
-  OUT (0x5A),A
-  LD A,0x0A
-  OUT (0x5A),A
+  DJNZ PRINT_REVERSED
 
 DONE:
   RET
@@ -650,9 +642,172 @@ PRINT_STR:
   LD A,(HL)
   OR A
   RET Z
-  OUT (0x5A),A
+  CALL PRINT_CHAR
   INC HL
   JR PRINT_STR
+
+PRINT_CHAR:
+  PUSH AF
+  PUSH BC
+  PUSH DE
+  PUSH HL
+  CALL GET_GLYPH_PTR
+  LD B,0
+PRINT_CHAR_LOOP:
+  LD A,(HL)
+  PUSH HL
+  PUSH BC
+  CALL WRITE_GLYPH_COLUMN
+  POP BC
+  POP HL
+  INC HL
+  INC B
+  LD A,B
+  CP 5
+  JR C,PRINT_CHAR_LOOP
+  XOR A
+  CALL WRITE_GLYPH_COLUMN
+  CALL CURSOR_RIGHT
+  POP HL
+  POP DE
+  POP BC
+  POP AF
+  RET
+
+CLEAR_CELL:
+  LD B,0
+CLEAR_CELL_LOOP:
+  XOR A
+  PUSH BC
+  CALL WRITE_GLYPH_COLUMN
+  POP BC
+  INC B
+  LD A,B
+  CP 6
+  JR C,CLEAR_CELL_LOOP
+  RET
+
+CURSOR_RIGHT:
+  LD A,(CUR_COL)
+  CP LAST_COL
+  RET NC
+  INC A
+  LD (CUR_COL),A
+  RET
+
+CURSOR_LEFT:
+  LD A,(CUR_COL)
+  OR A
+  RET Z
+  DEC A
+  LD (CUR_COL),A
+  RET
+
+LCD_SET_CURSOR:
+  LD A,E
+  LD (CUR_COL),A
+  LD A,D
+  LD (CUR_ROW),A
+  RET
+
+WRITE_GLYPH_COLUMN:
+  PUSH AF
+  LD D,B
+  LD A,(CUR_COL)
+  CP LCD_HALF_COLS
+  JR C,WRITE_GLYPH_LEFT
+
+  ADD A,A
+  LD B,A
+  ADD A,A
+  ADD A,B
+  LD B,A
+  LD A,143
+  SUB B
+  SUB D
+  LD B,A
+  LD A,(CUR_ROW)
+  ADD A,4
+  LD C,A
+  POP AF
+  JP LCD_WRITE_RAW_BYTE
+
+WRITE_GLYPH_LEFT:
+  ADD A,A
+  LD B,A
+  ADD A,A
+  ADD A,B
+  ADD A,D
+  LD B,A
+  LD A,(CUR_ROW)
+  LD C,A
+  POP AF
+  JP LCD_WRITE_RAW_BYTE
+
+LCD_WRITE_RAW_BYTE:
+  PUSH AF
+  LD A,B
+  CP 60
+  JR C,LCD_WRITE_SECONDARY
+  SUB 60
+  OR 0x40
+  OUT (LCD_CMD1),A
+  LD A,C
+  OR 0x80
+  OUT (LCD_CMD1),A
+  POP AF
+  OUT (LCD_DATA1),A
+  RET
+
+LCD_WRITE_SECONDARY:
+  OR 0x40
+  OUT (LCD_CMD2),A
+  LD A,C
+  OR 0x80
+  OUT (LCD_CMD2),A
+  POP AF
+  OUT (LCD_DATA2),A
+  RET
+
+LCD_CLEAR_SCREEN:
+  LD C,0
+LCD_CLEAR_PAGE:
+  LD B,0
+LCD_CLEAR_COL:
+  XOR A
+  PUSH BC
+  CALL LCD_WRITE_RAW_BYTE
+  POP BC
+  INC B
+  LD A,B
+  CP LCD_PAGE_COLS
+  JR C,LCD_CLEAR_COL
+  INC C
+  LD A,C
+  CP 8
+  JR C,LCD_CLEAR_PAGE
+  RET
+
+GET_GLYPH_PTR:
+  CP 0x20
+  JR C,GET_GLYPH_SPACE
+  CP 0x7F
+  JR NC,GET_GLYPH_SPACE
+  SUB 0x20
+  LD E,A
+  LD D,0
+  LD L,A
+  LD H,0
+  ADD HL,HL
+  ADD HL,HL
+  ADD HL,DE
+  LD DE,FONT_ASCII
+  ADD HL,DE
+  RET
+
+GET_GLYPH_SPACE:
+  LD HL,FONT_ASCII
+  RET
 
 READ_KEY:
 WAIT_CLEAR:
@@ -742,18 +897,119 @@ PROMPT_IN:
   DB "Input Word: ",0
 PROMPT_OUT:
   DB "Reversed: ",0
+CUR_COL:
+  DB 0
+CUR_ROW:
+  DB 0
 LEN:
   DB 0
 BUFFER:
-  DS 24,0
+  DS 12,0
+
+FONT_ASCII:
+  DB 0x00,0x00,0x00,0x00,0x00
+  DB 0x00,0x00,0x5f,0x00,0x00
+  DB 0x00,0x07,0x00,0x07,0x00
+  DB 0x12,0x3f,0x12,0x3f,0x12
+  DB 0x24,0x2a,0x7f,0x2a,0x12
+  DB 0x13,0x0b,0x34,0x32,0x01
+  DB 0x36,0x49,0x55,0x22,0x50
+  DB 0x00,0x0b,0x07,0x00,0x00
+  DB 0x00,0x1c,0x22,0x41,0x00
+  DB 0x00,0x41,0x22,0x1c,0x00
+  DB 0x08,0x2a,0x1c,0x2a,0x08
+  DB 0x08,0x08,0x3e,0x08,0x08
+  DB 0x00,0x00,0x50,0x30,0x00
+  DB 0x08,0x08,0x08,0x08,0x08
+  DB 0x00,0x00,0x60,0x60,0x00
+  DB 0x10,0x08,0x04,0x02,0x01
+  DB 0x3e,0x51,0x49,0x45,0x3e
+  DB 0x00,0x42,0x7f,0x40,0x00
+  DB 0x42,0x61,0x51,0x49,0x46
+  DB 0x41,0x49,0x49,0x49,0x36
+  DB 0x18,0x14,0x12,0x7f,0x10
+  DB 0x4f,0x49,0x49,0x49,0x31
+  DB 0x3e,0x49,0x49,0x49,0x30
+  DB 0x01,0x71,0x09,0x05,0x03
+  DB 0x36,0x49,0x49,0x49,0x36
+  DB 0x06,0x49,0x49,0x49,0x3e
+  DB 0x00,0x00,0x36,0x36,0x00
+  DB 0x00,0x00,0x5b,0x3b,0x00
+  DB 0x08,0x14,0x22,0x41,0x00
+  DB 0x0a,0x0a,0x0a,0x0a,0x0a
+  DB 0x00,0x41,0x22,0x14,0x08
+  DB 0x02,0x01,0x51,0x09,0x06
+  DB 0x32,0x49,0x79,0x41,0x3e
+  DB 0x7e,0x09,0x09,0x09,0x7e
+  DB 0x7f,0x49,0x49,0x49,0x36
+  DB 0x3e,0x41,0x41,0x41,0x22
+  DB 0x7f,0x41,0x41,0x22,0x1c
+  DB 0x7f,0x49,0x49,0x49,0x41
+  DB 0x7f,0x09,0x09,0x09,0x01
+  DB 0x3e,0x41,0x49,0x49,0x3a
+  DB 0x7f,0x08,0x08,0x08,0x7f
+  DB 0x00,0x41,0x7f,0x41,0x00
+  DB 0x30,0x40,0x40,0x40,0x3f
+  DB 0x7f,0x08,0x14,0x22,0x41
+  DB 0x7f,0x40,0x40,0x40,0x40
+  DB 0x7f,0x02,0x0c,0x02,0x7f
+  DB 0x7f,0x02,0x04,0x08,0x7f
+  DB 0x3e,0x41,0x41,0x41,0x3e
+  DB 0x7f,0x09,0x09,0x09,0x06
+  DB 0x3e,0x41,0x51,0x21,0x5e
+  DB 0x7f,0x09,0x19,0x29,0x46
+  DB 0x26,0x49,0x49,0x49,0x32
+  DB 0x01,0x01,0x7f,0x01,0x01
+  DB 0x3f,0x40,0x40,0x40,0x3f
+  DB 0x1f,0x20,0x40,0x20,0x1f
+  DB 0x3f,0x40,0x38,0x40,0x3f
+  DB 0x63,0x14,0x08,0x14,0x63
+  DB 0x03,0x04,0x78,0x04,0x03
+  DB 0x61,0x51,0x49,0x45,0x43
+  DB 0x00,0x7f,0x41,0x41,0x00
+  DB 0x01,0x02,0x04,0x08,0x10
+  DB 0x00,0x41,0x41,0x7f,0x00
+  DB 0x00,0x06,0x01,0x06,0x00
+  DB 0x40,0x40,0x40,0x40,0x40
+  DB 0x00,0x00,0x07,0x0b,0x00
+  DB 0x30,0x4a,0x4a,0x2a,0x7c
+  DB 0x7f,0x28,0x44,0x44,0x38
+  DB 0x3c,0x42,0x42,0x42,0x24
+  DB 0x38,0x44,0x44,0x28,0x7f
+  DB 0x3c,0x4a,0x4a,0x4a,0x2c
+  DB 0x08,0x7e,0x09,0x01,0x02
+  DB 0x0c,0x52,0x52,0x4c,0x3e
+  DB 0x7f,0x08,0x04,0x04,0x78
+  DB 0x00,0x44,0x7d,0x40,0x00
+  DB 0x20,0x40,0x44,0x3d,0x00
+  DB 0x7f,0x10,0x28,0x44,0x00
+  DB 0x00,0x41,0x7f,0x40,0x00
+  DB 0x7e,0x02,0x7c,0x02,0x7c
+  DB 0x7e,0x04,0x02,0x02,0x7c
+  DB 0x3c,0x42,0x42,0x42,0x3c
+  DB 0x7e,0x0c,0x12,0x12,0x0c
+  DB 0x0c,0x12,0x12,0x0c,0x7e
+  DB 0x7e,0x04,0x02,0x02,0x04
+  DB 0x44,0x4a,0x4a,0x4a,0x32
+  DB 0x04,0x3f,0x44,0x40,0x20
+  DB 0x3e,0x40,0x20,0x10,0x7e
+  DB 0x1e,0x20,0x40,0x20,0x1e
+  DB 0x3e,0x40,0x38,0x40,0x3e
+  DB 0x22,0x14,0x08,0x14,0x22
+  DB 0x0e,0x50,0x50,0x48,0x3e
+  DB 0x44,0x64,0x54,0x4c,0x44
+  DB 0x00,0x08,0x77,0x41,0x00
+  DB 0x00,0x00,0x7f,0x00,0x00
+  DB 0x00,0x41,0x77,0x08,0x00
+  DB 0x02,0x01,0x02,0x04,0x02
 
 NORMAL_TABLE:
   DB 0x41,0x42,0x43,0x44,0x45,0x46,0x47,0x48
   DB 0x49,0x4A,0x4B,0x4C,0x4D,0x4E,0x4F,0x50
   DB 0x51,0x52,0x53,0x54,0x55,0x56,0x57,0x58
-  DB 0x59,0x5A,0x3B,0x27,0x5B,0x5D,0x5C,0x60
-  DB 0x09,0x1B,0x08,0x00,0x00,0x00,0x00,0x00
-  DB 0x37,0x38,0x39,0x2D,0x3D,0x2C,0x2E,0x2F
+  DB 0x59,0x5A,0x00,0x00,0x00,0x00,0x00,0x00
+  DB 0x00,0x00,0x08,0x00,0x00,0x00,0x00,0x00
+  DB 0x37,0x38,0x39,0x00,0x00,0x00,0x00,0x00
   DB 0x00,0x30,0x31,0x32,0x33,0x34,0x35,0x36
   DB 0x00,0x00,0x0D,0x08,0x20,0x00,0x00,0x00
 
@@ -766,12 +1022,11 @@ SHIFT_TABLE:
   DB 0x26,0x2A,0x28,0x5F,0x2B,0x3C,0x3E,0x3F
   DB 0x00,0x29,0x21,0x40,0x23,0x24,0x25,0x5E
   DB 0x00,0x00,0x0D,0x08,0x20,0x00,0x00,0x00`;
-const ASM_SAMPLE_3D = `; PC-G815 Z80 ASM demo: Maze-style pseudo 3D
-; 24-column lightweight raycast + fixed route auto-move.
-
-ORG 0x0200
+const ASM_SAMPLE_3D = `ORG 0x0300
 ENTRY START
 
+LCD_CMD2    EQU 0x54
+LCD_DATA2   EQU 0x56
 LCD_CMD     EQU 0x58
 LCD_DATA    EQU 0x5A
 
@@ -786,7 +1041,6 @@ DIR_SOUTH   EQU 0x02
 DIR_WEST    EQU 0x03
 
 RAY_COUNT   EQU 24
-DEPTH_MAX   EQU 6
 DEPTH_LIMIT EQU 7
 MOVE_INTERVAL EQU 1
 
@@ -924,7 +1178,6 @@ CAST_ONE_RAY:
   LD A,(RAY_INDEX)
   LD (CUR_RAY),A
 
-  ; ptr = base + rayIndex * DEPTH_MAX (x6 => x4 + x2)
   LD A,(CUR_RAY)
   LD B,A
   ADD A,A
@@ -1046,7 +1299,6 @@ ROTATE_DE:
   CP DIR_SOUTH
   JR Z,ROT_SOUTH
 
-; WEST: (x,y) -> (y,-x)
 ROT_WEST:
   LD A,D
   CPL
@@ -1057,7 +1309,6 @@ ROT_WEST:
   LD E,B
   RET
 
-; EAST: (x,y) -> (-y,x)
 ROT_EAST:
   LD A,E
   CPL
@@ -1068,7 +1319,6 @@ ROT_EAST:
   LD D,B
   RET
 
-; SOUTH: (x,y) -> (-x,-y)
 ROT_SOUTH:
   LD A,D
   CPL
@@ -1089,7 +1339,6 @@ SIDE_VEC_LEFT:
   JR Z,SIDE_L_E
   CP DIR_SOUTH
   JR Z,SIDE_L_S
-  ; WEST
   LD D,0x00
   LD E,0x01
   RET
@@ -1115,7 +1364,6 @@ SIDE_VEC_RIGHT:
   JR Z,SIDE_R_E
   CP DIR_SOUTH
   JR Z,SIDE_R_S
-  ; WEST
   LD D,0x00
   LD E,0xFF
   RET
@@ -1218,7 +1466,6 @@ OPEN_YES:
   RET
 
 DRAW_BASE_FRAME:
-  ; ceiling and floor guides
   LD A,0x94
   LD B,0
   LD C,1
@@ -1231,7 +1478,6 @@ DRAW_BASE_FRAME:
   LD D,22
   CALL DRAW_HLINE
 
-  ; near left wall or opening
   LD A,(OPEN_LEFT)
   OR A
   JR NZ,BASE_LEFT_OPEN
@@ -1257,7 +1503,6 @@ BASE_LEFT_OPEN:
   CALL DRAW_VLINE
 
 BASE_RIGHT:
-  ; near right wall or opening
   LD A,(OPEN_RIGHT)
   OR A
   JR NZ,BASE_RIGHT_OPEN
@@ -1291,7 +1536,6 @@ DRAW_ROUTE_PATTERN:
   RET
 
 DRAW_FRONT_BLOCK:
-  ; front dead-end wall
   LD A,0x94
   LD B,1
   LD C,9
@@ -1315,7 +1559,6 @@ DRAW_FRONT_BLOCK:
   RET
 
 DRAW_FRONT_OPEN:
-  ; front corridor frame
   LD A,0x94
   LD B,0
   LD C,8
@@ -1327,7 +1570,6 @@ DRAW_FRONT_OPEN:
   LD D,6
   CALL DRAW_HLINE
 
-  ; left far edge / opening hint
   LD A,(OPEN_LEFT)
   OR A
   JR NZ,FRONT_LEFT_OPEN
@@ -1405,224 +1647,153 @@ PUT_XY:
   LD (HL),A
   RET
 
-PUT_CELL:
+BLIT_FRAME:
+  LD B,0
+BLIT_ROW_LOOP:
+  LD A,B
+  CP 4
+  RET NC
+  LD C,0
+BLIT_COL_LOOP:
+  LD A,C
+  CP 24
+  JR NC,BLIT_NEXT_ROW
+  PUSH BC
+  CALL BLIT_CELL_BC
+  POP BC
+  INC C
+  JR BLIT_COL_LOOP
+BLIT_NEXT_ROW:
+  INC B
+  JR BLIT_ROW_LOOP
+
+BLIT_CELL_BC:
+  LD A,B
+  LD (BLIT_ROW_TMP),A
+  LD A,C
+  LD (BLIT_COL_TMP),A
+
+  LD A,B
+  LD E,A
+  LD D,0
+  LD HL,ROW_BASE
+  ADD HL,DE
+  LD A,(HL)
+  ADD A,C
   LD L,A
   LD H,0
   LD DE,FRAME_BUF
   ADD HL,DE
-  LD (HL),B
-  RET
+  LD A,(HL)
+  CALL GET_BLIT_GLYPH_PTR
+  LD (BLIT_GLYPH_PTR),HL
 
-PICK_CELL:
-  ; in A=row
-  LD C,A
-  LD A,(TOP_ROW)
-  CP 4
-  JR Z,CELL_SKY
-  CP C
-  JR C,CELL_WALL
-  JR Z,CELL_WALL
-CELL_SKY:
-  LD A,0x20
-  RET
-
-CELL_WALL:
-  LD A,C
-  LD B,A
-  LD A,(TOP_ROW)
-  CP B
-  JR Z,CELL_TOP
-  LD A,C
-  CP 3
-  JR NC,CELL_FACE
-
-  LD A,(BOUNDARY_FLAG)
-  OR A
-  JR NZ,CELL_EDGE
-
-  ; Inner vertical separators only on row2.
-  LD A,C
-  CP 2
-  JR Z,CELL_FACE
-  LD A,0x20
-  RET
-
-CELL_TOP:
-  LD A,(OPEN_SIDE)
-  OR A
-  JR Z,CELL_CEIL_LINE
-
-  LD A,(BOUNDARY_FLAG)
-  OR A
-  JR NZ,CELL_DIAG
-  JR CELL_CEIL_LINE
-
-CELL_EDGE:
-  LD A,(EDGE_CHAR)
-  RET
-
-CELL_DIAG:
-  LD A,(DIAG_CHAR)
-  RET
-
-CELL_CEIL_LINE:
-  LD A,0x94
-  RET
-
-CELL_FACE:
-  LD A,(FACE_CHAR)
-  RET
-
-PICK_TOP_ROW:
-  LD A,(DEPTH_WORK)
-  CP 2
-  JR C,TOP0
-  CP 3
-  JR C,TOP1
-  CP 4
-  JR C,TOP2
-  CP 6
-  JR C,TOP3
-  LD A,4
-  RET
-TOP0:
-  LD A,0
-  RET
-TOP1:
-  LD A,1
-  RET
-TOP2:
-  LD A,2
-  RET
-TOP3:
-  LD A,3
-  RET
-
-PICK_FACE_CHAR:
-  LD A,(BOUNDARY_FLAG)
-  OR A
-  JR NZ,FACE_SPACE
-
-  LD A,(DEPTH_WORK)
-  CP 2
-  JR C,FACE_STEP_NEAR
-  CP 4
-  JR C,FACE_STEP_MID
-  CP 6
-  JR C,FACE_STEP_FAR
-  LD B,5
-  JR FACE_STEP_TEST
-
-FACE_STEP_NEAR:
-  LD B,8
-  JR FACE_STEP_TEST
-
-FACE_STEP_MID:
-  LD B,7
-  JR FACE_STEP_TEST
-
-FACE_STEP_FAR:
-  LD B,6
-
-FACE_STEP_TEST:
-  CALL IS_RAY_MULTIPLE
-  JR Z,FACE_SEP
-
-FACE_SPACE:
-  LD A,0x20
-  RET
-
-FACE_SEP:
-  LD A,0x7C
-  RET
-
-PICK_EDGE_CHAR:
-  LD A,(RAY_INDEX)
-  CP 12
-  JR C,EDGE_LEFT
-  LD A,0x97
-  RET
-EDGE_LEFT:
-  LD A,0x88
-  RET
-
-PICK_DIAG_CHAR:
-  LD A,(RAY_INDEX)
-  CP 12
-  JR C,DIAG_L
-  LD A,0xEE
-  RET
-DIAG_L:
-  LD A,0xEF
-  RET
-
-PICK_FLOOR_CHAR:
-  LD A,0x95
-  RET
-
-IS_RAY_MULTIPLE:
-  LD A,(RAY_INDEX)
-MULTIPLE_LOOP:
-  CP B
-  JR C,MULTIPLE_DONE
-  SUB B
-  JR MULTIPLE_LOOP
-MULTIPLE_DONE:
-  OR A
-  RET
-
-COMPUTE_BOUNDARY:
-  LD A,(RAY_INDEX)
-  OR A
-  JR Z,BOUNDARY_YES
-  CP 23
-  JR Z,BOUNDARY_YES
-
-  LD D,A
-  DEC A
-  CALL GET_DEPTH_AT
-  LD B,A
-
-  LD A,D
-  CALL GET_DEPTH_AT
-  LD C,A
-
-  LD A,B
-  CP C
-  JR Z,BOUNDARY_NO
-
-  LD A,D
-  INC A
-  CALL GET_DEPTH_AT
-  CP C
-  JR Z,BOUNDARY_NO
-
-BOUNDARY_YES:
-  LD A,1
-  RET
-
-BOUNDARY_NO:
-  XOR A
-  RET
-
-GET_DEPTH_AT:
-  LD E,A
+  LD E,0
+BLIT_GLYPH_LOOP:
+  LD A,E
+  CP 5
+  JR NC,BLIT_GLYPH_SPACER
+  LD HL,(BLIT_GLYPH_PTR)
   LD D,0
-  LD HL,RAY_DEPTH
   ADD HL,DE
   LD A,(HL)
+  JR BLIT_GLYPH_WRITE
+BLIT_GLYPH_SPACER:
+  XOR A
+BLIT_GLYPH_WRITE:
+  PUSH AF
+  LD A,(BLIT_COL_TMP)
+  ADD A,A
+  LD D,A
+  ADD A,A
+  ADD A,D
+  ADD A,E
+  CP 72
+  JR C,BLIT_GLYPH_LEFT
+  LD D,A
+  LD A,143
+  SUB D
+  LD B,A
+  LD A,(BLIT_ROW_TMP)
+  ADD A,4
+  LD C,A
+  POP AF
+  CALL LCD_WRITE_RAW_BYTE
+  JR BLIT_GLYPH_NEXT
+BLIT_GLYPH_LEFT:
+  LD B,A
+  LD A,(BLIT_ROW_TMP)
+  LD C,A
+  POP AF
+  CALL LCD_WRITE_RAW_BYTE
+BLIT_GLYPH_NEXT:
+  INC E
+  LD A,E
+  CP 6
+  JR C,BLIT_GLYPH_LOOP
   RET
 
-BLIT_FRAME:
-  LD A,0x80
+GET_BLIT_GLYPH_PTR:
+  CP 0x94
+  JR Z,GET_GLYPH_TOP_LINE
+  CP 0x95
+  JR Z,GET_GLYPH_MID_LINE
+  CP 0x88
+  JR Z,GET_GLYPH_LEFT_WALL
+  CP 0x97
+  JR Z,GET_GLYPH_RIGHT_WALL
+  CP 0x7C
+  JR Z,GET_GLYPH_CENTER_WALL
+  CP 0xEE
+  JR Z,GET_GLYPH_DIAG_RIGHT
+  CP 0xEF
+  JR Z,GET_GLYPH_DIAG_LEFT
+  LD HL,GLYPH_SPACE
+  RET
+GET_GLYPH_TOP_LINE:
+  LD HL,GLYPH_TOP_LINE
+  RET
+GET_GLYPH_MID_LINE:
+  LD HL,GLYPH_MID_LINE
+  RET
+GET_GLYPH_LEFT_WALL:
+  LD HL,GLYPH_LEFT_WALL
+  RET
+GET_GLYPH_RIGHT_WALL:
+  LD HL,GLYPH_RIGHT_WALL
+  RET
+GET_GLYPH_CENTER_WALL:
+  LD HL,GLYPH_CENTER_WALL
+  RET
+GET_GLYPH_DIAG_RIGHT:
+  LD HL,GLYPH_DIAG_RIGHT
+  RET
+GET_GLYPH_DIAG_LEFT:
+  LD HL,GLYPH_DIAG_LEFT
+  RET
+
+LCD_WRITE_RAW_BYTE:
+  PUSH AF
+  LD A,B
+  CP 60
+  JR C,LCD_WRITE_RAW_BYTE_SECONDARY
+  SUB 60
+  OR 0x40
   OUT (LCD_CMD),A
-  LD HL,FRAME_BUF
-  LD B,96
-BLIT_LOOP:
-  LD A,(HL)
+  LD A,C
+  OR 0x80
+  OUT (LCD_CMD),A
+  POP AF
   OUT (LCD_DATA),A
-  INC HL
-  DJNZ BLIT_LOOP
+  RET
+LCD_WRITE_RAW_BYTE_SECONDARY:
+  OR 0x40
+  OUT (LCD_CMD2),A
+  LD A,C
+  OR 0x80
+  OUT (LCD_CMD2),A
+  POP AF
+  OUT (LCD_DATA2),A
   RET
 
 FRAME_DELAY:
@@ -1657,16 +1828,6 @@ DEPTH_WORK:
   DB 0
 OPEN_SIDE:
   DB 0
-TOP_ROW:
-  DB 0
-FACE_CHAR:
-  DB 0
-EDGE_CHAR:
-  DB 0
-DIAG_CHAR:
-  DB 0
-BOUNDARY_FLAG:
-  DB 0
 OPEN_FRONT:
   DB 0
 OPEN_LEFT:
@@ -1690,13 +1851,35 @@ FRAME_BUF:
   DS 96,0x20
 ROW_BASE:
   DB 0,24,48,72
+BLIT_ROW_TMP:
+  DB 0
+BLIT_COL_TMP:
+  DB 0
+BLIT_GLYPH_PTR:
+  DW 0
+
+GLYPH_SPACE:
+  DB 0x00,0x00,0x00,0x00,0x00
+GLYPH_LEFT_WALL:
+  DB 0x7F,0x00,0x00,0x00,0x00
+GLYPH_CENTER_WALL:
+  DB 0x00,0x00,0x7F,0x00,0x00
+GLYPH_RIGHT_WALL:
+  DB 0x00,0x00,0x00,0x00,0x7F
+GLYPH_TOP_LINE:
+  DB 0x01,0x01,0x01,0x01,0x01
+GLYPH_MID_LINE:
+  DB 0x08,0x08,0x08,0x08,0x08
+GLYPH_DIAG_RIGHT:
+  DB 0x20,0x10,0x08,0x04,0x02
+GLYPH_DIAG_LEFT:
+  DB 0x02,0x04,0x08,0x10,0x20
 
 FWD_DX:
   DB 0,1,0,0xFF
 FWD_DY:
   DB 0xFF,0,1,0
 
-; 24 rays x 6 depths (north basis)
 RAY_OFS_X:
   DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
   DB 0xFF,0xFE,0xFD,0xFC,0xFB,0xFA
@@ -1776,8 +1959,12 @@ let basicRunInFlight = false;
 let basicRunToken = 0;
 let z80RunAwaitingCompletion = false;
 let z80RunHasEnteredUserProgram = false;
+let z80RunPumpActive = false;
+let z80RunPumpIterations = 0;
+let z80RunPumpExecutedTstates = 0;
 let asmRunInFlight = false;
 let asmRunToken = 0;
+let asmRunHasEnteredUserProgram = false;
 let asmBuildCache: AsmBuildCache | undefined;
 let currentEditorMode: EditorMode = 'basic';
 let lastMonitorRenderMs = 0;
@@ -1798,6 +1985,12 @@ const z80ProgramStore = new Map<number, string>();
 function waitForAnimationFrame(): Promise<void> {
   return new Promise((resolve) => {
     requestAnimationFrame(() => resolve());
+  });
+}
+
+function waitForUiTick(delayMs = 16): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, delayMs);
   });
 }
 
@@ -1847,10 +2040,66 @@ function setAsmRunInFlight(inFlight: boolean): void {
   asmAssembleButton.disabled = inFlight;
 }
 
+function finishAsmRun(status: ProgramRunStatus, detail: string, logLine?: string): void {
+  machine.setRuntimePumpEnabled(true);
+  machine.setImmediateInputToRuntimeEnabled(true);
+  setAsmRunInFlight(false);
+  asmRunHasEnteredUserProgram = false;
+  setAsmRunStatus(status, detail);
+  if (logLine) {
+    appendLog(logLine);
+  }
+}
+
 function clearZ80RunTracking(): void {
   z80RunAwaitingCompletion = false;
   z80RunHasEnteredUserProgram = false;
+  z80RunPumpActive = false;
+  z80RunPumpIterations = 0;
+  z80RunPumpExecutedTstates = 0;
   machine.setImmediateInputToRuntimeEnabled(true);
+}
+
+async function pumpZ80BasicRun(runToken: number): Promise<void> {
+  if (z80RunPumpActive) {
+    return;
+  }
+
+  z80RunPumpActive = true;
+  let lastPumpAt = performance.now();
+
+  try {
+    while (basicRunToken === runToken && z80RunAwaitingCompletion) {
+      z80RunPumpIterations += 1;
+      if (!running) {
+        setRunningState(true);
+      }
+
+      const now = performance.now();
+      const elapsedMs = Math.max(0, now - lastPumpAt);
+      lastPumpAt = now;
+      const target = (elapsedMs / 1000) * PCG815Machine.CLOCK_HZ;
+      const bounded = Math.min(target, PCG815Machine.CLOCK_HZ / 4);
+      const executable = Math.max(4_096, Math.floor(bounded));
+
+      machine.tick(executable);
+      z80RunPumpExecutedTstates += executable;
+      renderLcd();
+
+      if (machine.getExecutionDomain() === 'user-program') {
+        z80RunHasEnteredUserProgram = true;
+      } else if (z80RunHasEnteredUserProgram) {
+        clearZ80RunTracking();
+        setProgramRunStatus('ok', 'Run OK');
+        appendLog('BASIC RUN ok');
+        return;
+      }
+
+      await waitForUiTick();
+    }
+  } finally {
+    z80RunPumpActive = false;
+  }
 }
 
 function normalizeProgramSource(source: string): string[] {
@@ -1939,7 +2188,18 @@ function runCompatStoredProgram(): void {
 function encodeFirmwareConsoleLine(line: string): number[] {
   const bytes: number[] = [];
   for (const ch of line) {
-    bytes.push(ch.charCodeAt(0) & 0xff);
+    const codePoint = ch.codePointAt(0) ?? 0x20;
+    if (codePoint >= 0x20 && codePoint <= 0x7e) {
+      bytes.push(codePoint & 0xff);
+      continue;
+    }
+    if (codePoint >= 0xa1 && codePoint <= 0xdf) {
+      bytes.push(codePoint & 0xff);
+      continue;
+    }
+    // Z80 firmware path is byte-oriented; replace unsupported Unicode with spaces
+    // so REM comments and pasted source cannot inject accidental control bytes.
+    bytes.push(0x20);
   }
   bytes.push(FIRMWARE_LINE_END);
   return bytes;
@@ -1977,7 +2237,7 @@ function getStoredZ80ProgramLines(): string[] {
 }
 
 const Z80_BASIC_INTERPRETER_DEFAULT_SLICE_TSTATES = 12_000_000;
-const Z80_BASIC_INTERPRETER_RUN_SLICE_TSTATES = 2_000_000;
+const Z80_BASIC_INTERPRETER_RUN_SLICE_TSTATES = 3_000_000;
 
 function runZ80BasicInterpreter(lines: readonly string[], options?: { maxTStates?: number }): void {
   const bytes: number[] = [];
@@ -1993,11 +2253,23 @@ function runZ80BasicInterpreter(lines: readonly string[], options?: { maxTStates
   });
 }
 
+function prepareFreshZ80FirmwareSession(): void {
+  const kanaMode = machine.getKanaMode();
+  machine.reset(true);
+  machine.setKanaMode(kanaMode);
+  machine.setRuntimePumpEnabled(false);
+  machine.setImmediateInputToRuntimeEnabled(false);
+  machine.setExecutionDomain('firmware');
+  machine.clearFirmwareInput();
+  machine.tick(260_000);
+}
+
 function injectBasicLine(line: string, options?: { discardOutput?: boolean }): void {
   if (machine.getExecutionBackend() === 'ts-compat') {
     executeCompatImmediateLine(line);
   } else {
     try {
+      prepareFreshZ80FirmwareSession();
       const trimmed = line.trim();
       const upper = trimmed.toUpperCase();
       const number = extractProgramLineNumber(trimmed);
@@ -2066,38 +2338,15 @@ async function runBasicProgram(
       runCompatStoredProgram();
     } else {
       try {
-        // STOP直後の再RUNでは前回の入力キュー/実行文脈を捨ててから開始する。
-        machine.clearFirmwareInput();
-        machine.setExecutionDomain('firmware');
-        // Z80 BASIC 実行中は monitor 行エディタへの即時文字注入を止める。
-        machine.setImmediateInputToRuntimeEnabled(false);
+        prepareFreshZ80FirmwareSession();
 
         if (resetProgram) {
           z80ProgramStore.clear();
         }
-        const hasLabelDeclaration = lines.some((line) => LABEL_DECL_LINE.test(line.trim()));
-        if (hasLabelDeclaration) {
-          // ラベル宣言行を含む場合は入力順序が意味を持つため、
-          // 行番号ストアへ再構成せず、ソース順のままZ80へ投入する。
-          const orderedScriptLines = lines.map((line) => line.trim()).filter((line) => line.length > 0);
-          const script = [...(resetProgram ? ['NEW'] : []), ...orderedScriptLines, 'RUN'];
-          runZ80BasicInterpreter(script, {
-            maxTStates: Z80_BASIC_INTERPRETER_RUN_SLICE_TSTATES
-          });
-          z80RunAwaitingCompletion = true;
-          z80RunHasEnteredUserProgram = false;
-          setProgramRunStatus('running', 'Running');
-          appendLog('BASIC RUN running');
-          return { ok: true };
-        }
-        const passthroughImmediate: string[] = [];
+        const orderedScriptLines = lines.map((line) => line.trim()).filter((line) => line.length > 0);
         for (const line of lines) {
           const parsed = parseProgramLine(line);
           if (!parsed) {
-            const immediate = line.trim();
-            if (immediate.length > 0) {
-              passthroughImmediate.push(immediate);
-            }
             continue;
           }
           if (parsed.body.length === 0) {
@@ -2106,7 +2355,7 @@ async function runBasicProgram(
             z80ProgramStore.set(parsed.number, line.trim());
           }
         }
-        const script = [...(resetProgram ? ['NEW'] : []), ...getStoredZ80ProgramLines(), ...passthroughImmediate, 'RUN'];
+        const script = [...(resetProgram ? ['NEW'] : []), ...orderedScriptLines, 'RUN'];
         runZ80BasicInterpreter(script, {
           maxTStates: Z80_BASIC_INTERPRETER_RUN_SLICE_TSTATES
         });
@@ -2134,7 +2383,11 @@ async function runBasicProgram(
     if (machine.getExecutionBackend() === 'z80-firmware') {
       // 短いプログラムは同一フレーム内で user-program -> firmware へ戻ることがあり、
       // frame 側が遷移を観測できない場合があるためここで即時完了を判定する。
-      if (z80RunAwaitingCompletion && machine.getExecutionDomain() !== 'user-program') {
+      if (
+        z80RunAwaitingCompletion &&
+        machine.getExecutionDomain() !== 'user-program' &&
+        machine.getFirmwareIoStats().pendingBytes === 0
+      ) {
         clearZ80RunTracking();
         setProgramRunStatus('ok', 'Run OK');
         appendLog('BASIC RUN ok');
@@ -2142,6 +2395,7 @@ async function runBasicProgram(
       }
       setProgramRunStatus('running', 'Running');
       appendLog('BASIC RUN running');
+      void pumpZ80BasicRun(runToken);
       return { ok: true };
     }
 
@@ -2253,6 +2507,7 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
   }
 
   setAsmRunInFlight(true);
+  asmRunHasEnteredUserProgram = false;
   const runToken = ++asmRunToken;
   setAsmRunStatus('running', 'Running');
   appendLog('ASM RUN start');
@@ -2267,6 +2522,7 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
       };
     }
     const build = asmBuildCache;
+    setAsmRunStatus('running', 'Running');
 
     machine.reset(true);
     machine.loadProgram(build.binary, build.origin);
@@ -2276,6 +2532,7 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
     machine.write8((returnSp + 1) & 0xffff, (firmwareReturnAddress >> 8) & 0xff);
     machine.setStackPointer(returnSp);
     machine.setProgramCounter(build.entry);
+    machine.setRuntimePumpEnabled(false);
     machine.setExecutionDomain('user-program');
     machine.setImmediateInputToRuntimeEnabled(false);
     renderLcd();
@@ -2283,45 +2540,24 @@ async function runAsmProgram(source: string): Promise<RunAsmProgramResult> {
     if (!running) {
       setRunningState(true);
     }
-
-    const timeoutMs = 20_000;
-    const start = performance.now();
-    while (true) {
-      if (asmRunToken !== runToken) {
-        setAsmRunStatus('idle', 'Stopped');
-        appendLog('ASM RUN stopped');
-        return { ok: false, errorLine: 'STOPPED' };
-      }
-      const cpu = machine.getCpuState();
-      if (cpu.halted && machine.getExecutionDomain() === 'user-program') {
-        machine.setProgramCounter(firmwareReturnAddress);
-        machine.setExecutionDomain('firmware');
-      }
-      if (machine.getExecutionDomain() === 'firmware') {
-        break;
-      }
-      if (performance.now() - start > timeoutMs) {
-        setAsmRunStatus('failed', 'Failed: RUN TIMEOUT');
-        appendLog('ASM RUN timeout');
-        return { ok: false, errorLine: 'RUN TIMEOUT' };
-      }
-      await waitForAnimationFrame();
+    await waitForAnimationFrame();
+    if (asmRunToken !== runToken) {
+      finishAsmRun('idle', 'Stopped', 'ASM RUN stopped');
+      return { ok: false, errorLine: 'STOPPED' };
     }
-
-    setAsmRunStatus('ok', 'Run OK');
-    appendLog('ASM RUN ok');
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error';
-    setAsmRunStatus('failed', `Failed: ${message}`);
-    appendLog(`ASM RUN exception ${message}`);
+    finishAsmRun('failed', `Failed: ${message}`, `ASM RUN exception ${message}`);
     return { ok: false, errorLine: message };
   } finally {
-    machine.setImmediateInputToRuntimeEnabled(true);
-    if (machine.getExecutionDomain() !== 'firmware') {
-      machine.setExecutionDomain('firmware');
+    if (!asmRunInFlight) {
+      if (machine.getExecutionDomain() !== 'firmware') {
+        machine.setExecutionDomain('firmware');
+      }
+      machine.setRuntimePumpEnabled(true);
+      machine.setImmediateInputToRuntimeEnabled(true);
     }
-    setAsmRunInFlight(false);
   }
 }
 
@@ -2748,6 +2984,8 @@ function boot(coldReset: boolean): boolean {
       appendLog('RESET (cold)');
     }
 
+    machine.setRuntimePumpEnabled(true);
+    machine.setImmediateInputToRuntimeEnabled(true);
     machine.tick(260_000);
 
     const litPixels = renderLcd();
@@ -2771,7 +3009,7 @@ function boot(coldReset: boolean): boolean {
   } catch (error) {
     fail('FAILED', 'Boot exception', error);
     renderLcd();
-    updateDebugView(now);
+    updateDebugView(performance.now());
     return false;
   }
 }
@@ -2836,7 +3074,7 @@ function frame(now: number): void {
   lastTimestamp = now;
 
   try {
-    if (running) {
+    if (running && !z80RunPumpActive) {
       const target = (elapsedMs / 1000) * PCG815Machine.CLOCK_HZ;
       // 点滅観測を維持しつつ、BASIC実行速度が過度に落ちないよう
       // 1フレームあたり上限を 1/4 秒分に調整する。
@@ -2858,6 +3096,7 @@ function frame(now: number): void {
     const litPixels = renderLcd();
     verifyHealth(elapsedMs, litPixels);
     syncZ80BasicRunStatus();
+    syncAsmRunStatus();
     updateDebugView();
   } catch (error) {
     fail('FAILED', 'Frame exception', error);
@@ -2905,6 +3144,30 @@ function syncZ80BasicRunStatus(): void {
   clearZ80RunTracking();
   setProgramRunStatus('ok', 'Run OK');
   appendLog('BASIC RUN ok');
+}
+
+function syncAsmRunStatus(): void {
+  if (!asmRunInFlight) {
+    asmRunHasEnteredUserProgram = false;
+    return;
+  }
+
+  const domain = machine.getExecutionDomain();
+  if (domain === 'user-program') {
+    asmRunHasEnteredUserProgram = true;
+    const cpu = machine.getCpuState();
+    if (cpu.halted) {
+      machine.setProgramCounter(machine.getFirmwareReturnAddress() & 0xffff);
+      machine.setExecutionDomain('firmware');
+    }
+    return;
+  }
+
+  if (!asmRunHasEnteredUserProgram || domain !== 'firmware') {
+    return;
+  }
+
+  finishAsmRun('ok', 'Run OK', 'ASM RUN ok');
 }
 
 function toggleRunState(): void {
@@ -2977,6 +3240,7 @@ basicStopButton.addEventListener('click', () => {
   basicRunToken += 1;
   clearZ80RunTracking();
   setBasicRunInFlight(false);
+  machine.setRuntimePumpEnabled(true);
   machine.setExecutionDomain('firmware');
   setRunningState(false);
   setProgramRunStatus('idle', 'Stopped');
@@ -3040,7 +3304,12 @@ asmRunButton.addEventListener('click', async () => {
 
 asmStopButton.addEventListener('click', () => {
   asmRunToken += 1;
+  machine.setRuntimePumpEnabled(true);
+  machine.setImmediateInputToRuntimeEnabled(true);
+  machine.setExecutionDomain('firmware');
   setRunningState(false);
+  setAsmRunInFlight(false);
+  asmRunHasEnteredUserProgram = false;
   setAsmRunStatus('idle', 'Stopped');
   appendLog('CPU STOP by asm editor');
 });
@@ -3110,6 +3379,10 @@ window.addEventListener('keydown', (event) => {
   }
   const runningUserProgram =
     machine.getExecutionBackend() === 'z80-firmware' && machine.getExecutionDomain() === 'user-program';
+  const firmwareIdlePrompt =
+    machine.getExecutionBackend() === 'z80-firmware' &&
+    machine.getExecutionDomain() === 'firmware' &&
+    !machine.isRuntimeProgramRunning();
   if (isTextInputTarget(event.target)) {
     return;
   }
@@ -3126,12 +3399,18 @@ window.addEventListener('keydown', (event) => {
   }
 
   machine.setKeyState(resolvedCode, true);
+  if (runningUserProgram && resolvedCode === 'Space') {
+    machine.out8(0x11, 0x80);
+    machine.out8(0x17, 0x80);
+  }
   // キーマトリクスを読むポーリング系(BASICゲーム)向けに、
   // 押下直後の最小ステップを進めて検出取りこぼしを抑える。
   const keydownBoost =
     runningUserProgram && resolvedCode === 'Space'
       ? SPACE_KEYDOWN_POLL_BOOST_TSTATES
-      : KEYDOWN_POLL_BOOST_TSTATES;
+      : firmwareIdlePrompt
+        ? 0
+        : KEYDOWN_POLL_BOOST_TSTATES;
   machine.tick(keydownBoost);
   pressedCodes.add(resolvedCode);
   appendLog(`DOWN ${resolvedCode}`);
@@ -3144,6 +3423,10 @@ window.addEventListener('keyup', (event) => {
   }
   const runningUserProgram =
     machine.getExecutionBackend() === 'z80-firmware' && machine.getExecutionDomain() === 'user-program';
+  const firmwareIdlePrompt =
+    machine.getExecutionBackend() === 'z80-firmware' &&
+    machine.getExecutionDomain() === 'firmware' &&
+    !machine.isRuntimeProgramRunning();
   if (isTextInputTarget(event.target)) {
     return;
   }
@@ -3153,16 +3436,26 @@ window.addEventListener('keyup', (event) => {
   if (pendingTimer !== undefined) {
     window.clearTimeout(pendingTimer);
   }
-  const releaseDelayMs = KEY_RELEASE_LATCH_MS;
-  const timerId = window.setTimeout(() => {
+  const applyRelease = (): void => {
+    if (runningUserProgram && resolvedCode === 'Space') {
+      machine.out8(0x11, 0x80);
+      machine.out8(0x17, 0x80);
+    }
     machine.setKeyState(resolvedCode, false);
     // 離上エッジ依存の判定を取りこぼさないよう解放側でも短く進める。
-    machine.tick(256);
+    machine.tick(runningUserProgram && resolvedCode === 'Space' ? 4_000_000 : firmwareIdlePrompt ? 0 : 256);
     pressedCodes.delete(resolvedCode);
     pendingKeyRelease.delete(resolvedCode);
     appendLog(`UP   ${resolvedCode}`);
-  }, releaseDelayMs);
-  pendingKeyRelease.set(resolvedCode, timerId);
+  };
+
+  if (runningUserProgram) {
+    const timerId = window.setTimeout(applyRelease, KEY_RELEASE_LATCH_MS);
+    pendingKeyRelease.set(resolvedCode, timerId);
+    return;
+  }
+
+  applyRelease();
 });
 
 window.addEventListener('blur', () => {
@@ -3198,7 +3491,7 @@ setEditorMode('basic');
 window.__pcg815 = {
   injectBasicLine,
   runBasicProgram,
-  getTextLines: () => machine.getTextLines(),
+  readDisplayText: () => decodeMachineText(machine),
   getBootState: () => currentState,
   getExecutionBackend: () => machine.getExecutionBackend(),
   setKanaMode: (enabled: boolean) => {
@@ -3215,16 +3508,20 @@ window.__pcg815 = {
   getCpuPinsOut: () => machine.getCpuPinsOut(),
   getCpuPinsIn: () => machine.getCpuPinsIn(),
   tapKey: (code: string) => {
-    const pressTicks = 220_000;
-    const releaseTicks = 260_000;
+    const pressTicks = code === 'Space' ? 220_000 : 3_000_000;
+    const releaseTicks = code === 'Space' ? 260_000 : 600_000;
     machine.setImmediateInputToRuntimeEnabled(false);
-    // サンプルゲーム互換: キーマトリクスの行7(0x80)を明示選択してから入力を流す。
-    machine.out8(0x11, 0x80);
-    machine.out8(0x17, 0x80);
+    machine.setRuntimePumpEnabled(false);
+    // Space のみ行7(0x80)を事前選択して短押しでも取りこぼしにくくする。
+    if (code === 'Space') {
+      machine.out8(0x11, 0x80);
+      machine.out8(0x17, 0x80);
+    }
     machine.setKeyState(code, true);
     machine.tick(pressTicks);
     machine.setKeyState(code, false);
     machine.tick(releaseTicks);
+    machine.setRuntimePumpEnabled(true);
     machine.setImmediateInputToRuntimeEnabled(true);
   },
   assembleAsm: (source: string) => {

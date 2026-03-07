@@ -412,14 +412,15 @@ export class PcG815BasicRuntime {
       return;
     }
 
+    let handledPromptFlow = false;
     try {
       const parsed = parseStatements(line);
-      this.executeImmediateLine(parsed);
+      handledPromptFlow = this.executeImmediateLine(parsed);
     } catch (error) {
       this.pushText(`ERR ${asDisplayError(error)}\r\n`);
     }
 
-    if (this.pendingInput === null && !this.isProgramRunning()) {
+    if (!handledPromptFlow && this.pendingInput === null && !this.isProgramRunning()) {
       this.pushPrompt();
     }
   }
@@ -706,7 +707,7 @@ export class PcG815BasicRuntime {
     return this.program;
   }
 
-  private executeImmediateLine(parsed: ParsedLine): void {
+  private executeImmediateLine(parsed: ParsedLine): boolean {
     const state: ExecutionState = {
       mode: 'immediate',
       instructions: [],
@@ -719,21 +720,23 @@ export class PcG815BasicRuntime {
     for (const statement of parsed.statements) {
       if (statement.kind === 'RUN') {
         this.runProgram(10_000, true, statement.target);
-        return;
+        return true;
       }
 
       if (statement.kind === 'CONT') {
         if (!this.resumeStoppedProgram()) {
           throw new BasicRuntimeError('SYNTAX', 'SYNTAX');
         }
-        return;
+        return true;
       }
 
       const result = this.executeStatement(statement, state);
       if (result.stopProgram || result.suspendProgram) {
-        return;
+        return true;
       }
     }
+
+    return false;
   }
 
   private executeStatement(statement: StatementNode, state: ExecutionState): StatementExecutionResult {

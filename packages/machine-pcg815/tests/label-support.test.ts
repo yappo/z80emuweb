@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PCG815Machine } from '../src';
+import { PCG815Machine, decodeMachineText } from '../src';
 
 function encode(lines: readonly string[]): number[] {
   const bytes: number[] = [];
@@ -30,7 +30,7 @@ describe('z80 basic label support', () => {
       '160 END',
       'RUN'
     ]);
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('OK');
     expect(screen).not.toContain('NG');
   });
@@ -46,7 +46,7 @@ describe('z80 basic label support', () => {
       '150 RETURN',
       'RUN'
     ]);
-    const screen = machine.getTextLines().join('\n');
+    const screen = decodeMachineText(machine).join('\n');
     expect(screen).toContain('7');
   });
 
