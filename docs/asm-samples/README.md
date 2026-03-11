@@ -1,11 +1,11 @@
 # ASM Samples
 
-## DOOM-like pseudo 3D maze demo
+## DOOM-like wireframe maze demo
 
 - File: `doom-like-demo.asm`
 - Target: PC-G815 emulator (Assembler tab)
-- Style: 24x4 text-cell pseudo 3D maze animation (auto-play)
-- Engine: maze-map + fixed-route camera + lightweight raycast per column
+- Style: 144x32 dot-graphics wireframe maze animation (auto-play)
+- Engine: 10x10 maze-map + autonomous camera + occlusion-aware corridor renderer
 
 ### How to run
 
@@ -16,6 +16,7 @@
 ### Notes
 
 - Rendering is generated every frame from an 8x8 maze map, not pre-rendered playback.
-- Perspective uses characters from `0x80-0x9F`, plus `0xEE/0xEF` for diagonal corner hints.
-- The camera follows a fixed route (`FWD` / `TURN_L` / `TURN_R`) and loops forever.
-- LCD output uses ports `0x58` (command) and `0x5A` (data).
+- The renderer draws continuous left/right corridor walls first, then only the nearest visible side opening on each side.
+- Side walls get depth seams to read as tiled dungeon walls without showing hidden geometry behind a nearer opening.
+- Only dirty raw LCD bytes are flushed each frame through `OUT` to `0x54/0x56` and `0x58/0x5A`.
+- The camera picks its path autonomously, always starting on an open cell and facing a traversable next step.

@@ -171,7 +171,7 @@ describe('asm samples', () => {
     runFor(machine, 40_000, 256);
 
     const litPixels = machine.getFrameBuffer().reduce((sum, pixel) => sum + (pixel ? 1 : 0), 0);
-    expect(litPixels).toBeGreaterThan(20);
+    expect(litPixels).toBeGreaterThan(40);
     expect(machine.getExecutionDomain()).toBe('user-program');
     expect(machine.getCpuState().registers.pc & 0xffff).not.toBe(returnAddress & 0xffff);
   });
