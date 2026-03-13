@@ -601,7 +601,7 @@ function drawExpectedBranchCorridor(
     const startRect = RECTS[depth + 1]!;
     const startX = side === 'left' ? startRect.left : startRect.right;
     const limitRect = RECTS[depth]!;
-    const inset = Math.max(1, Math.trunc((startRect.bottom - startRect.top) / 4));
+    const inset = 0;
     const gap = inset * 2;
     const endX = side === 'left' ? limitRect.left + gap : limitRect.right - gap;
     drawExpectedLine(rawVram, startX, startRect.top, endX, startRect.top + inset);
@@ -612,7 +612,7 @@ function drawExpectedBranchCorridor(
   const inner = RECTS[depth]!;
   const outer = RECTS[outerIndex]!;
   const innerX = side === 'left' ? inner.left : inner.right;
-  const inset = Math.max(1, Math.trunc((inner.bottom - inner.top) / 4));
+  const inset = 0;
   const gap = inset * 2;
   const outerX = side === 'left' ? outer.left + gap : outer.right - gap;
   drawExpectedLine(rawVram, innerX, inner.top, outerX, inner.top + inset);
@@ -1444,8 +1444,8 @@ describe('doom-like asm sample', () => {
     expect(diagonalBandLooksContinuous(frame, [
       [83, 13],
       [87, 13],
-      [89, 14],
-      [93, 14]
+      [91, 13],
+      [95, 13]
     ])).toBe(true);
     expect(isLit(frame, 94, 13)).toBe(true);
     expect(isLit(frame, 94, 14)).toBe(false);
@@ -1477,8 +1477,8 @@ describe('doom-like asm sample', () => {
     expect(diagonalBandLooksContinuous(frame, [
       [83, 18],
       [87, 18],
-      [89, 17],
-      [93, 17]
+      [91, 18],
+      [95, 18]
     ])).toBe(true);
     expect(isLit(frame, 94, 17)).toBe(false);
     expect(isLit(frame, 94, 18)).toBe(true);

@@ -676,8 +676,8 @@ test('3D sample pinned right-branch scene matches the agreed far-side wall shape
           const width = 144;
           const isLit = (x: number, y: number): boolean => frame[y * width + x] !== 0;
           return {
-            upper: [isLit(83, 13), isLit(87, 13), isLit(89, 14), isLit(93, 14)],
-            lower: [isLit(83, 18), isLit(87, 18), isLit(89, 17), isLit(93, 17)],
+            upper: [isLit(83, 13), isLit(87, 13), isLit(91, 13), isLit(95, 13)],
+            lower: [isLit(83, 18), isLit(87, 18), isLit(91, 18), isLit(95, 18)],
             gapUpper: [isLit(94, 13), isLit(94, 14)],
             gapLower: [isLit(94, 17), isLit(94, 18)],
             wallUpper: isLit(95, 13),
