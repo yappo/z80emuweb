@@ -73,6 +73,8 @@ declare global {
       getBasicEngineStatus: () => ReturnType<PCG815Machine['getBasicEngineStatus']>;
       getCpuPinsOut: () => ReturnType<PCG815Machine['getCpuPinsOut']>;
       getCpuPinsIn: () => ReturnType<PCG815Machine['getCpuPinsIn']>;
+      getFrameBuffer: () => number[];
+      getRawVram: () => number[];
       tapKey: (code: string) => void;
       assembleAsm: (source: string) => { ok: boolean; errorLine?: string; dump: string };
       runAsm: (source: string) => Promise<RunAsmProgramResult>;
@@ -1479,18 +1481,27 @@ DRAW_LEFT_BRANCH_OUTER_ZERO:
   JR DRAW_LEFT_BRANCH_OUTER_READY
 DRAW_LEFT_BRANCH_OUTER_READY:
   LD (BRANCH_OUTER),A
+  LD A,(BRANCH_OUTER)
+  OR A
+  JR Z,DRAW_LEFT_BRANCH_VISIBLE_CONTINUE
   LD A,(RECT_INDEX)
   CALL LOAD_FAR_RECT
   LD A,(BRANCH_OUTER)
   CALL LOAD_NEAR_RECT
 
+  CALL COMPUTE_BRANCH_END_BOUNDS
   LD A,(FAR_LEFT)
   LD B,A
   LD A,(FAR_TOP)
   LD C,A
   LD A,(NEAR_LEFT)
   LD D,A
-  LD A,(NEAR_TOP)
+  LD A,(BRANCH_END_GAP)
+  LD E,A
+  LD A,D
+  ADD A,E
+  LD D,A
+  LD A,(BRANCH_END_TOP)
   LD E,A
   CALL DRAW_LINE
 
@@ -1500,16 +1511,61 @@ DRAW_LEFT_BRANCH_OUTER_READY:
   LD C,A
   LD A,(NEAR_LEFT)
   LD D,A
-  LD A,(NEAR_BOTTOM)
+  LD A,(BRANCH_END_GAP)
+  LD E,A
+  LD A,D
+  ADD A,E
+  LD D,A
+  LD A,(BRANCH_END_BOTTOM)
   LD E,A
   CALL DRAW_LINE
 
   LD A,(BRANCH_OUTER)
-  OR A
-  RET Z
-  LD A,(BRANCH_OUTER)
   CALL LOAD_FAR_RECT
   CALL DRAW_LEFT_RECT_EDGE
+  RET
+
+DRAW_LEFT_BRANCH_VISIBLE_CONTINUE:
+  LD A,(RECT_INDEX)
+  CP MAX_DEPTH
+  RET NC
+  INC A
+  PUSH AF
+  CALL LOAD_FAR_RECT
+  POP AF
+  DEC A
+  CALL LOAD_NEAR_RECT
+
+  CALL COMPUTE_BRANCH_END_BOUNDS
+  LD A,(FAR_LEFT)
+  LD B,A
+  LD A,(FAR_TOP)
+  LD C,A
+  LD A,(NEAR_LEFT)
+  LD D,A
+  LD A,(BRANCH_END_GAP)
+  LD E,A
+  LD A,D
+  ADD A,E
+  LD D,A
+  LD A,(BRANCH_END_TOP)
+  LD E,A
+  CALL DRAW_LINE
+
+  LD A,(FAR_LEFT)
+  LD B,A
+  LD A,(FAR_BOTTOM)
+  LD C,A
+  LD A,(NEAR_LEFT)
+  LD D,A
+  LD A,(BRANCH_END_GAP)
+  LD E,A
+  LD A,D
+  ADD A,E
+  LD D,A
+  LD A,(BRANCH_END_BOTTOM)
+  LD E,A
+  CALL DRAW_LINE
   RET
 
 DRAW_RIGHT_BRANCH_AT_DEPTH:
@@ -1527,18 +1583,27 @@ DRAW_RIGHT_BRANCH_OUTER_ZERO:
   JR DRAW_RIGHT_BRANCH_OUTER_READY
 DRAW_RIGHT_BRANCH_OUTER_READY:
   LD (BRANCH_OUTER),A
+  LD A,(BRANCH_OUTER)
+  OR A
+  JR Z,DRAW_RIGHT_BRANCH_VISIBLE_CONTINUE
   LD A,(RECT_INDEX)
   CALL LOAD_FAR_RECT
   LD A,(BRANCH_OUTER)
   CALL LOAD_NEAR_RECT
 
+  CALL COMPUTE_BRANCH_END_BOUNDS
   LD A,(FAR_RIGHT)
   LD B,A
   LD A,(FAR_TOP)
   LD C,A
   LD A,(NEAR_RIGHT)
   LD D,A
-  LD A,(NEAR_TOP)
+  LD A,(BRANCH_END_GAP)
+  LD E,A
+  LD A,D
+  SUB E
+  LD D,A
+  LD A,(BRANCH_END_TOP)
   LD E,A
   CALL DRAW_LINE
 
@@ -1548,40 +1613,85 @@ DRAW_RIGHT_BRANCH_OUTER_READY:
   LD C,A
   LD A,(NEAR_RIGHT)
   LD D,A
-  LD A,(NEAR_BOTTOM)
+  LD A,(BRANCH_END_GAP)
+  LD E,A
+  LD A,D
+  SUB E
+  LD D,A
+  LD A,(BRANCH_END_BOTTOM)
   LD E,A
   CALL DRAW_LINE
 
-  LD A,(BRANCH_OUTER)
-  OR A
-  RET Z
   LD A,(BRANCH_OUTER)
   CALL LOAD_FAR_RECT
   CALL DRAW_RIGHT_RECT_EDGE
   RET
 
-DRAW_LEFT_BRANCH_HINT:
-  LD A,(FAR_LEFT)
+DRAW_RIGHT_BRANCH_VISIBLE_CONTINUE:
+  LD A,(RECT_INDEX)
+  CP MAX_DEPTH
+  RET NC
+  INC A
+  PUSH AF
+  CALL LOAD_FAR_RECT
+  POP AF
+  DEC A
+  CALL LOAD_NEAR_RECT
+
+  CALL COMPUTE_BRANCH_END_BOUNDS
+  LD A,(FAR_RIGHT)
   LD B,A
   LD A,(FAR_TOP)
   LD C,A
-  LD A,(FAR_LEFT)
+  LD A,(NEAR_RIGHT)
   LD D,A
+  LD A,(BRANCH_END_GAP)
+  LD E,A
+  LD A,D
+  SUB E
+  LD D,A
+  LD A,(BRANCH_END_TOP)
+  LD E,A
+  CALL DRAW_LINE
+
+  LD A,(FAR_RIGHT)
+  LD B,A
   LD A,(FAR_BOTTOM)
+  LD C,A
+  LD A,(NEAR_RIGHT)
+  LD D,A
+  LD A,(BRANCH_END_GAP)
+  LD E,A
+  LD A,D
+  SUB E
+  LD D,A
+  LD A,(BRANCH_END_BOTTOM)
   LD E,A
   CALL DRAW_LINE
   RET
 
-DRAW_RIGHT_BRANCH_HINT:
-  LD A,(FAR_RIGHT)
+COMPUTE_BRANCH_END_BOUNDS:
+  LD A,(FAR_BOTTOM)
   LD B,A
   LD A,(FAR_TOP)
   LD C,A
-  LD A,(FAR_RIGHT)
-  LD D,A
+  LD A,B
+  SUB C
+  SRL A
+  SRL A
+  JR NZ,COMPUTE_BRANCH_END_HAVE_INSET
+  INC A
+COMPUTE_BRANCH_END_HAVE_INSET:
+  LD B,A
+  ADD A,A
+  LD (BRANCH_END_GAP),A
+  LD A,B
+  LD A,(FAR_TOP)
+  ADD A,B
+  LD (BRANCH_END_TOP),A
   LD A,(FAR_BOTTOM)
-  LD E,A
-  CALL DRAW_LINE
+  SUB B
+  LD (BRANCH_END_BOTTOM),A
   RET
 
 
@@ -2157,6 +2267,12 @@ FAR_RIGHT:
 FAR_TOP:
   DB 0
 FAR_BOTTOM:
+  DB 0
+BRANCH_END_TOP:
+  DB 0
+BRANCH_END_BOTTOM:
+  DB 0
+BRANCH_END_GAP:
   DB 0
 FRONT_CLIP_LEFT:
   DB 0
@@ -3802,6 +3918,8 @@ window.__pcg815 = {
   getBasicEngineStatus: () => machine.getBasicEngineStatus(),
   getCpuPinsOut: () => machine.getCpuPinsOut(),
   getCpuPinsIn: () => machine.getCpuPinsIn(),
+  getFrameBuffer: () => Array.from(machine.getFrameBuffer()),
+  getRawVram: () => Array.from(machine.createSnapshot().vram.text),
   tapKey: (code: string) => {
     const pressTicks = code === 'Space' ? 220_000 : 3_000_000;
     const releaseTicks = code === 'Space' ? 260_000 : 600_000;

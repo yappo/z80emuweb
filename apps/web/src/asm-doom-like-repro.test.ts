@@ -585,12 +585,6 @@ function drawExpectedSideWall(
   }
 }
 
-function drawExpectedBranch(rawVram: Uint8Array, side: 'left' | 'right', depth: number): void {
-  const rect = RECTS[depth]!;
-  const x = side === 'left' ? rect.left : rect.right;
-  drawExpectedVertical(rawVram, x, rect.top, rect.bottom);
-}
-
 function drawExpectedBranchCorridor(
   rawVram: Uint8Array,
   side: 'left' | 'right',
@@ -600,17 +594,32 @@ function drawExpectedBranchCorridor(
   if (branchLen <= 0) {
     return;
   }
+  if (branchLen >= depth) {
+    if (depth >= MAX_DEPTH) {
+      return;
+    }
+    const startRect = RECTS[depth + 1]!;
+    const startX = side === 'left' ? startRect.left : startRect.right;
+    const limitRect = RECTS[depth]!;
+    const inset = Math.max(1, Math.trunc((startRect.bottom - startRect.top) / 4));
+    const gap = inset * 2;
+    const endX = side === 'left' ? limitRect.left + gap : limitRect.right - gap;
+    drawExpectedLine(rawVram, startX, startRect.top, endX, startRect.top + inset);
+    drawExpectedLine(rawVram, startX, startRect.bottom, endX, startRect.bottom - inset);
+    return;
+  }
   const outerIndex = Math.max(0, depth - branchLen);
   const inner = RECTS[depth]!;
   const outer = RECTS[outerIndex]!;
   const innerX = side === 'left' ? inner.left : inner.right;
-  const outerX = side === 'left' ? outer.left : outer.right;
-  drawExpectedLine(rawVram, innerX, inner.top, outerX, outer.top);
-  drawExpectedLine(rawVram, innerX, inner.bottom, outerX, outer.bottom);
-  if (outerIndex === 0) {
-    return;
+  const inset = Math.max(1, Math.trunc((inner.bottom - inner.top) / 4));
+  const gap = inset * 2;
+  const outerX = side === 'left' ? outer.left + gap : outer.right - gap;
+  drawExpectedLine(rawVram, innerX, inner.top, outerX, inner.top + inset);
+  drawExpectedLine(rawVram, innerX, inner.bottom, outerX, inner.bottom - inset);
+  if (outerIndex > 0) {
+    drawExpectedSeam(rawVram, side, outer);
   }
-  drawExpectedSeam(rawVram, side, outer);
 }
 
 function drawExpectedFrontWall(rawVram: Uint8Array, scene: SceneSpec): void {
@@ -652,11 +661,9 @@ function renderExpectedRawVram(scene: SceneSpec): Uint8Array {
 
   for (let depth = 1; depth <= visibleDepth; depth += 1) {
     if (scene.leftOpens[depth - 1]) {
-      drawExpectedBranch(rawVram, 'left', depth);
       drawExpectedBranchCorridor(rawVram, 'left', depth, scene.leftBranchLens[depth - 1] ?? 0);
     }
     if (scene.rightOpens[depth - 1]) {
-      drawExpectedBranch(rawVram, 'right', depth);
       drawExpectedBranchCorridor(rawVram, 'right', depth, scene.rightBranchLens[depth - 1] ?? 0);
     }
   }
@@ -838,14 +845,16 @@ describe('doom-like asm sample', () => {
       runUntilUserHalt(machine);
       const frame = Uint8Array.from(machine.getFrameBuffer());
       const farRect = RECTS[4]!;
+      const interiorTop = farRect.top + 2;
+      const interiorBottom = farRect.bottom - 2;
 
       if ('hiddenLeft' in scenario) {
         const hiddenLeft = scenario.hiddenLeft!;
-        expect(interiorRegionIsDark(frame, hiddenLeft[0], hiddenLeft[1], farRect.top + 1, farRect.bottom - 1)).toBe(true);
+        expect(interiorRegionIsDark(frame, hiddenLeft[0], hiddenLeft[1], interiorTop, interiorBottom)).toBe(true);
       }
       if ('hiddenRight' in scenario) {
         const hiddenRight = scenario.hiddenRight!;
-        expect(interiorRegionIsDark(frame, hiddenRight[0], hiddenRight[1], farRect.top + 1, farRect.bottom - 1)).toBe(true);
+        expect(interiorRegionIsDark(frame, hiddenRight[0], hiddenRight[1] - 1, interiorTop, interiorBottom)).toBe(true);
       }
     }
   });
@@ -878,14 +887,10 @@ describe('doom-like asm sample', () => {
       const rect = RECTS[scenario.rectIndex]!;
 
       if (scenario.side === 'left') {
-        expect(isLit(frame, Math.max(0, rect.left - 8), rect.top)).toBe(false);
-        expect(isLit(frame, Math.max(0, rect.left - 8), rect.bottom)).toBe(false);
         expect(isLit(frame, rect.left + 4, rect.top)).toBe(false);
         expect(isLit(frame, rect.left + 4, rect.bottom)).toBe(false);
         expect(verticalLineLooksConnected(frame, rect.left, rect.top, rect.bottom)).toBe(true);
       } else {
-        expect(isLit(frame, Math.min(143, rect.right + 8), rect.top)).toBe(false);
-        expect(isLit(frame, Math.min(143, rect.right + 8), rect.bottom)).toBe(false);
         expect(isLit(frame, rect.right - 4, rect.top)).toBe(false);
         expect(isLit(frame, rect.right - 4, rect.bottom)).toBe(false);
         expect(verticalLineLooksConnected(frame, rect.right, rect.top, rect.bottom)).toBe(true);
@@ -924,7 +929,7 @@ describe('doom-like asm sample', () => {
     }
   });
 
-  it('draws the branch opening jamb as a connected vertical line', { timeout: 40_000 }, () => {
+  it('keeps the branch opening jamb as a vertical line', { timeout: 40_000 }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
     const cases = [
@@ -973,6 +978,7 @@ describe('doom-like asm sample', () => {
 
     runUntilUserHalt(machine);
     const frame = Uint8Array.from(machine.getFrameBuffer());
+
     const rect = RECTS[1]!;
 
     expect(verticalLineLooksConnected(frame, rect.left, rect.top, rect.bottom)).toBe(true);
@@ -996,6 +1002,7 @@ describe('doom-like asm sample', () => {
 
     runUntilUserHalt(machine);
     const frame = Uint8Array.from(machine.getFrameBuffer());
+
     const farRect = RECTS[4]!;
 
     expect(verticalLineLooksConnected(frame, farRect.right, farRect.top, farRect.bottom)).toBe(true);
@@ -1410,5 +1417,71 @@ describe('doom-like asm sample', () => {
       [109, 23],
       [95, 20]
     ])).toBe(true);
+  });
+
+  it('renders the far-side upper wall of the right branch corridor', { timeout: 40_000 }, () => {
+    const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
+    const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
+    const start = { x: 5, y: 1, dir: 'east' as const };
+
+    const pinnedAsm = withPinnedStart(asm, start);
+    const assembled = assemble(pinnedAsm, { filename: 'doom-like-right-branch-agreed-shape.asm' });
+
+    expect(assembled.ok).toBe(true);
+    if (!assembled.ok) {
+      return;
+    }
+
+    const machine = new PCG815Machine({ strictCpuOpcodes: true });
+    machine.reset(true);
+    machine.loadProgram(assembled.binary, assembled.origin);
+    machine.setStackPointer(0x7ffc);
+    machine.setProgramCounter(assembled.entry);
+    machine.setExecutionDomain('user-program');
+
+    runUntilUserHalt(machine);
+    const frame = Uint8Array.from(machine.getFrameBuffer());
+    expect(diagonalBandLooksContinuous(frame, [
+      [83, 13],
+      [87, 13],
+      [89, 14],
+      [93, 14]
+    ])).toBe(true);
+    expect(isLit(frame, 94, 13)).toBe(true);
+    expect(isLit(frame, 94, 14)).toBe(false);
+    expect(isLit(frame, 95, 13)).toBe(true);
+  });
+
+  it('renders the far-side lower wall of the right branch corridor', { timeout: 40_000 }, () => {
+    const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
+    const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
+    const start = { x: 5, y: 1, dir: 'east' as const };
+
+    const pinnedAsm = withPinnedStart(asm, start);
+    const assembled = assemble(pinnedAsm, { filename: 'doom-like-right-branch-far-lower-wall.asm' });
+
+    expect(assembled.ok).toBe(true);
+    if (!assembled.ok) {
+      return;
+    }
+
+    const machine = new PCG815Machine({ strictCpuOpcodes: true });
+    machine.reset(true);
+    machine.loadProgram(assembled.binary, assembled.origin);
+    machine.setStackPointer(0x7ffc);
+    machine.setProgramCounter(assembled.entry);
+    machine.setExecutionDomain('user-program');
+
+    runUntilUserHalt(machine);
+    const frame = Uint8Array.from(machine.getFrameBuffer());
+    expect(diagonalBandLooksContinuous(frame, [
+      [83, 18],
+      [87, 18],
+      [89, 17],
+      [93, 17]
+    ])).toBe(true);
+    expect(isLit(frame, 94, 17)).toBe(false);
+    expect(isLit(frame, 94, 18)).toBe(true);
+    expect(isLit(frame, 95, 18)).toBe(true);
   });
 });
