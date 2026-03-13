@@ -255,6 +255,10 @@ function withForcedScene(asm: string, scene: SceneSpec): string {
     '  LD (SCENE_FRONT_HIT),A',
     `  LD A,${scene.frontDepth}`,
     '  LD (SCENE_FRONT_DEPTH),A',
+    `  LD A,${scene.nearLeftOpen}`,
+    '  LD (SCENE_NEAR_LEFT_OPEN),A',
+    `  LD A,${scene.nearRightOpen}`,
+    '  LD (SCENE_NEAR_RIGHT_OPEN),A',
     ...scene.leftOpens.flatMap((value, index) => [`  LD A,${value}`, `  LD (SCENE_LEFT_OPEN+${index}),A`]),
     ...scene.rightOpens.flatMap((value, index) => [`  LD A,${value}`, `  LD (SCENE_RIGHT_OPEN+${index}),A`]),
     ...scene.leftBranchLens.flatMap((value, index) => [`  LD A,${value}`, `  LD (SCENE_LEFT_LEN+${index}),A`]),
@@ -272,6 +276,8 @@ function withForcedScene(asm: string, scene: SceneSpec): string {
 type SceneSpec = {
   frontHit: boolean;
   frontDepth: number;
+  nearLeftOpen: number;
+  nearRightOpen: number;
   leftOpens: readonly number[];
   rightOpens: readonly number[];
   leftBranchLens: readonly number[];
@@ -281,6 +287,8 @@ type SceneSpec = {
 function makeSceneSpec(input: {
   frontHit: boolean;
   frontDepth: number;
+  nearLeftOpen?: number;
+  nearRightOpen?: number;
   leftOpenDepth?: number | null;
   rightOpenDepth?: number | null;
   leftBranchLen?: number;
@@ -303,6 +311,8 @@ function makeSceneSpec(input: {
   return {
     frontHit: input.frontHit,
     frontDepth: input.frontDepth,
+    nearLeftOpen: input.nearLeftOpen ?? 0,
+    nearRightOpen: input.nearRightOpen ?? 0,
     leftOpens,
     rightOpens,
     leftBranchLens,
@@ -370,6 +380,10 @@ function computeSceneFromMaze(
   const rightOpens = [0, 0, 0, 0];
   const leftBranchLens = [0, 0, 0, 0];
   const rightBranchLens = [0, 0, 0, 0];
+  const [nearLeftDx, nearLeftDy] = FWD[LEFT_OF[start.dir]];
+  const [nearRightDx, nearRightDy] = FWD[RIGHT_OF[start.dir]];
+  const nearLeftOpen = isWall(maze, start.x + nearLeftDx, start.y + nearLeftDy) ? 0 : 1;
+  const nearRightOpen = isWall(maze, start.x + nearRightDx, start.y + nearRightDy) ? 0 : 1;
   let tempX = start.x;
   let tempY = start.y;
 
@@ -381,6 +395,8 @@ function computeSceneFromMaze(
       return {
         frontHit: true,
         frontDepth: depth,
+        nearLeftOpen,
+        nearRightOpen,
         leftOpens,
         rightOpens,
         leftBranchLens,
@@ -406,6 +422,8 @@ function computeSceneFromMaze(
   return {
     frontHit: false,
     frontDepth: MAX_DEPTH,
+    nearLeftOpen,
+    nearRightOpen,
     leftOpens,
     rightOpens,
     leftBranchLens,
@@ -566,10 +584,11 @@ function drawExpectedSideWall(
   rawVram: Uint8Array,
   side: 'left' | 'right',
   limitDepth: number,
+  nearOpen: number,
   openDepths: readonly number[]
 ): void {
   for (let depth = 1; depth <= limitDepth; depth += 1) {
-    if (depth > 1 && openDepths[depth - 2]) {
+    if ((depth === 1 && nearOpen) || (depth > 1 && openDepths[depth - 2])) {
       continue;
     }
     const near = RECTS[depth - 1]!;
@@ -589,12 +608,16 @@ function drawExpectedBranchCorridor(
   rawVram: Uint8Array,
   side: 'left' | 'right',
   depth: number,
-  branchLen: number
+  branchLen: number,
+  scene: SceneSpec
 ): void {
   if (branchLen <= 0) {
     return;
   }
   if (branchLen >= depth) {
+    if (depth === 1 && scene.frontHit && scene.frontDepth === 2) {
+      return;
+    }
     if (depth >= MAX_DEPTH) {
       return;
     }
@@ -622,6 +645,15 @@ function drawExpectedBranchCorridor(
   }
 }
 
+function drawExpectedNearBranchCorridor(rawVram: Uint8Array, side: 'left' | 'right'): void {
+  const outer = RECTS[0]!;
+  const inner = RECTS[1]!;
+  const startX = side === 'left' ? inner.left : inner.right;
+  const endX = side === 'left' ? outer.left : outer.right;
+  drawExpectedLine(rawVram, startX, inner.top, endX, inner.top);
+  drawExpectedLine(rawVram, startX, inner.bottom, endX, inner.bottom);
+}
+
 function drawExpectedFrontWall(rawVram: Uint8Array, scene: SceneSpec): void {
   if (!scene.frontHit) {
     return;
@@ -629,8 +661,8 @@ function drawExpectedFrontWall(rawVram: Uint8Array, scene: SceneSpec): void {
   const rect = RECTS[scene.frontDepth]!;
   const leftClipDepth = scene.leftOpens.findIndex((value, index) => value && index + 1 < scene.frontDepth);
   const rightClipDepth = scene.rightOpens.findIndex((value, index) => value && index + 1 < scene.frontDepth);
-  const clipLeft = leftClipDepth >= 0 ? RECTS[leftClipDepth + 1]!.left : rect.left;
-  const clipRight = rightClipDepth >= 0 ? RECTS[rightClipDepth + 1]!.right : rect.right;
+  const clipLeft = leftClipDepth >= 0 ? RECTS[Math.min(leftClipDepth + 2, scene.frontDepth)]!.left : rect.left;
+  const clipRight = rightClipDepth >= 0 ? RECTS[Math.min(rightClipDepth + 2, scene.frontDepth)]!.right : rect.right;
 
   drawExpectedHoriz(rawVram, clipLeft, clipRight, rect.top);
   drawExpectedHoriz(rawVram, clipLeft, clipRight, rect.bottom);
@@ -656,15 +688,21 @@ function renderExpectedRawVram(scene: SceneSpec): Uint8Array {
   const rawVram = new Uint8Array(LCD_RAW_BYTES);
   const visibleDepth = scene.frontHit ? scene.frontDepth : 4;
 
-  drawExpectedSideWall(rawVram, 'left', visibleDepth, scene.leftOpens);
-  drawExpectedSideWall(rawVram, 'right', visibleDepth, scene.rightOpens);
+  drawExpectedSideWall(rawVram, 'left', visibleDepth, scene.nearLeftOpen, scene.leftOpens);
+  drawExpectedSideWall(rawVram, 'right', visibleDepth, scene.nearRightOpen, scene.rightOpens);
+  if (scene.nearLeftOpen) {
+    drawExpectedNearBranchCorridor(rawVram, 'left');
+  }
+  if (scene.nearRightOpen) {
+    drawExpectedNearBranchCorridor(rawVram, 'right');
+  }
 
   for (let depth = 1; depth <= visibleDepth; depth += 1) {
     if (scene.leftOpens[depth - 1]) {
-      drawExpectedBranchCorridor(rawVram, 'left', depth, scene.leftBranchLens[depth - 1] ?? 0);
+      drawExpectedBranchCorridor(rawVram, 'left', depth, scene.leftBranchLens[depth - 1] ?? 0, scene);
     }
     if (scene.rightOpens[depth - 1]) {
-      drawExpectedBranchCorridor(rawVram, 'right', depth, scene.rightBranchLens[depth - 1] ?? 0);
+      drawExpectedBranchCorridor(rawVram, 'right', depth, scene.rightBranchLens[depth - 1] ?? 0, scene);
     }
   }
 
@@ -823,8 +861,8 @@ describe('doom-like asm sample', () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
     const cases = [
-      { x: 4, y: 1, dir: 'west' as const, hiddenLeft: [49, 59] as const },
-      { x: 5, y: 1, dir: 'east' as const, hiddenRight: [84, 94] as const }
+      { x: 4, y: 1, dir: 'west' as const, frontDepth: 4, hiddenLeft: [49, 59] as const },
+      { x: 5, y: 1, dir: 'east' as const, frontDepth: 4, hiddenRight: [84, 94] as const }
     ];
 
     for (const scenario of cases) {
@@ -844,7 +882,7 @@ describe('doom-like asm sample', () => {
 
       runUntilUserHalt(machine);
       const frame = Uint8Array.from(machine.getFrameBuffer());
-      const farRect = RECTS[4]!;
+      const farRect = RECTS[scenario.frontDepth]!;
       const interiorTop = farRect.top + 2;
       const interiorBottom = farRect.bottom - 2;
 
@@ -1193,6 +1231,180 @@ describe('doom-like asm sample', () => {
     expect(diffRawVram(actual, expected)).toEqual([]);
   });
 
+  it('keeps the nearest right wall ceiling and floor lines when the branch is one block farther ahead', { timeout: 40_000 }, () => {
+    const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
+    const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
+    const start = { x: 2, y: 1, dir: 'east' as const };
+
+    const pinnedAsm = withPinnedStart(asm, start);
+    const assembled = assemble(pinnedAsm, { filename: 'doom-like-second-block-right-open-keeps-near-side-lines.asm' });
+
+    expect(assembled.ok).toBe(true);
+    if (!assembled.ok) {
+      return;
+    }
+
+    const machine = new PCG815Machine({ strictCpuOpcodes: true });
+    machine.reset(true);
+    machine.loadProgram(assembled.binary, assembled.origin);
+    machine.setStackPointer(0x7ffc);
+    machine.setProgramCounter(assembled.entry);
+    machine.setExecutionDomain('user-program');
+
+    runUntilUserHalt(machine);
+    const frame = Uint8Array.from(machine.getFrameBuffer());
+
+    expect(diagonalBandLooksContinuous(frame, [
+      [143, 0],
+      [137, 1],
+      [131, 3],
+      [125, 4]
+    ])).toBe(true);
+    expect(diagonalBandLooksContinuous(frame, [
+      [143, 31],
+      [137, 30],
+      [131, 28],
+      [125, 27]
+    ])).toBe(true);
+  });
+
+  it('keeps the nearest side wall and the first visible right-branch ceiling and floor lines when the branch is one block ahead', { timeout: 40_000 }, () => {
+    const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
+    const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
+    const start = { x: 3, y: 1, dir: 'east' as const };
+
+    const pinnedAsm = withPinnedStart(asm, start);
+    const assembled = assemble(pinnedAsm, { filename: 'doom-like-first-right-open-no-near-side-lines.asm' });
+
+    expect(assembled.ok).toBe(true);
+    if (!assembled.ok) {
+      return;
+    }
+
+    const machine = new PCG815Machine({ strictCpuOpcodes: true });
+    machine.reset(true);
+    machine.loadProgram(assembled.binary, assembled.origin);
+    machine.setStackPointer(0x7ffc);
+    machine.setProgramCounter(assembled.entry);
+    machine.setExecutionDomain('user-program');
+
+    runUntilUserHalt(machine);
+    const frame = Uint8Array.from(machine.getFrameBuffer());
+
+    expect(diagonalBandLooksContinuous(frame, [
+      [109, 8],
+      [113, 8],
+      [117, 8],
+      [121, 8]
+    ])).toBe(true);
+    expect(diagonalBandLooksContinuous(frame, [
+      [109, 23],
+      [113, 23],
+      [117, 23],
+      [121, 23]
+    ])).toBe(true);
+    expect(diagonalBandLooksContinuous(frame, [
+      [143, 0],
+      [137, 1],
+      [131, 3],
+      [125, 4]
+    ])).toBe(true);
+    expect(diagonalBandLooksContinuous(frame, [
+      [143, 31],
+      [137, 30],
+      [131, 28],
+      [125, 27]
+    ])).toBe(true);
+  });
+
+  it('draws the right-branch ceiling and floor continuation in the nearest visible block when the branch is in the current block', { timeout: 40_000 }, () => {
+    const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
+    const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
+    const start = { x: 4, y: 1, dir: 'east' as const };
+
+    const pinnedAsm = withPinnedStart(asm, start);
+    const assembled = assemble(pinnedAsm, { filename: 'doom-like-current-block-right-open-branch-continuation.asm' });
+
+    expect(assembled.ok).toBe(true);
+    if (!assembled.ok) {
+      return;
+    }
+
+    const machine = new PCG815Machine({ strictCpuOpcodes: true });
+    machine.reset(true);
+    machine.loadProgram(assembled.binary, assembled.origin);
+    machine.setStackPointer(0x7ffc);
+    machine.setProgramCounter(assembled.entry);
+    machine.setExecutionDomain('user-program');
+
+    runUntilUserHalt(machine);
+    const frame = Uint8Array.from(machine.getFrameBuffer());
+
+    expect(diagonalBandLooksContinuous(frame, [
+      [128, 4],
+      [132, 4],
+      [136, 4],
+      [140, 4]
+    ])).toBe(true);
+    expect(diagonalBandLooksContinuous(frame, [
+      [128, 27],
+      [132, 27],
+      [136, 27],
+      [140, 27]
+    ])).toBe(true);
+    expect(diagonalBandLooksContinuous(frame, [
+      [143, 0],
+      [137, 1],
+      [131, 3],
+      [125, 4]
+    ])).toBe(false);
+    expect(diagonalBandLooksContinuous(frame, [
+      [143, 31],
+      [137, 30],
+      [131, 28],
+      [125, 27]
+    ])).toBe(false);
+  });
+
+  it('removes the nearest right opening horizontals when the branch is in the frontmost visible block', { timeout: 40_000 }, () => {
+    const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
+    const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
+    const start = { x: 7, y: 1, dir: 'east' as const };
+    const expected = renderExpectedRawVram(computeSceneFromMaze(extractDbBlock(asm, 'MAZE_DATA'), start));
+
+    const pinnedAsm = withPinnedStart(asm, start);
+    const assembled = assemble(pinnedAsm, { filename: 'doom-like-nearest-right-branch-open-frontmost.asm' });
+
+    expect(assembled.ok).toBe(true);
+    if (!assembled.ok) {
+      return;
+    }
+
+    const machine = new PCG815Machine({ strictCpuOpcodes: true });
+    machine.reset(true);
+    machine.loadProgram(assembled.binary, assembled.origin);
+    machine.setStackPointer(0x7ffc);
+    machine.setProgramCounter(assembled.entry);
+    machine.setExecutionDomain('user-program');
+
+    runUntilUserHalt(machine);
+    const actual = getMachineRawVram(machine);
+    expect(diffRawVram(actual, expected)).toEqual([]);
+    const frame = renderFrameFromRawVram(actual);
+    expect(diagonalBandLooksContinuous(frame, [
+      [109, 8],
+      [113, 8],
+      [117, 8],
+      [121, 8]
+    ])).toBe(false);
+    expect(diagonalBandLooksContinuous(frame, [
+      [109, 23],
+      [113, 23],
+      [117, 23],
+      [121, 23]
+    ])).toBe(false);
+  });
+
   it('matches the first three autoplay frames around the early right branch in full VRAM', { timeout: 40_000 }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
@@ -1299,6 +1511,8 @@ describe('doom-like asm sample', () => {
         scene: {
           frontHit: false,
           frontDepth: 4,
+          nearLeftOpen: 0,
+          nearRightOpen: 0,
           leftOpens: [0, 1, 0, 0],
           rightOpens: [0, 1, 0, 0],
           leftBranchLens: [0, 1, 0, 0],
