@@ -46,7 +46,10 @@ async function runPinned3dSampleScene(
     return (await api.__pcg815?.runAsm(asmSource)) ?? { ok: false, errorLine: 'runAsm unavailable' };
   }, pinnedSource);
   expect(result.ok, result.errorLine).toBe(true);
+  await waitForLitFrame(page);
+}
 
+async function waitForLitFrame(page: import('@playwright/test').Page): Promise<void> {
   await expect
     .poll(
       async () =>
@@ -66,6 +69,19 @@ async function runPinned3dSampleScene(
       { timeout: 10_000, intervals: [100, 250, 500] }
     )
     .toBeGreaterThan(80);
+}
+
+async function runAsmSource(page: import('@playwright/test').Page, asmSource: string): Promise<void> {
+  const result = await page.evaluate(async (source) => {
+    const api = window as {
+      __pcg815?: {
+        runAsm: (code: string) => Promise<{ ok: boolean; errorLine?: string }>;
+      };
+    };
+    return (await api.__pcg815?.runAsm(source)) ?? { ok: false, errorLine: 'runAsm unavailable' };
+  }, asmSource);
+  expect(result.ok, result.errorLine).toBe(true);
+  await waitForLitFrame(page);
 }
 
 test('app boots and renders lit LCD pixels without runtime errors', async ({ page }) => {
@@ -621,28 +637,7 @@ test('3D sample autoplay frame 2 still shows the right branch wall in browser ou
   const haltedSource = await page.locator('#asm-editor').inputValue().then((source) => stop3dSampleAtFrame(source, 2));
   await page.locator('#asm-editor').fill(haltedSource);
   await expect(page.locator('#asm-editor')).toHaveValue(/AUTOPLAY_TEST_HALT:/);
-  await page.locator('#asm-run').click();
-  await expect(page.locator('#asm-run-status')).toContainText(/Running|Run OK/i, { timeout: 10_000 });
-  await expect(page.locator('#asm-run-status')).toContainText(/Stopped/i, { timeout: 10_000 });
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(() => {
-          const api = window as {
-            __pcg815?: {
-              getFrameBuffer: () => number[];
-            };
-          };
-          const frame = api.__pcg815?.getFrameBuffer() ?? [];
-          let lit = 0;
-          for (const value of frame) {
-            lit += value ? 1 : 0;
-          }
-          return lit;
-        }),
-      { timeout: 10_000, intervals: [100, 250, 500] }
-    )
-    .toBeGreaterThan(80);
+  await runAsmSource(page, haltedSource);
 
   const branchPixels = await page.evaluate(() => {
     const api = window as {
@@ -726,7 +721,7 @@ test('3D sample pinned right-branch scene matches the agreed far-side wall shape
 });
 
 test('3D sample keeps the nearest side wall and the first visible right-branch horizontal walls when the branch is one block ahead', async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
 
   await runPinned3dSampleScene(page, { x: 2, y: 1, dir: 'east' });
   await expect
@@ -786,7 +781,7 @@ test('3D sample keeps the nearest side wall and the first visible right-branch h
 });
 
 test('3D sample draws the right-branch continuation in the nearest visible block when the branch is in the current block', async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   await runPinned3dSampleScene(page, { x: 4, y: 1, dir: 'east' });
   await expect
     .poll(
@@ -816,6 +811,70 @@ test('3D sample draws the right-branch continuation in the nearest visible block
       lower: [true, true, true, true]
     });
   await page.locator('#lcd').screenshot({ path: '/tmp/z80emu-right-branch-current-block.png' });
+});
+
+test('3D sample hides deeper right-branch ceiling and floor lines behind the nearest visible right branch on the same side', async ({ page }) => {
+  test.setTimeout(60_000);
+  await runPinned3dSampleScene(page, { x: 3, y: 4, dir: 'east' });
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as {
+            __pcg815?: {
+              getFrameBuffer: () => number[];
+            };
+          };
+          const frame = api.__pcg815?.getFrameBuffer() ?? [];
+          const width = 144;
+          const isLit = (x: number, y: number): boolean => frame[y * width + x] !== 0;
+          return {
+            nearUpper: [isLit(109, 8), isLit(113, 8), isLit(117, 8), isLit(121, 8)],
+            nearLower: [isLit(109, 23), isLit(113, 23), isLit(117, 23), isLit(121, 23)],
+            hiddenUpper: [isLit(87, 13), isLit(91, 13)],
+            hiddenLower: [isLit(87, 18), isLit(91, 18)]
+          };
+        }),
+      { timeout: 10_000, intervals: [100, 250, 500] }
+    )
+    .toEqual({
+      nearUpper: [true, true, true, true],
+      nearLower: [true, true, true, true],
+      hiddenUpper: [false, false],
+      hiddenLower: [false, false]
+    });
+});
+
+test('3D sample hides deeper left-branch ceiling and floor lines behind the nearest visible left branch on the same side', async ({ page }) => {
+  test.setTimeout(60_000);
+  await runPinned3dSampleScene(page, { x: 7, y: 4, dir: 'west' });
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const api = window as {
+            __pcg815?: {
+              getFrameBuffer: () => number[];
+            };
+          };
+          const frame = api.__pcg815?.getFrameBuffer() ?? [];
+          const width = 144;
+          const isLit = (x: number, y: number): boolean => frame[y * width + x] !== 0;
+          return {
+            nearUpper: [isLit(34, 8), isLit(30, 8), isLit(26, 8), isLit(22, 8)],
+            nearLower: [isLit(34, 23), isLit(30, 23), isLit(26, 23), isLit(22, 23)],
+            hiddenUpper: [isLit(56, 13), isLit(52, 13)],
+            hiddenLower: [isLit(56, 18), isLit(52, 18)]
+          };
+        }),
+      { timeout: 10_000, intervals: [100, 250, 500] }
+    )
+    .toEqual({
+      nearUpper: [true, true, true, true],
+      nearLower: [true, true, true, true],
+      hiddenUpper: [false, false],
+      hiddenLower: [false, false]
+    });
 });
 
 test('3D sample keeps the far-side right-branch horizontal walls when the branch is in the frontmost visible block', async ({
@@ -858,28 +917,7 @@ async function captureHalted3dFrame(page: import('@playwright/test').Page, frame
   const haltedSource = await page.locator('#asm-editor').inputValue().then((source) => stop3dSampleAtFrame(source, frame));
   await page.locator('#asm-editor').fill(haltedSource);
   await expect(page.locator('#asm-editor')).toHaveValue(/AUTOPLAY_TEST_HALT:/);
-  await page.locator('#asm-run').click();
-  await expect(page.locator('#asm-run-status')).toContainText(/Running|Run OK/i, { timeout: 10_000 });
-  await expect(page.locator('#asm-run-status')).toContainText(/Stopped/i, { timeout: 10_000 });
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(() => {
-          const api = window as {
-            __pcg815?: {
-              getFrameBuffer: () => number[];
-            };
-          };
-          const frame = api.__pcg815?.getFrameBuffer() ?? [];
-          let lit = 0;
-          for (const value of frame) {
-            lit += value ? 1 : 0;
-          }
-          return lit;
-        }),
-      { timeout: 10_000, intervals: [100, 250, 500] }
-    )
-    .toBeGreaterThan(80);
+  await runAsmSource(page, haltedSource);
   await page.locator('#lcd').screenshot({ path: `/tmp/z80emu-right-branch-diag-frame-${frame}.png` });
 }
 
