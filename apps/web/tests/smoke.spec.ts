@@ -818,7 +818,7 @@ test('3D sample draws the right-branch continuation in the nearest visible block
   await page.locator('#lcd').screenshot({ path: '/tmp/z80emu-right-branch-current-block.png' });
 });
 
-test('3D sample removes the nearest right opening horizontals when the branch is in the frontmost visible block', async ({
+test('3D sample keeps the far-side right-branch horizontal walls when the branch is in the frontmost visible block', async ({
   page
 }) => {
   test.setTimeout(60_000);
@@ -843,8 +843,8 @@ test('3D sample removes the nearest right opening horizontals when the branch is
       { timeout: 10_000, intervals: [100, 250, 500] }
     )
     .toEqual({
-      upper: [true, false, false, false],
-      lower: [true, false, false, false]
+      upper: [true, true, true, true],
+      lower: [true, true, true, true]
     });
   await page.locator('#lcd').screenshot({ path: '/tmp/z80emu-right-branch-nearest-debug.png' });
 });

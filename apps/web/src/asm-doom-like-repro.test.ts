@@ -615,9 +615,6 @@ function drawExpectedBranchCorridor(
     return;
   }
   if (branchLen >= depth) {
-    if (depth === 1 && scene.frontHit && scene.frontDepth === 2) {
-      return;
-    }
     if (depth >= MAX_DEPTH) {
       return;
     }
@@ -1366,7 +1363,7 @@ describe('doom-like asm sample', () => {
     ])).toBe(false);
   });
 
-  it('removes the nearest right opening horizontals when the branch is in the frontmost visible block', { timeout: 40_000 }, () => {
+  it('keeps the far-side right-branch ceiling and floor lines when the branch is in the frontmost visible block', { timeout: 40_000 }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
     const start = { x: 7, y: 1, dir: 'east' as const };
@@ -1396,13 +1393,13 @@ describe('doom-like asm sample', () => {
       [113, 8],
       [117, 8],
       [121, 8]
-    ])).toBe(false);
+    ])).toBe(true);
     expect(diagonalBandLooksContinuous(frame, [
       [109, 23],
       [113, 23],
       [117, 23],
       [121, 23]
-    ])).toBe(false);
+    ])).toBe(true);
   });
 
   it('matches the first three autoplay frames around the early right branch in full VRAM', { timeout: 40_000 }, () => {
