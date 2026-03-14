@@ -915,10 +915,10 @@ test('3D sample keeps deeper left divider seams visible when the current block o
     });
 });
 
-test('3D sample does not extend the front wall horizontals into nearer side-wall regions', async ({ page }) => {
+test('3D sample clips the dead-end wall horizontals inward when side branches are visible before it', async ({ page }) => {
   test.setTimeout(60_000);
 
-  await runPinned3dSampleScene(page, { x: 4, y: 1, dir: 'west' });
+  await runPinned3dSampleScene(page, { x: 3, y: 4, dir: 'west' });
   await expect
     .poll(
       async () =>
@@ -932,40 +932,19 @@ test('3D sample does not extend the front wall horizontals into nearer side-wall
           const width = 144;
           const isLit = (x: number, y: number): boolean => frame[y * width + x] !== 0;
           return {
-            leftTop: [isLit(49, 13), isLit(53, 13), isLit(57, 13)],
-            leftBottom: [isLit(49, 18), isLit(53, 18), isLit(57, 18)]
+            gapTop: [isLit(49, 11), isLit(94, 11)],
+            gapBottom: [isLit(49, 20), isLit(94, 20)],
+            litTop: isLit(70, 11),
+            litBottom: isLit(70, 20)
           };
         }),
       { timeout: 10_000, intervals: [100, 250, 500] }
     )
     .toEqual({
-      leftTop: [false, false, false],
-      leftBottom: [false, false, false]
-    });
-
-  await runPinned3dSampleScene(page, { x: 5, y: 1, dir: 'east' });
-  await expect
-    .poll(
-      async () =>
-        page.evaluate(() => {
-          const api = window as {
-            __pcg815?: {
-              getFrameBuffer: () => number[];
-            };
-          };
-          const frame = api.__pcg815?.getFrameBuffer() ?? [];
-          const width = 144;
-          const isLit = (x: number, y: number): boolean => frame[y * width + x] !== 0;
-          return {
-            rightTop: [isLit(86, 13), isLit(90, 13), isLit(94, 13)],
-            rightBottom: [isLit(86, 18), isLit(90, 18), isLit(94, 18)]
-          };
-        }),
-      { timeout: 10_000, intervals: [100, 250, 500] }
-    )
-    .toEqual({
-      rightTop: [false, false, false],
-      rightBottom: [false, false, false]
+      gapTop: [false, false],
+      gapBottom: [false, false],
+      litTop: true,
+      litBottom: true
     });
 });
 

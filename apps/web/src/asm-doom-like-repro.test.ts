@@ -354,6 +354,9 @@ const BACK_OF = {
   south: 'north',
   west: 'east'
 } as const;
+const TURN_STEP_COUNT = 10;
+const TURN_POSE_SWITCH_STEP = 8;
+const TURN_SHIFT_STEPS = [0, 2, 5, 8, 11, 14, 17, 20, 16, 10, 4] as const;
 
 function nextRandomState(state: number, seed: number): number {
   let value = state & 0xff;
@@ -452,16 +455,22 @@ function computeSceneFromMaze(
   };
 }
 
-function simulateAutoplaySteps(
+function simulateAutoplayFrameState(
   maze: number[][],
   start: { x: number; y: number; dir: 'north' | 'east' | 'south' | 'west' },
-  moveCount: number,
+  frameCount: number,
   seed: number
-): { x: number; y: number; dir: 'north' | 'east' | 'south' | 'west' } {
+): { x: number; y: number; dir: 'north' | 'east' | 'south' | 'west'; shiftX: number } {
   let x = start.x;
   let y = start.y;
   let dir = start.dir;
   let rngState = seed & 0xff;
+  let moveWait = 0;
+  let turnAnimStep = 0;
+  let turnAnimTag: 'left' | 'right' | null = null;
+  let turnFromX = x;
+  let turnFromY = y;
+  let turnFromDir = dir;
 
   const canMove = (nextDir: 'north' | 'east' | 'south' | 'west'): boolean => {
     const [dx, dy] = FWD[nextDir];
@@ -476,50 +485,100 @@ function simulateAutoplaySteps(
     }
   };
 
-  for (let i = 0; i < moveCount; i += 1) {
-    const leftDir = LEFT_OF[dir];
-    const rightDir = RIGHT_OF[dir];
-    const choices = [
-      { dir: leftDir, open: canMove(leftDir), tag: 'left' as const },
-      { dir, open: canMove(dir), tag: 'forward' as const },
-      { dir: rightDir, open: canMove(rightDir), tag: 'right' as const }
-    ].filter((choice) => choice.open);
-
-    if (choices.length === 1) {
-      dir = choices[0]!.dir;
-      moveForward();
-      continue;
+  for (let frame = 1; frame <= frameCount; frame += 1) {
+    if (turnAnimStep === 0) {
+      moveWait += 1;
     }
 
-    rngState = nextRandomState(rngState, seed);
-    let choiceIndex = rngState & 0x03;
-    if (choices.length === 2) {
-      choiceIndex &= 0x01;
-    } else {
-      while (choiceIndex === 3) {
-        rngState = nextRandomState(rngState, seed);
-        choiceIndex = rngState & 0x03;
-      }
-    }
+    if (turnAnimStep === 0 && moveWait >= MOVE_INTERVAL) {
+      moveWait = 0;
+      const leftDir = LEFT_OF[dir];
+      const rightDir = RIGHT_OF[dir];
+      const choices = [
+        { dir: leftDir, open: canMove(leftDir), tag: 'left' as const },
+        { dir, open: canMove(dir), tag: 'forward' as const },
+        { dir: rightDir, open: canMove(rightDir), tag: 'right' as const }
+      ].filter((choice) => choice.open);
 
-    if (choices.length === 2) {
-      const tags = choices.map((choice) => choice.tag).sort().join(',');
-      if (tags === 'forward,left') {
-        dir = choiceIndex === 0 ? dir : leftDir;
-      } else if (tags === 'forward,right') {
-        dir = choiceIndex === 0 ? dir : rightDir;
+      let selectedTag: 'left' | 'forward' | 'right' = 'forward';
+      let selectedDir = dir;
+      if (choices.length === 1) {
+        selectedTag = choices[0]!.tag;
+        selectedDir = choices[0]!.dir;
       } else {
-        dir = choiceIndex === 0 ? leftDir : rightDir;
+        rngState = nextRandomState(rngState, seed);
+        let choiceIndex = rngState & 0x03;
+        if (choices.length === 2) {
+          choiceIndex &= 0x01;
+        } else {
+          while (choiceIndex === 3) {
+            rngState = nextRandomState(rngState, seed);
+            choiceIndex = rngState & 0x03;
+          }
+        }
+
+        if (choices.length === 2) {
+          const tags = choices.map((choice) => choice.tag).sort().join(',');
+          if (tags === 'forward,left') {
+            selectedTag = choiceIndex === 0 ? 'forward' : 'left';
+            selectedDir = choiceIndex === 0 ? dir : leftDir;
+          } else if (tags === 'forward,right') {
+            selectedTag = choiceIndex === 0 ? 'forward' : 'right';
+            selectedDir = choiceIndex === 0 ? dir : rightDir;
+          } else {
+            selectedTag = choiceIndex === 0 ? 'left' : 'right';
+            selectedDir = choiceIndex === 0 ? leftDir : rightDir;
+          }
+        } else {
+          selectedTag = choiceIndex === 1 ? 'left' : choiceIndex === 2 ? 'right' : 'forward';
+          selectedDir = choiceIndex === 1 ? leftDir : choiceIndex === 2 ? rightDir : dir;
+        }
       }
-      moveForward();
-      continue;
+
+      if (selectedTag === 'left' || selectedTag === 'right') {
+        turnFromX = x;
+        turnFromY = y;
+        turnFromDir = dir;
+        turnAnimStep = 1;
+        turnAnimTag = selectedTag;
+        dir = selectedDir;
+        moveForward();
+      } else {
+        dir = selectedDir;
+        moveForward();
+      }
     }
 
-    dir = choiceIndex === 1 ? leftDir : choiceIndex === 2 ? rightDir : dir;
-    moveForward();
+    const renderOldPose = turnAnimStep > 0 && turnAnimStep < TURN_POSE_SWITCH_STEP;
+    const shiftMag = TURN_SHIFT_STEPS[turnAnimStep] ?? 0;
+    const shiftX =
+      turnAnimTag === 'left'
+        ? renderOldPose
+          ? shiftMag
+          : -shiftMag
+        : turnAnimTag === 'right'
+          ? renderOldPose
+            ? -shiftMag
+            : shiftMag
+          : 0;
+    const renderX = renderOldPose ? turnFromX : x;
+    const renderY = renderOldPose ? turnFromY : y;
+    const renderDir = renderOldPose ? turnFromDir : dir;
+    if (frame === frameCount) {
+      return { x: renderX, y: renderY, dir: renderDir, shiftX };
+    }
+
+    if (turnAnimStep !== 0) {
+      if (turnAnimStep === TURN_STEP_COUNT) {
+        turnAnimStep = 0;
+        turnAnimTag = null;
+      } else {
+        turnAnimStep += 1;
+      }
+    }
   }
 
-  return { x, y, dir };
+  return { x, y, dir, shiftX: 0 };
 }
 
 function mapScreenPixelToRaw(x: number, y: number): { rawX: number; rawPage: number; bit: number } | null {
@@ -724,15 +783,38 @@ function drawExpectedNearBranchCorridor(rawVram: Uint8Array, side: 'left' | 'rig
   drawExpectedLine(rawVram, startX, inner.bottom, endX, inner.bottom);
 }
 
+function hasExpectedVisibleBranchBeforeFront(scene: SceneSpec, side: 'left' | 'right'): boolean {
+  if (side === 'left') {
+    if (scene.nearLeftOpen) {
+      return true;
+    }
+    return scene.leftOpens.slice(0, Math.max(0, scene.frontDepth - 1)).some((flag) => flag !== 0);
+  }
+  if (scene.nearRightOpen) {
+    return true;
+  }
+  return scene.rightOpens.slice(0, Math.max(0, scene.frontDepth - 1)).some((flag) => flag !== 0);
+}
+
 function drawExpectedFrontWall(rawVram: Uint8Array, scene: SceneSpec): void {
   if (!scene.frontHit) {
     return;
   }
   const rect = RECTS[scene.frontDepth]!;
-  drawExpectedHoriz(rawVram, rect.left, rect.right, rect.top);
-  drawExpectedHoriz(rawVram, rect.left, rect.right, rect.bottom);
-  drawExpectedVertical(rawVram, rect.left, rect.top, rect.bottom);
-  drawExpectedVertical(rawVram, rect.right, rect.top, rect.bottom);
+  const leftInset = hasExpectedVisibleBranchBeforeFront(scene, 'left') ? 2 : 0;
+  const rightInset = hasExpectedVisibleBranchBeforeFront(scene, 'right') ? 2 : 0;
+  const clippedLeft = rect.left + leftInset;
+  const clippedRight = rect.right - rightInset;
+  if (clippedLeft <= clippedRight) {
+    drawExpectedHoriz(rawVram, clippedLeft, clippedRight, rect.top);
+    drawExpectedHoriz(rawVram, clippedLeft, clippedRight, rect.bottom);
+  }
+  if (leftInset === 0) {
+    drawExpectedVertical(rawVram, rect.left, rect.top, rect.bottom);
+  }
+  if (rightInset === 0) {
+    drawExpectedVertical(rawVram, rect.right, rect.top, rect.bottom);
+  }
 }
 
 function renderExpectedRawVram(scene: SceneSpec): Uint8Array {
@@ -767,6 +849,27 @@ function renderExpectedRawVram(scene: SceneSpec): Uint8Array {
 
 function renderExpectedScene(scene: SceneSpec): Uint8Array {
   return renderFrameFromRawVram(renderExpectedRawVram(scene));
+}
+
+function shiftFrame(frame: Uint8Array, shiftX: number): Uint8Array {
+  if (shiftX === 0) {
+    return frame;
+  }
+  const shifted = new Uint8Array(LCD_WIDTH * LCD_HEIGHT);
+  for (let y = 0; y < LCD_HEIGHT; y += 1) {
+    for (let x = 0; x < LCD_WIDTH; x += 1) {
+      const value = frame[y * LCD_WIDTH + x] ?? 0;
+      if (value === 0) {
+        continue;
+      }
+      const shiftedX = x + shiftX;
+      if (shiftedX < 0 || shiftedX >= LCD_WIDTH) {
+        continue;
+      }
+      shifted[y * LCD_WIDTH + shiftedX] = value;
+    }
+  }
+  return shifted;
 }
 
 function diffFrames(actual: Uint8Array, expected: Uint8Array): string[] {
@@ -952,21 +1055,16 @@ describe('doom-like asm sample', () => {
     }
   });
 
-  it('does not extend the front-wall ceiling or floor lines into nearer side-wall regions', { timeout: 40_000 }, () => {
+  it('clips the front-wall ceiling and floor lines inward when side branches are visible before the dead end', { timeout: 40_000 }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
     const cases = [
       {
-        start: { x: 4, y: 1, dir: 'west' as const },
-        topY: RECTS[4]!.top,
-        bottomY: RECTS[4]!.bottom,
-        hiddenXs: [49, 53, 57]
-      },
-      {
-        start: { x: 5, y: 1, dir: 'east' as const },
-        topY: RECTS[4]!.top,
-        bottomY: RECTS[4]!.bottom,
-        hiddenXs: [86, 90, 94]
+        start: { x: 3, y: 4, dir: 'west' as const },
+        topY: RECTS[3]!.top,
+        bottomY: RECTS[3]!.bottom,
+        gapXs: [49, 94],
+        visibleXs: [70]
       }
     ];
 
@@ -988,14 +1086,22 @@ describe('doom-like asm sample', () => {
       runUntilUserHalt(machine);
       const frame = Uint8Array.from(machine.getFrameBuffer());
 
-      for (const x of scenario.hiddenXs) {
-        expect(isLit(frame, x, scenario.topY), `${scenario.start.x},${scenario.start.y},${scenario.start.dir} top x=${x}`).toBe(
+      for (const x of scenario.gapXs) {
+        expect(isLit(frame, x, scenario.topY), `${scenario.start.x},${scenario.start.y},${scenario.start.dir} top gap x=${x}`).toBe(
           false
         );
-        expect(
-          isLit(frame, x, scenario.bottomY),
-          `${scenario.start.x},${scenario.start.y},${scenario.start.dir} bottom x=${x}`
-        ).toBe(false);
+        expect(isLit(frame, x, scenario.bottomY), `${scenario.start.x},${scenario.start.y},${scenario.start.dir} bottom gap x=${x}`).toBe(
+          false
+        );
+      }
+
+      for (const x of scenario.visibleXs) {
+        expect(isLit(frame, x, scenario.topY), `${scenario.start.x},${scenario.start.y},${scenario.start.dir} top lit x=${x}`).toBe(
+          true
+        );
+        expect(isLit(frame, x, scenario.bottomY), `${scenario.start.x},${scenario.start.y},${scenario.start.dir} bottom lit x=${x}`).toBe(
+          true
+        );
       }
     }
   });
@@ -1757,18 +1863,19 @@ describe('doom-like asm sample', () => {
     });
   });
 
-  it('matches the first three autoplay frames around the early right branch in full VRAM', { timeout: 40_000 }, () => {
+  it('matches the first three autoplay frames around the early right branch in screen space', { timeout: 40_000 }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
     const maze = extractDbBlock(asm, 'MAZE_DATA');
     const start = extractStartState(asm);
     const rngSeed = extractEquValue(asm, 'RNG_SEED');
 
-    const expectedScenes = [0, 0, 1].map((moveCount) =>
-      computeSceneFromMaze(maze, simulateAutoplaySteps(maze, start, moveCount, rngSeed))
-    );
+    const expectedFrames = [1, 2, 3].map((frameCount) => {
+      const state = simulateAutoplayFrameState(maze, start, frameCount, rngSeed);
+      return shiftFrame(renderExpectedScene(computeSceneFromMaze(maze, state)), state.shiftX);
+    });
 
-    expectedScenes.forEach((scene, index) => {
+    expectedFrames.forEach((expectedFrame, index) => {
       const autoplayAsm = withAutoplayFrameStop(asm, index + 1);
       const assembled = assemble(autoplayAsm, { filename: `doom-like-autoplay-frame-${index + 1}.asm` });
       expect(assembled.ok).toBe(true);
@@ -1784,19 +1891,19 @@ describe('doom-like asm sample', () => {
       machine.setExecutionDomain('user-program');
 
       runUntilUserHalt(machine);
-      const actual = getMachineRawVram(machine);
-      const expected = renderExpectedRawVram(scene);
-      expect(diffRawVram(actual, expected), `autoplay-frame-${index + 1}`).toEqual([]);
+      const actualFrame = renderFrameFromRawVram(getMachineRawVram(machine));
+      expect(diffFrames(actualFrame, expectedFrame), `autoplay-frame-${index + 1}`).toEqual([]);
     });
   });
 
-  it('matches the first autoplay branch-choice frame in full VRAM', { timeout: 40_000 }, () => {
+  it('matches the first autoplay branch-choice frame in screen space', { timeout: 40_000 }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
     const maze = extractDbBlock(asm, 'MAZE_DATA');
     const start = extractStartState(asm);
     const rngSeed = extractEquValue(asm, 'RNG_SEED');
-    const expected = computeSceneFromMaze(maze, simulateAutoplaySteps(maze, start, 3, rngSeed));
+    const state = simulateAutoplayFrameState(maze, start, 9, rngSeed);
+    const expected = shiftFrame(renderExpectedScene(computeSceneFromMaze(maze, state)), state.shiftX);
 
     const autoplayAsm = withAutoplayFrameStop(asm, 9);
     const assembled = assemble(autoplayAsm, { filename: 'doom-like-autoplay-first-branch-choice.asm' });
@@ -1813,11 +1920,11 @@ describe('doom-like asm sample', () => {
     machine.setExecutionDomain('user-program');
 
     runUntilUserHalt(machine);
-    const actual = getMachineRawVram(machine);
-    expect(diffRawVram(actual, renderExpectedRawVram(expected))).toEqual([]);
+    const actualFrame = renderFrameFromRawVram(getMachineRawVram(machine));
+    expect(diffFrames(actualFrame, expected)).toEqual([]);
   });
 
-  it('matches a later autoplay branch-choice frame where the random route diverges from wall-following', {
+  it('matches a later autoplay branch-choice frame where the random route diverges from wall-following in screen space', {
     timeout: 40_000
   }, () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
@@ -1825,7 +1932,8 @@ describe('doom-like asm sample', () => {
     const maze = extractDbBlock(asm, 'MAZE_DATA');
     const start = extractStartState(asm);
     const rngSeed = extractEquValue(asm, 'RNG_SEED');
-    const expected = computeSceneFromMaze(maze, simulateAutoplaySteps(maze, start, 10, rngSeed));
+    const state = simulateAutoplayFrameState(maze, start, 30, rngSeed);
+    const expected = shiftFrame(renderExpectedScene(computeSceneFromMaze(maze, state)), state.shiftX);
 
     const autoplayAsm = withAutoplayFrameStop(asm, 30);
     const assembled = assemble(autoplayAsm, { filename: 'doom-like-autoplay-late-branch-choice.asm' });
@@ -1842,8 +1950,8 @@ describe('doom-like asm sample', () => {
     machine.setExecutionDomain('user-program');
 
     runUntilUserHalt(machine, { maxSteps: 600_000 });
-    const actual = getMachineRawVram(machine);
-    expect(diffRawVram(actual, renderExpectedRawVram(expected))).toEqual([]);
+    const actualFrame = renderFrameFromRawVram(getMachineRawVram(machine));
+    expect(diffFrames(actualFrame, expected)).toEqual([]);
   });
 
   it('builds the maze-derived right-branch scene values in RAM', { timeout: 40_000 }, () => {
