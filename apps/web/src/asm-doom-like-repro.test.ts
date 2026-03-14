@@ -904,15 +904,15 @@ function diffRawVram(actual: Uint8Array, expected: Uint8Array): string[] {
 }
 
 describe('doom-like asm sample', () => {
-  it('uses a 10x10 maze without cul-de-sacs and starts facing a traversable cell', () => {
+  it('uses a 20x20 maze without cul-de-sacs and starts facing a traversable cell', () => {
     const mainTs = readFileSync(path.resolve(process.cwd(), 'src/main.ts'), 'utf8');
     const asm = extractAsmSample(mainTs, 'ASM_SAMPLE_3D');
     const maze = extractDbBlock(asm, 'MAZE_DATA');
     const start = extractStartState(asm);
 
-    expect(maze).toHaveLength(10);
+    expect(maze).toHaveLength(20);
     for (const row of maze) {
-      expect(row).toHaveLength(10);
+      expect(row).toHaveLength(20);
     }
 
     const deltas = [
