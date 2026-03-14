@@ -1,6 +1,10 @@
 import { defineConfig } from 'vitest/config';
 import path from 'node:path';
 
+const heavyTestExcludes = process.env.Z80EMU_SKIP_HEAVY_WEB_TESTS
+  ? ['src/asm-doom-like-repro.test.ts']
+  : [];
+
 export default defineConfig({
   resolve: {
     extensions: ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.json'],
@@ -14,6 +18,8 @@ export default defineConfig({
   },
   test: {
     include: ['src/**/*.test.ts'],
+    exclude: heavyTestExcludes,
+    fileParallelism: false,
     passWithNoTests: true
   }
 });
