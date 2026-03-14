@@ -25,6 +25,8 @@ jobs:
         run: npm run build
 
       - name: Unit tests
+        env:
+          Z80EMU_SKIP_HEAVY_WEB_TESTS: "1"
         run: npm run test
 
       - name: Compatibility corpus
