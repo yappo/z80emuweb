@@ -374,13 +374,13 @@ export class Z80Cpu implements Z80Core {
 
   private enqueueReadIo(port: () => number, target: (value: number) => void): void {
     const cycle = this.getCycleTiming('ioRead');
-    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, rd: true }));
+    this.enqueueStep(() => this.pins({ addr: clamp16(port()), iorq: true, rd: true }));
     this.enqueueStep(
-      () => this.pins({ addr: clamp8(port()), iorq: true, rd: true }),
+      () => this.pins({ addr: clamp16(port()), iorq: true, rd: true }),
       undefined,
       cycle.waitSamplePhases.includes(2)
     );
-    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, rd: true }), (input) => {
+    this.enqueueStep(() => this.pins({ addr: clamp16(port()), iorq: true, rd: true }), (input) => {
       target(clamp8(input.data));
     });
     this.enqueueIdle(cycle.idleTailTStates);
@@ -388,13 +388,13 @@ export class Z80Cpu implements Z80Core {
 
   private enqueueWriteIo(port: () => number, value: () => number): void {
     const cycle = this.getCycleTiming('ioWrite');
-    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, dataOut: clamp8(value()) }));
+    this.enqueueStep(() => this.pins({ addr: clamp16(port()), iorq: true, dataOut: clamp8(value()) }));
     this.enqueueStep(
-      () => this.pins({ addr: clamp8(port()), iorq: true, wr: true, dataOut: clamp8(value()) }),
+      () => this.pins({ addr: clamp16(port()), iorq: true, wr: true, dataOut: clamp8(value()) }),
       undefined,
       cycle.waitSamplePhases.includes(2)
     );
-    this.enqueueStep(() => this.pins({ addr: clamp8(port()), iorq: true, wr: true, dataOut: clamp8(value()) }));
+    this.enqueueStep(() => this.pins({ addr: clamp16(port()), iorq: true, wr: true, dataOut: clamp8(value()) }));
     this.enqueueIdle(cycle.idleTailTStates);
   }
 
@@ -1245,13 +1245,15 @@ export class Z80Cpu implements Z80Core {
       if (srcCode === 6) {
         return;
       }
-      this.enqueueWriteMem(ptrAddr, () => this.getRegByCode(srcCode, indexMode));
+      // With an indexed memory operand, H/L mean ordinary H/L, not IXH/IXL
+      // or IYH/IYL (Zilog UM008011-0816, LD (IX+d),r / LD (IY+d),r).
+      this.enqueueWriteMem(ptrAddr, () => this.getRegByCode(srcCode, 'HL'));
       return;
     }
 
     if (srcCode === 6) {
       this.enqueueReadMem(ptrAddr, (value) => {
-        this.setRegByCode(dstCode, value, indexMode);
+        this.setRegByCode(dstCode, value, 'HL');
       });
       return;
     }
@@ -1647,7 +1649,7 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadPc((v) => {
       port = v;
     });
-    this.enqueueReadIo(() => port, (v) => {
+    this.enqueueReadIo(() => (this.regs.a << 8) | port, (v) => {
       value = v;
     });
     this.enqueueInternal(() => {
@@ -1661,7 +1663,7 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadPc((v) => {
       port = v;
     });
-    this.enqueueWriteIo(() => port, () => this.regs.a);
+    this.enqueueWriteIo(() => (this.regs.a << 8) | port, () => this.regs.a);
   }
 
   private decodeIndexedCB(indexMode: 'IX' | 'IY'): void {
@@ -1968,7 +1970,7 @@ export class Z80Cpu implements Z80Core {
   private decodeEdInFromC(opcode: number): void {
     const regCode = (opcode >>> 3) & 0x07;
     let value = 0;
-    this.enqueueReadIo(() => this.regs.c, (v) => {
+    this.enqueueReadIo(() => this.getPair('BC'), (v) => {
       value = v;
     });
     this.enqueueInternal(() => {
@@ -1981,7 +1983,7 @@ export class Z80Cpu implements Z80Core {
 
   private decodeEdOutToC(opcode: number): void {
     const regCode = (opcode >>> 3) & 0x07;
-    this.enqueueWriteIo(() => this.regs.c, () => {
+    this.enqueueWriteIo(() => this.getPair('BC'), () => {
       if (regCode === 6) {
         return 0;
       }
@@ -2113,7 +2115,7 @@ export class Z80Cpu implements Z80Core {
 
   private decodeBlockIn(repeat: boolean, decrement: boolean): void {
     let value = 0;
-    this.enqueueReadIo(() => this.regs.c, (v) => {
+    this.enqueueReadIo(() => this.getPair('BC'), (v) => {
       value = v;
     });
     this.enqueueWriteMem(() => this.getPair('HL'), () => value);
@@ -2135,12 +2137,13 @@ export class Z80Cpu implements Z80Core {
     let value = 0;
     this.enqueueReadMem(() => this.getPair('HL'), (v) => {
       value = v;
+      // Unlike block input, block output decrements B before the I/O cycle.
+      this.regs.b = clamp8(this.regs.b - 1);
     });
-    this.enqueueWriteIo(() => this.regs.c, () => value);
+    this.enqueueWriteIo(() => this.getPair('BC'), () => value);
     this.enqueueInternal(() => {
       const step = decrement ? -1 : 1;
       this.setPair('HL', clamp16(this.getPair('HL') + step));
-      this.regs.b = clamp8(this.regs.b - 1);
       this.regs.f = (this.regs.b === 0 ? FLAG_Z : 0) | FLAG_N;
       if (repeat && this.regs.b !== 0) {
         this.enqueueIdle(5);

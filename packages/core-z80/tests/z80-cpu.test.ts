@@ -12,6 +12,8 @@ class PinHarness {
 
   readonly inValues = new Map<number, number>();
 
+  readonly ioPins: Z80PinsOut[] = [];
+
   readonly cpu: Z80Cpu;
 
   private lastPinsOut: Z80PinsOut = { ...Z80_IDLE_PINS_OUT };
@@ -46,6 +48,9 @@ class PinHarness {
         busrq: false,
         reset: false
       });
+      if (this.lastPinsOut.iorq && (this.lastPinsOut.rd || this.lastPinsOut.wr)) {
+        this.ioPins.push({ ...this.lastPinsOut });
+      }
     }
     this.applyWrite(this.lastPinsOut);
   }
@@ -88,6 +93,103 @@ function expectNoUnsupportedForProgram(program: number[]): void {
 }
 
 describe('Z80Cpu', () => {
+  for (const input of [false, true]) {
+    it(`drives A on the upper I/O address bits for immediate ${input ? 'IN' : 'OUT'}`, () => {
+      const h = new PinHarness();
+      h.memory.set([0x3e, 0x41, input ? 0xdb : 0xd3, 0xf0, 0x76]);
+      h.inValues.set(0xf0, 0x5a);
+      run(h, 100);
+      expect(h.ioPins.length).toBeGreaterThan(0);
+      expect(new Set(h.ioPins.map(p => p.addr))).toEqual(new Set([0x41f0]));
+      expect(h.cpu.getState().registers.a).toBe(input ? 0x5a : 0x41);
+      if (!input) expect(h.outLog).toEqual([{ port: 0xf0, value: 0x41 }]);
+    });
+    it(`drives BC on the I/O bus for register ${input ? 'IN B,(C)' : 'OUT (C),B'}`, () => {
+      const h = new PinHarness();
+      h.memory.set([0x01, 0xf0, 0x41, 0xed, input ? 0x40 : 0x41, 0x76]);
+      h.inValues.set(0xf0, 0x5a);
+      run(h, 100);
+      expect(h.ioPins.length).toBeGreaterThan(0);
+      expect(new Set(h.ioPins.map(p => p.addr))).toEqual(new Set([0x41f0]));
+      expect(h.cpu.getState().registers.b).toBe(input ? 0x5a : 0x41);
+    });
+    for (const decrement of [false, true]) {
+      for (const repeat of [false, true]) {
+        it(`drives the correct B on block I/O (input=${input}, decrement=${decrement}, repeat=${repeat})`, () => {
+          const h = new PinHarness();
+          const opcode = (input ? 0xa2 : 0xa3) | (decrement ? 8 : 0) | (repeat ? 16 : 0);
+          h.memory.set([0x01, 0xf0, 2, 0x21, 0x00, 0x80, 0xed, opcode, 0x76]);
+          h.memory[0x8000] = 0x5a;
+          h.memory[decrement ? 0x7fff : 0x8001] = 0x6b;
+          h.inValues.set(0xf0, 0x7c);
+          run(h, 150);
+          const addresses = h.ioPins.map(p => p.addr).filter((a, i, arr) => i === 0 || a !== arr[i - 1]);
+          expect(addresses).toEqual(input ? (repeat ? [0x2f0, 0x1f0] : [0x2f0])
+            : (repeat ? [0x1f0, 0xf0] : [0x1f0]));
+          const r = h.cpu.getState().registers;
+          expect(r.b).toBe(repeat ? 0 : 1);
+          expect((r.h << 8) | r.l).toBe(0x8000 + (decrement ? -1 : 1) * (repeat ? 2 : 1));
+          if (input) expect(h.memory[0x8000]).toBe(0x7c);
+          else expect(h.outLog.map(x => x.value)).toEqual(repeat ? [0x5a, 0x6b] : [0x5a]);
+        });
+      }
+    }
+  }
+
+  for (const [prefix, pair] of [[0xdd, 'ix'], [0xfd, 'iy']] as const) {
+    for (const [reg, code, original] of [['h', 4, 0xab], ['l', 5, 0xcd]] as const) {
+      for (const displacement of [3, -3]) {
+        it(`loads ordinary ${reg} from (${pair}${displacement}) without changing the index`, () => {
+          const harness = new PinHarness();
+          harness.memory.set([
+            0x21, 0xcd, 0xab, prefix, 0x21, 0x00, 0x78,
+            prefix, 0x46 | (code << 3), displacement & 0xff, 0x76
+          ]);
+          harness.memory[0x7800 + displacement] = 0x5e;
+          const initial = harness.cpu.getState();
+          initial.registers.f = 0xa5;
+          harness.cpu.loadState(initial);
+          run(harness, 100);
+          const r = harness.cpu.getState().registers;
+          expect(r[reg]).toBe(0x5e);
+          expect(r[reg === 'h' ? 'l' : 'h']).toBe(reg === 'h' ? 0xcd : 0xab);
+          expect(r[pair]).toBe(0x7800);
+          expect(r.f).toBe(0xa5);
+        });
+
+        it(`stores ordinary ${reg} to (${pair}${displacement})`, () => {
+          const harness = new PinHarness();
+          harness.memory.set([
+            0x21, 0xcd, 0xab, prefix, 0x21, 0x00, 0x78,
+            prefix, 0x70 | code, displacement & 0xff, 0x76
+          ]);
+          const initial = harness.cpu.getState();
+          initial.registers.f = 0xa5;
+          harness.cpu.loadState(initial);
+          run(harness, 100);
+          const r = harness.cpu.getState().registers;
+          expect(harness.memory[0x7800 + displacement]).toBe(original);
+          expect(r.h).toBe(0xab);
+          expect(r.l).toBe(0xcd);
+          expect(r[pair]).toBe(0x7800);
+          expect(r.f).toBe(0xa5);
+        });
+      }
+    }
+    it(`retains ${pair} half-register semantics without a memory operand`, () => {
+      const harness = new PinHarness();
+      harness.memory.set([
+        0x21, 0xcd, 0xab, prefix, 0x21, 0x34, 0x12,
+        0x3e, 0x56, prefix, 0x67, 0x76
+      ]);
+      run(harness, 100);
+      const r = harness.cpu.getState().registers;
+      expect(r[pair]).toBe(0x5634);
+      expect(r.h).toBe(0xab);
+      expect(r.l).toBe(0xcd);
+    });
+  }
+
   it('executes OUT and HALT sequence', () => {
     const harness = new PinHarness();
     harness.memory.set([
@@ -140,7 +242,7 @@ describe('Z80Cpu', () => {
     const harness = new PinHarness();
     harness.memory.set([
       0xdd, 0x21, 0x00, 0x40, // LD IX,4000h
-      0xdd, 0x66, 0x01, // LD H,(IX+1) -> IXH
+      0xdd, 0x66, 0x01, // LD H,(IX+1): ordinary H, not IXH (Zilog UM008011-0816)
       0xdd, 0x68, // LD L,B -> IXL <- B
       0xfd, 0x21, 0x00, 0x50, // LD IY,5000h
       0xfd, 0x70, 0xfe, // LD (IY-2),B
@@ -160,7 +262,8 @@ describe('Z80Cpu', () => {
     run(harness, 800);
 
     const state = cpu.getState();
-    expect((state.registers.ix >>> 8) & 0xff).toBe(0xab);
+    expect(state.registers.h).toBe(0xab);
+    expect((state.registers.ix >>> 8) & 0xff).toBe(0x40);
     expect(state.registers.ix & 0xff).toBe(0x34);
     expect(harness.memory[0x4ffe]).toBe(0x34);
     expect(state.registers.c).toBe(0x34);
