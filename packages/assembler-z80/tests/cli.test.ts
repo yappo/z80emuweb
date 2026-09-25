@@ -1,12 +1,30 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { runCli } from '../src/cli';
 
 describe('assembler-z80 cli', () => {
+  it.each(['ORG', 'DB 256', 'DS 1,256', 'LD IXH,(IX+1)', 'ORG 0x7fff\nDW 1'])(
+    'reports source errors without throwing or writing output: %s', source => {
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), 'z80asm-'));
+      const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const input = path.join(tempDir, 'bad.asm');
+        const outputs = ['bin', 'lst', 'sym', 'dump'].map(ext => path.join(tempDir, `out.${ext}`));
+        writeFileSync(input, source, 'utf8');
+        expect(runCli(['-i', input, '-o', outputs[0]!, '--lst', outputs[1]!, '--sym', outputs[2]!, '--dump', outputs[3]!])).toBe(1);
+        expect(stderr.mock.calls.flat().join('\n')).toMatch(/bad\.asm:\d+:\d+:/);
+        expect(outputs.some(file => existsSync(file))).toBe(false);
+      } finally {
+        stderr.mockRestore();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+  );
+
   it('writes BIN/LST/SYM and returns 0 on success', () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), 'z80asm-'));
     try {
