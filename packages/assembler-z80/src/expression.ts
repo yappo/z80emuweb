@@ -314,7 +314,11 @@ export function evaluateExpression(text: string, ctx: ExpressionContext): { valu
   try {
     const tokens = tokenize(text);
     const parser = new Parser(tokens, ctx);
-    return { value: parser.parse() };
+    const value = parser.parse();
+    if (!Number.isSafeInteger(value)) {
+      throw new ExpressionError('Expression result is not a safe integer', 1);
+    }
+    return { value };
   } catch (error) {
     if (error instanceof ExpressionError) {
       return { error: error.message, column: error.column };

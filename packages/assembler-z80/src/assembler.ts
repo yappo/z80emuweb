@@ -17,6 +17,7 @@ interface SourceLine {
 interface ParsedLine {
   source: SourceLine;
   raw: string;
+  column: number;
   label?: string;
   mnemonic?: string;
   operands: string[];
@@ -26,16 +27,15 @@ interface SymbolDef {
   name: string;
   key: string;
   kind: 'label' | 'equ';
-  value?: number;
   expr?: string;
-  file: string;
-  line: number;
-  column: number;
+  address: number;
+  line: ParsedLine;
 }
 
-interface ParseState {
-  firstOrigin?: number;
-  entryExpr?: { expr: string; file: string; line: number; column: number };
+interface LayoutLine {
+  line: ParsedLine;
+  address: number;
+  size: number;
 }
 
 interface EncodedReg8 {
@@ -44,7 +44,11 @@ interface EncodedReg8 {
   dispExpr?: string;
 }
 
-class AssembleError extends Error {}
+class AssembleError extends Error {
+  constructor(message: string, readonly column?: number) {
+    super(message);
+  }
+}
 
 const RAM_START = 0x0000;
 const RAM_END = 0x7fff;
@@ -160,20 +164,34 @@ function addDiagnostic(
   });
 }
 
+// Apostrophes in identifiers (including AF') are not string delimiters.
+// Both comment removal and operand splitting use the same quote/escape rules.
+function* unquotedPositions(text: string): Generator<number> {
+  let quote: string | undefined;
+  let quoteStart = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote !== undefined) {
+      if (ch === '\\') {
+        i += 1;
+      } else if (ch === quote) {
+        quote = undefined;
+      }
+    } else if (ch === '"' || (ch === "'" && !/[A-Za-z0-9_.$?']/.test(text[i - 1] ?? ''))) {
+      quote = ch;
+      quoteStart = i;
+    } else {
+      yield i;
+    }
+  }
+  if (quote !== undefined) {
+    throw new AssembleError('Unterminated string literal', quoteStart + 1);
+  }
+}
+
 function stripComment(line: string): string {
-  let inSingle = false;
-  let inDouble = false;
-  for (let i = 0; i < line.length; i += 1) {
-    const ch = line[i] ?? '';
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      continue;
-    }
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      continue;
-    }
-    if (ch === ';' && !inSingle && !inDouble) {
+  for (const i of unquotedPositions(line)) {
+    if (line[i] === ';') {
       return line.slice(0, i);
     }
   }
@@ -182,48 +200,33 @@ function stripComment(line: string): string {
 
 function splitOperands(raw: string): string[] {
   const out: string[] = [];
-  let current = '';
+  let start = 0;
   let depth = 0;
-  let inSingle = false;
-  let inDouble = false;
-
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i] ?? '';
-    if (ch === '"' && !inSingle) {
-      inDouble = !inDouble;
-      current += ch;
-      continue;
-    }
-    if (ch === "'" && !inDouble) {
-      inSingle = !inSingle;
-      current += ch;
-      continue;
-    }
-    if (!inSingle && !inDouble) {
-      if (ch === '(') {
-        depth += 1;
-      } else if (ch === ')') {
-        depth = Math.max(0, depth - 1);
-      } else if (ch === ',' && depth === 0) {
-        out.push(current.trim());
-        current = '';
-        continue;
+  for (const i of unquotedPositions(raw)) {
+    if (raw[i] === '(') {
+      depth += 1;
+    } else if (raw[i] === ')') {
+      depth -= 1;
+      if (depth < 0) {
+        throw new AssembleError('Unmatched closing parenthesis');
       }
+    } else if (raw[i] === ',' && depth === 0) {
+      out.push(raw.slice(start, i).trim());
+      start = i + 1;
     }
-    current += ch;
   }
-
-  if (current.trim().length > 0) {
-    out.push(current.trim());
+  if (depth !== 0) {
+    throw new AssembleError('Unclosed parenthesis');
   }
-
+  out.push(raw.slice(start).trim());
   return out;
 }
 
 function parseLine(line: SourceLine): ParsedLine {
   const body = stripComment(line.text).trim();
+  const column = line.text.length - line.text.trimStart().length + 1;
   if (body.length === 0) {
-    return { source: line, raw: '', operands: [] };
+    return { source: line, raw: '', column, operands: [] };
   }
 
   let rest = body;
@@ -246,6 +249,7 @@ function parseLine(line: SourceLine): ParsedLine {
     return {
       source: line,
       raw: body,
+      column,
       label,
       operands: []
     };
@@ -256,6 +260,7 @@ function parseLine(line: SourceLine): ParsedLine {
     return {
       source: line,
       raw: body,
+      column,
       label,
       operands: []
     };
@@ -268,6 +273,7 @@ function parseLine(line: SourceLine): ParsedLine {
   return {
     source: line,
     raw: body,
+    column: column + body.length - rest.length,
     label,
     mnemonic,
     operands
@@ -275,6 +281,7 @@ function parseLine(line: SourceLine): ParsedLine {
 }
 
 function parseIncludePath(line: string): string | undefined {
+  if (!/^\s*INCLUDE\b/i.test(line)) return undefined;
   const body = stripComment(line).trim();
   const match = body.match(/^INCLUDE\s+(.+)$/i);
   if (!match) {
@@ -304,7 +311,14 @@ function expandSource(
 
   for (let idx = 0; idx < normalized.length; idx += 1) {
     const text = normalized[idx] ?? '';
-    const includePath = parseIncludePath(text);
+    let includePath: string | undefined;
+    try {
+      includePath = parseIncludePath(text);
+    } catch (error) {
+      if (!(error instanceof AssembleError)) throw error;
+      addDiagnostic(diagnostics, filename, idx + 1, error.column ?? 1, error.message);
+      continue;
+    }
     if (!includePath) {
       lines.push({ file: filename, line: idx + 1, text });
       continue;
@@ -352,7 +366,14 @@ function isStringLiteral(raw: string): boolean {
   if (q !== '"' && q !== "'") {
     return false;
   }
-  return trimmed[trimmed.length - 1] === q;
+  for (let i = 1; i < trimmed.length; i += 1) {
+    if (trimmed[i] === '\\') {
+      i += 1;
+    } else if (trimmed[i] === q) {
+      return i === trimmed.length - 1;
+    }
+  }
+  return false;
 }
 
 function decodeStringLiteral(raw: string): string {
@@ -1014,6 +1035,13 @@ function encodeInstruction(
     const src8 = parseReg8(srcRaw);
 
     if (dst8 && src8) {
+      const isIndexHalf = (r: EncodedReg8): boolean => r.prefix !== undefined && r.code !== 6;
+      const incompatibleWithHalf = (r: EncodedReg8): boolean =>
+        r.code === 6 || (r.prefix === undefined && (r.code === 4 || r.code === 5));
+      if ((isIndexHalf(dst8) && incompatibleWithHalf(src8)) ||
+          (isIndexHalf(src8) && incompatibleWithHalf(dst8))) {
+        throw new AssembleError('LD index halves cannot be combined with H, L or memory');
+      }
       const prefix = mergePrefix(dst8.prefix, src8.prefix);
       const opcode = 0x40 + dst8.code * 8 + src8.code;
       if (opcode === 0x76) {
@@ -1310,513 +1338,227 @@ function formatSymbols(symbols: SymbolEntry[]): string {
     .join('\n');
 }
 
-function evaluateOrReport(
-  expr: string,
-  symbols: Map<string, number>,
-  currentAddress: number,
-  line: ParsedLine,
-  diagnostics: AssemblerDiagnostic[],
-  column = 1
-): number | undefined {
-  const result = evaluateExpression(expr, {
-    symbols,
-    currentAddress
-  });
-
-  if ('value' in result) {
-    return result.value;
-  }
-
-  addDiagnostic(
-    diagnostics,
-    line.source.file,
-    line.source.line,
-    column + result.column - 1,
-    `${result.error} in expression: ${expr}`
+function evaluateAt(expr: string, symbols: Map<string, number>, address: number, line: ParsedLine): number {
+  const result = evaluateExpression(expr, { symbols, currentAddress: address });
+  if ('value' in result) return result.value;
+  const start = line.source.text.indexOf(expr, line.column - 1);
+  throw new AssembleError(
+    `${result.error} in expression: ${expr}`,
+    (start < 0 ? line.column : start + 1) + result.column - 1
   );
-  return undefined;
 }
 
-function normalizeAddressRange(range?: AssembleAddressRange): { start: number; end: number } {
-  const start = (range?.start ?? RAM_START) & 0xffff;
-  const end = (range?.end ?? RAM_END) & 0xffff;
-  if (start > end) {
-    return { start: RAM_START, end: RAM_END };
+function normalizeAddressRange(range?: AssembleAddressRange): AssembleAddressRange {
+  const start = range?.start ?? RAM_START;
+  const end = range?.end ?? RAM_END;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end > 0xffff || start > end) {
+    throw new AssembleError('addressRange must satisfy 0 <= start <= end <= 65535 with integer bounds');
   }
   return { start, end };
 }
 
-function formatRangeLabel(range: { start: number; end: number }): string {
-  return `${range.start.toString(16).toUpperCase().padStart(4, '0')}-${range.end.toString(16).toUpperCase().padStart(4, '0')}`;
-}
-
-function ensureAddressInRange(
-  address: number,
-  line: ParsedLine,
-  diagnostics: AssemblerDiagnostic[],
-  range: { start: number; end: number }
-): boolean {
-  if (address < range.start || address > range.end) {
-    const rangeLabel = formatRangeLabel(range);
+function requireAddress(address: number, range: AssembleAddressRange): void {
+  if (!Number.isSafeInteger(address) || address < range.start || address > range.end) {
+    const rangeLabel = `${range.start.toString(16).toUpperCase().padStart(4, '0')}-${range.end.toString(16).toUpperCase().padStart(4, '0')}`;
     const prefix = range.start === RAM_START && range.end === RAM_END ? 'Address out of RAM range' : 'Address out of range';
-    addDiagnostic(
-      diagnostics,
-      line.source.file,
-      line.source.line,
-      1,
-      `${prefix} ${rangeLabel}: ${address.toString(16).toUpperCase()}`
-    );
-    return false;
+    throw new AssembleError(`${prefix} ${rangeLabel}: ${address.toString(16).toUpperCase()}`);
   }
-  return true;
 }
 
 export function assemble(source: string, options: AssembleOptions = {}): AssembleResult {
   const diagnostics: AssemblerDiagnostic[] = [];
   const filename = options.filename ?? '<memory>';
-  const addressRange = normalizeAddressRange(options.addressRange);
-
+  const report = (error: unknown, line: SourceLine, column = 1): void => {
+    // Only source errors become diagnostics; implementation/integration errors stay visible.
+    if (!(error instanceof AssembleError)) throw error;
+    addDiagnostic(diagnostics, line.file, line.line, error.column ?? column, error.message);
+  };
+  let addressRange: AssembleAddressRange = { start: RAM_START, end: RAM_END };
+  try {
+    addressRange = normalizeAddressRange(options.addressRange);
+  } catch (error) {
+    report(error, { file: filename, line: 1, text: '' });
+  }
   const expanded = expandSource(source, filename, options, diagnostics);
-  const parsed = expanded.map((line) => parseLine(line));
-
   const symbols = new Map<string, SymbolDef>();
-  const state: ParseState = {};
-
-  let currentAddress = 0;
-  let ended = false;
-
-  for (const line of parsed) {
-    if (ended) {
-      break;
-    }
-    if (!line.mnemonic) {
-      if (line.label) {
-        const key = normalizeSymbolName(line.label);
-        if (symbols.has(key)) {
-          addDiagnostic(diagnostics, line.source.file, line.source.line, 1, `Duplicate label: ${line.label}`);
-        } else {
-          symbols.set(key, {
-            name: line.label,
-            key,
-            kind: 'label',
-            value: currentAddress,
-            file: line.source.file,
-            line: line.source.line,
-            column: 1
-          });
-        }
-      }
-      continue;
-    }
-
-    const mnemonic = line.mnemonic.toUpperCase();
-
-    if (line.label && mnemonic !== 'EQU') {
-      const key = normalizeSymbolName(line.label);
-      if (symbols.has(key)) {
-        addDiagnostic(diagnostics, line.source.file, line.source.line, 1, `Duplicate label: ${line.label}`);
-      } else {
-        symbols.set(key, {
-          name: line.label,
-          key,
-          kind: 'label',
-          value: currentAddress,
-          file: line.source.file,
-          line: line.source.line,
-          column: 1
-        });
-      }
-    }
-
-    if (mnemonic === 'END') {
-      ended = true;
-      continue;
-    }
-
-    if (mnemonic === 'ORG') {
-      expectOperandCount(mnemonic, line.operands, 1);
-      const evalValue = evaluateOrReport(line.operands[0] ?? '0', new Map(), currentAddress, line, diagnostics);
-      if (evalValue === undefined) {
-        continue;
-      }
-      currentAddress = evalValue & 0xffff;
-      if (!ensureAddressInRange(currentAddress, line, diagnostics, addressRange)) {
-        continue;
-      }
-      if (state.firstOrigin === undefined) {
-        state.firstOrigin = currentAddress;
-      }
-      continue;
-    }
-
-    if (mnemonic === 'ENTRY') {
-      expectOperandCount(mnemonic, line.operands, 1);
-      state.entryExpr = {
-        expr: line.operands[0] ?? '0',
-        file: line.source.file,
-        line: line.source.line,
-        column: 1
-      };
-      continue;
-    }
-
-    if (mnemonic === 'EQU') {
-      if (!line.label) {
-        addDiagnostic(diagnostics, line.source.file, line.source.line, 1, 'EQU requires a label');
-        continue;
-      }
-      expectOperandCount(mnemonic, line.operands, 1);
-      const key = normalizeSymbolName(line.label);
-      if (symbols.has(key)) {
-        addDiagnostic(diagnostics, line.source.file, line.source.line, 1, `Duplicate symbol: ${line.label}`);
-        continue;
-      }
-      symbols.set(key, {
-        name: line.label,
-        key,
-        kind: 'equ',
-        expr: line.operands[0] ?? '0',
-        file: line.source.file,
-        line: line.source.line,
-        column: 1
-      });
-      continue;
-    }
-
-    if (mnemonic === 'DB') {
-      let size = 0;
-      for (const item of line.operands) {
-        if (isStringLiteral(item)) {
-          try {
-            size += decodeStringLiteral(item).length;
-          } catch (error) {
-            addDiagnostic(
-              diagnostics,
-              line.source.file,
-              line.source.line,
-              1,
-              error instanceof Error ? error.message : 'Invalid DB string'
-            );
-          }
-        } else {
-          size += 1;
-        }
-      }
-      currentAddress += size;
-      continue;
-    }
-
-    if (mnemonic === 'DW') {
-      currentAddress += line.operands.length * 2;
-      continue;
-    }
-
-    if (mnemonic === 'DS') {
-      expectOperandCount(mnemonic, line.operands, [1, 2]);
-      const count = evaluateOrReport(line.operands[0] ?? '0', new Map(), currentAddress, line, diagnostics);
-      if (count === undefined || count < 0) {
-        addDiagnostic(diagnostics, line.source.file, line.source.line, 1, 'DS requires non-negative count');
-        continue;
-      }
-      currentAddress += count;
-      continue;
-    }
-
-    try {
-      const bytes = encodeInstruction(mnemonic, line.operands, currentAddress, true, () => 0);
-      currentAddress += bytes.length;
-    } catch (error) {
-      addDiagnostic(
-        diagnostics,
-        line.source.file,
-        line.source.line,
-        1,
-        error instanceof Error ? error.message : 'Instruction encode error'
-      );
-    }
-  }
-
   const symbolValues = new Map<string, number>();
-  const symbolEntries: SymbolEntry[] = [];
-  const equDefs: SymbolDef[] = [];
+  const pendingEqus = new Map<string, SymbolDef>();
+  const layout: LayoutLine[] = [];
+  const occupied = new Uint8Array(0x10000);
+  let currentAddress = 0;
+  let firstOrigin: number | undefined;
+  let entryDefinition: { line: ParsedLine; address: number } | undefined;
 
-  for (const def of symbols.values()) {
-    if (def.kind === 'label') {
-      const value = def.value ?? 0;
-      symbolValues.set(def.key, value);
-      symbolEntries.push({ name: def.name, value, kind: 'label' });
-    } else {
-      equDefs.push(def);
-    }
-  }
-
-  for (let pass = 0; pass < Math.max(2, equDefs.length + 1); pass += 1) {
-    let changed = false;
-    for (const def of equDefs) {
-      if (!def.expr) {
-        continue;
+  const resolveKnownEqus = (): void => {
+    let changed: boolean;
+    do {
+      changed = false;
+      for (const [key, def] of pendingEqus) {
+        const result = evaluateExpression(def.expr!, { symbols: symbolValues, currentAddress: def.address });
+        if ('value' in result) {
+          symbolValues.set(key, result.value);
+          pendingEqus.delete(key);
+          changed = true;
+        }
       }
-      const result = evaluateExpression(def.expr, {
-        symbols: symbolValues,
-        currentAddress: 0
-      });
-      if (!('value' in result)) {
-        continue;
-      }
-      const prev = symbolValues.get(def.key);
-      if (prev !== result.value) {
-        symbolValues.set(def.key, result.value);
-        changed = true;
-      }
-    }
-    if (!changed) {
-      break;
-    }
-  }
-
-  for (const def of equDefs) {
-    const result = evaluateExpression(def.expr ?? '0', {
-      symbols: symbolValues,
-      currentAddress: 0
-    });
-    if (!('value' in result)) {
-      addDiagnostic(
-        diagnostics,
-        def.file,
-        def.line,
-        def.column,
-        `${result.error} in EQU expression: ${def.expr ?? ''}`
-      );
-      continue;
-    }
-    const value = result.value;
-    symbolValues.set(def.key, value);
-    symbolEntries.push({ name: def.name, value, kind: 'equ' });
-  }
-
-  currentAddress = 0;
-  ended = false;
-
-  const memory = new Map<number, number>();
-  const listing: ListingRecord[] = [];
-
-  let minWritten: number | undefined;
-  let maxWritten: number | undefined;
-
-  const writeByte = (address: number, byte: number, line: ParsedLine): void => {
-    if (!ensureAddressInRange(address, line, diagnostics, addressRange)) {
-      return;
-    }
-    const normalized = address & 0xffff;
-    memory.set(normalized, byte & 0xff);
-    if (minWritten === undefined || normalized < minWritten) {
-      minWritten = normalized;
-    }
-    if (maxWritten === undefined || normalized > maxWritten) {
-      maxWritten = normalized;
-    }
+    } while (changed);
   };
 
-  for (const line of parsed) {
-    if (ended) {
-      break;
-    }
-
-    if (!line.mnemonic) {
-      continue;
-    }
-
-    const mnemonic = line.mnemonic.toUpperCase();
-
-    if (mnemonic === 'END') {
-      ended = true;
-      continue;
-    }
-
-    if (mnemonic === 'ORG') {
-      const value = evaluateOrReport(line.operands[0] ?? '0', symbolValues, currentAddress, line, diagnostics);
-      if (value === undefined) {
-        continue;
-      }
-      currentAddress = value & 0xffff;
-      ensureAddressInRange(currentAddress, line, diagnostics, addressRange);
-      if (state.firstOrigin === undefined) {
-        state.firstOrigin = currentAddress;
-      }
-      continue;
-    }
-
-    if (mnemonic === 'ENTRY' || mnemonic === 'EQU') {
-      continue;
-    }
-
-    if (mnemonic === 'DB') {
-      const emitted: number[] = [];
-      for (const item of line.operands) {
-        if (isStringLiteral(item)) {
-          try {
-            const text = decodeStringLiteral(item);
-            for (const ch of text) {
-              emitted.push(ch.charCodeAt(0) & 0xff);
-            }
-          } catch (error) {
-            addDiagnostic(
-              diagnostics,
-              line.source.file,
-              line.source.line,
-              1,
-              error instanceof Error ? error.message : 'Invalid DB string'
-            );
-          }
-          continue;
-        }
-
-        const value = evaluateOrReport(item, symbolValues, currentAddress, line, diagnostics);
-        if (value === undefined) {
-          emitted.push(0);
-          continue;
-        }
-        emitted.push(toByte(value, 'DB value'));
-      }
-
-      for (const byte of emitted) {
-        writeByte(currentAddress, byte, line);
-        currentAddress = (currentAddress + 1) & 0xffff;
-      }
-
-      listing.push({
-        file: line.source.file,
-        line: line.source.line,
-        address: (currentAddress - emitted.length) & 0xffff,
-        bytes: emitted,
-        source: line.raw
-      });
-      continue;
-    }
-
-    if (mnemonic === 'DW') {
-      const emitted: number[] = [];
-      for (const item of line.operands) {
-        const value = evaluateOrReport(item, symbolValues, currentAddress, line, diagnostics);
-        const word = toWord(value ?? 0);
-        emitted.push(word & 0xff, (word >>> 8) & 0xff);
-      }
-      for (const byte of emitted) {
-        writeByte(currentAddress, byte, line);
-        currentAddress = (currentAddress + 1) & 0xffff;
-      }
-      listing.push({
-        file: line.source.file,
-        line: line.source.line,
-        address: (currentAddress - emitted.length) & 0xffff,
-        bytes: emitted,
-        source: line.raw
-      });
-      continue;
-    }
-
-    if (mnemonic === 'DS') {
-      const countValue = evaluateOrReport(line.operands[0] ?? '0', symbolValues, currentAddress, line, diagnostics);
-      const fillValue = line.operands.length > 1 ? evaluateOrReport(line.operands[1] ?? '0', symbolValues, currentAddress, line, diagnostics) : 0;
-      const count = Math.max(0, countValue ?? 0);
-      const fill = toByte(fillValue ?? 0, 'DS fill');
-      const emitted: number[] = [];
-      for (let i = 0; i < count; i += 1) {
-        emitted.push(fill);
-      }
-      for (const byte of emitted) {
-        writeByte(currentAddress, byte, line);
-        currentAddress = (currentAddress + 1) & 0xffff;
-      }
-      listing.push({
-        file: line.source.file,
-        line: line.source.line,
-        address: (currentAddress - emitted.length) & 0xffff,
-        bytes: emitted,
-        source: line.raw
-      });
-      continue;
-    }
-
+  // Determine each statement's address and size once. ORG and DS count expressions
+  // must be resolvable here; forward references in fixed-size output can wait.
+  for (const sourceLine of expanded) {
+    let line: ParsedLine | undefined;
     try {
-      const bytes = encodeInstruction(mnemonic, line.operands, currentAddress, false, (expr, addr) => {
-        const value = evaluateOrReport(expr, symbolValues, addr, line, diagnostics);
-        return value ?? 0;
-      });
-      const start = currentAddress;
-      for (const byte of bytes) {
-        writeByte(currentAddress, byte, line);
-        currentAddress = (currentAddress + 1) & 0xffff;
+      line = parseLine(sourceLine);
+      const { mnemonic, operands, label } = line;
+      if (label) {
+        const key = normalizeSymbolName(label);
+        if (symbols.has(key)) throw new AssembleError(`Duplicate symbol: ${label}`);
+        const kind = mnemonic === 'EQU' ? 'equ' : 'label';
+        if (kind === 'equ') expectOperandCount('EQU', operands, 1);
+        const def: SymbolDef = { name: label, key, kind, address: currentAddress, line, expr: operands[0] };
+        symbols.set(key, def);
+        if (kind === 'equ') pendingEqus.set(key, def);
+        else symbolValues.set(key, currentAddress);
       }
-      listing.push({
-        file: line.source.file,
-        line: line.source.line,
-        address: start,
-        bytes,
-        source: line.raw
-      });
-    } catch (error) {
-      addDiagnostic(
-        diagnostics,
-        line.source.file,
-        line.source.line,
-        1,
-        error instanceof Error ? error.message : 'Instruction encode error'
-      );
-    }
-  }
-
-  const origin = state.firstOrigin ?? minWritten ?? 0;
-  const entry = (() => {
-    if (state.entryExpr) {
-      const result = evaluateExpression(state.entryExpr.expr, {
-        symbols: symbolValues,
-        currentAddress: 0
-      });
-      if ('value' in result) {
-        return result.value & 0xffff;
+      if (!mnemonic) continue;
+      if (operands.some(operand => operand.length === 0)) {
+        throw new AssembleError(`${mnemonic} has an empty operand`);
       }
-      addDiagnostic(
-        diagnostics,
-        state.entryExpr.file,
-        state.entryExpr.line,
-        state.entryExpr.column,
-        `${result.error} in ENTRY expression: ${state.entryExpr.expr}`
-      );
-    }
-    return origin & 0xffff;
-  })();
-
-  let binary: Uint8Array;
-  if (minWritten === undefined || maxWritten === undefined || maxWritten < origin) {
-    binary = new Uint8Array(0);
-  } else {
-    const size = maxWritten - origin + 1;
-    binary = new Uint8Array(size);
-    for (const [address, byte] of memory) {
-      if (address < origin || address > maxWritten) {
+      if (mnemonic === 'END') {
+        expectOperandCount(mnemonic, operands, 0);
+        break;
+      }
+      if (mnemonic === 'EQU') {
+        if (!label) throw new AssembleError('EQU requires a label');
         continue;
       }
-      binary[address - origin] = byte & 0xff;
+      if (mnemonic === 'ENTRY') {
+        expectOperandCount(mnemonic, operands, 1);
+        entryDefinition = { line, address: currentAddress };
+        continue;
+      }
+      if (mnemonic === 'ORG') {
+        expectOperandCount(mnemonic, operands, 1);
+        resolveKnownEqus();
+        const address = evaluateAt(operands[0]!, symbolValues, currentAddress, line);
+        requireAddress(address, addressRange);
+        currentAddress = address;
+        firstOrigin ??= address;
+        continue;
+      }
+      let size: number;
+      if (mnemonic === 'DB' || mnemonic === 'DW') {
+        if (operands.length === 0) throw new AssembleError(`${mnemonic} expects at least one operand`);
+        size = mnemonic === 'DW' ? operands.length * 2 : operands.reduce(
+          (sum, operand) => sum + (isStringLiteral(operand) ? decodeStringLiteral(operand).length : 1), 0
+        );
+      } else if (mnemonic === 'DS') {
+        expectOperandCount(mnemonic, operands, [1, 2]);
+        resolveKnownEqus();
+        size = evaluateAt(operands[0]!, symbolValues, currentAddress, line);
+        if (!Number.isSafeInteger(size) || size < 0) throw new AssembleError('DS requires a non-negative integer count');
+      } else {
+        size = encodeInstruction(mnemonic, operands, currentAddress, true, () => 0).length;
+      }
+      // Validate the entire span before allocating output or changing ownership.
+      // The location counter may reach 65536, but emission never wraps to zero.
+      if (size > 0) {
+        requireAddress(currentAddress, addressRange);
+        requireAddress(currentAddress + size - 1, addressRange);
+        for (let address = currentAddress; address < currentAddress + size; address += 1) {
+          if (occupied[address]) throw new AssembleError(`Overlapping output at address ${address.toString(16).toUpperCase().padStart(4, '0')}`);
+        }
+        occupied.fill(1, currentAddress, currentAddress + size);
+      }
+      layout.push({ line, address: currentAddress, size });
+      currentAddress += size;
+    } catch (error) {
+      report(error, sourceLine, line?.column);
     }
   }
 
-  const dump = formatDump(binary, origin);
-  const lst = formatListing(listing);
-  const sym = formatSymbols(symbolEntries);
+  resolveKnownEqus();
+  for (const def of pendingEqus.values()) {
+    try {
+      evaluateAt(def.expr!, symbolValues, def.address, def.line);
+    } catch (error) {
+      report(error, def.line.source, def.line.column);
+    }
+  }
+  const symbolEntries: SymbolEntry[] = [];
+  for (const def of symbols.values()) {
+    const value = symbolValues.get(def.key);
+    if (value !== undefined) symbolEntries.push({ name: def.name, kind: def.kind, value });
+  }
 
-  const ok = diagnostics.every((diag) => diag.severity !== 'error');
+  const listing: ListingRecord[] = [];
+  let minWritten: number | undefined;
+  let maxWritten: number | undefined;
+  for (const { line, address, size } of layout) {
+    try {
+      const { mnemonic, operands } = line;
+      const evaluate = (expr: string, at = address): number => evaluateAt(expr, symbolValues, at, line);
+      let bytes: number[];
+      if (mnemonic === 'DB') {
+        bytes = [];
+        for (const item of operands) {
+          if (isStringLiteral(item)) {
+            const text = decodeStringLiteral(item);
+            for (let i = 0; i < text.length; i += 1) bytes.push(text.charCodeAt(i) & 0xff);
+          } else {
+            bytes.push(toByte(evaluate(item), 'DB value'));
+          }
+        }
+      } else if (mnemonic === 'DW') {
+        bytes = [];
+        for (const item of operands) {
+          const word = toWord(evaluate(item));
+          bytes.push(word & 0xff, (word >>> 8) & 0xff);
+        }
+      } else if (mnemonic === 'DS') {
+        const fill = toByte(operands.length === 2 ? evaluate(operands[1]!) : 0, 'DS fill');
+        bytes = new Array<number>(size).fill(fill);
+      } else {
+        bytes = encodeInstruction(mnemonic!, operands, address, false, evaluate);
+      }
+      if (bytes.length !== size) throw new Error('Internal error: encoded size differs from layout');
+      listing.push({ file: line.source.file, line: line.source.line, address, bytes, source: line.raw });
+      if (size > 0) {
+        minWritten = Math.min(minWritten ?? address, address);
+        maxWritten = Math.max(maxWritten ?? address, address + size - 1);
+      }
+    } catch (error) {
+      report(error, line.source, line.column);
+    }
+  }
 
+  const origin = Math.min(firstOrigin ?? minWritten ?? 0, minWritten ?? firstOrigin ?? 0);
+  let entry = firstOrigin ?? minWritten ?? 0;
+  if (entryDefinition) {
+    const { line, address } = entryDefinition;
+    try {
+      const value = evaluateAt(line.operands[0]!, symbolValues, address, line);
+      requireAddress(value, { start: 0, end: 0xffff });
+      entry = value;
+    } catch (error) {
+      report(error, line.source, line.column);
+    }
+  }
+  const ok = diagnostics.every(diag => diag.severity !== 'error');
+  const binary = new Uint8Array(ok && maxWritten !== undefined ? maxWritten - origin + 1 : 0);
+  if (ok) {
+    for (const record of listing) {
+      if (record.bytes.length > 0) binary.set(record.bytes, record.address - origin);
+    }
+  } else {
+    listing.length = 0;
+  }
   return {
-    ok,
-    origin: origin & 0xffff,
-    entry,
-    binary,
-    dump,
-    lst,
-    sym,
-    listing,
-    symbols: symbolEntries,
-    diagnostics
+    ok, origin, entry, binary,
+    dump: formatDump(binary, origin),
+    lst: formatListing(listing),
+    sym: formatSymbols(symbolEntries),
+    listing, symbols: symbolEntries, diagnostics
   };
 }
