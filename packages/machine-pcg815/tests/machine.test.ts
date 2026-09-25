@@ -41,6 +41,16 @@ function runBasic(machine: PCG815Machine, lines: readonly string[]): void {
   machine.runBasicInterpreter(encodeBasicLines(lines), { appendEot: true });
 }
 
+// Returning to firmware happens before its prompt drawing routine has completed.
+// Wait for the visible postcondition, independently of instruction/chunk timing.
+function waitForPrompt(machine: PCG815Machine): void {
+  for (let budget = 0; budget < 20_000; budget += 100) {
+    if (decodeMachineText(machine).some((line) => line.startsWith('> '))) return;
+    machine.tick(100);
+  }
+  throw new Error('firmware prompt was not drawn within 20,000 T-states');
+}
+
 function readBasicVariable(machine: PCG815Machine, name: string): number | undefined {
   const upper = name.toUpperCase();
   const key1 = upper.charCodeAt(0) || 0;
@@ -587,6 +597,7 @@ describe('PCG815Machine', () => {
 
     runBasic(machine, ['NEW', '10 CLS', '20 PRINT "OWARI"', '30 END', 'RUN']);
 
+    waitForPrompt(machine);
     const screen = decodeMachineText(machine).join('\n');
     expect(machine.getExecutionDomain()).toBe('firmware');
     expect(machine.getFirmwareReturnAddress()).toBe(MONITOR_PROMPT_RESUME_ADDR);
@@ -740,6 +751,7 @@ describe('PCG815Machine', () => {
     machine.out8(0x58, 0x80);
     machine.out8(0x5a, 0x41);
     runBasic(machine, ['CLS']);
+    waitForPrompt(machine);
     const head = decodeMachineText(machine)[0] ?? '';
     expect(head.startsWith('> '), head).toBe(true);
   });

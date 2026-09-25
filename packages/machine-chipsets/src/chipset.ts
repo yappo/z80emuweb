@@ -207,7 +207,7 @@ export class BasicChipset implements Chipset, CpuStateProvider {
   }
 
   private resolveDataBus(pins: Z80PinsOut, intDataBus: number | undefined): { data: number; source: ChipsetReadSource } {
-    const readActive = Boolean(pins.rd && (pins.mreq || pins.iorq));
+    const readActive = Boolean((pins.m1 && pins.iorq) || (pins.rd && (pins.mreq || pins.iorq)));
     if (!readActive) {
       this.prevReadActive = false;
       this.readLatch = Z80_DEFAULT_PINS_IN.data;
@@ -237,7 +237,7 @@ export class BasicChipset implements Chipset, CpuStateProvider {
   }
 
   private identifyReadSource(pins: Z80PinsOut): ChipsetReadSource {
-    if (pins.m1 && pins.iorq && pins.rd) {
+    if (pins.m1 && pins.iorq) {
       return 'int-ack';
     }
     if (pins.mreq && pins.rd) {
