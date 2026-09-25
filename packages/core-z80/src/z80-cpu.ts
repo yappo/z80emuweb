@@ -31,6 +31,7 @@ interface TStateStep {
   pins: PinsProducer;
   waitable?: boolean;
   action?: TStateOp;
+  cycleEnd?: boolean;
 }
 
 export interface Z80CpuOptions {
@@ -129,7 +130,7 @@ export class Z80Cpu implements Z80Core {
 
   private iff2 = false;
 
-  private im: InterruptMode = 1;
+  private im: InterruptMode = 0;
 
   private halted = false;
 
@@ -145,6 +146,10 @@ export class Z80Cpu implements Z80Core {
 
   private tstates = 0;
 
+  private atCycleBoundary = true;
+
+  private executingStep: TStateStep | undefined;
+
   private activeTiming: OpcodeTimingDefinition = getTimingDefinition('base', 0x00);
 
   constructor(options?: Z80CpuOptions) {
@@ -153,6 +158,8 @@ export class Z80Cpu implements Z80Core {
 
   reset(): void {
     this.queue.length = 0;
+    this.atCycleBoundary = true;
+    this.executingStep = undefined;
     this.pinsOut = { ...Z80_IDLE_PINS_OUT };
     this.regs.a = 0;
     this.regs.f = 0;
@@ -178,7 +185,7 @@ export class Z80Cpu implements Z80Core {
     this.shadowRegs.l = 0;
     this.iff1 = false;
     this.iff2 = false;
-    this.im = 1;
+    this.im = 0;
     this.halted = false;
     this.pendingInt = false;
     this.pendingIntDataBus = undefined;
@@ -202,14 +209,13 @@ export class Z80Cpu implements Z80Core {
     }
     this.prevNmi = sampledInput.nmi;
 
-    if (sampledInput.int) {
-      this.pendingInt = true;
-      this.pendingIntDataBus = sampledInput.data;
-    }
+    // INT is level-sensitive; a pulse while disabled must not become a future interrupt.
+    this.pendingInt = sampledInput.int;
+    this.pendingIntDataBus = sampledInput.int ? sampledInput.data : undefined;
 
-    // BUSRQ 中は CPU がバスを解放し、内部マイクロステップ進行を停止する。
-    if (sampledInput.busrq) {
-      this.pinsOut = this.composePinsOut(() => this.pins({}), sampledInput);
+    // Finish the current machine cycle (including WAIT/internal extensions) first.
+    if (sampledInput.busrq && this.atCycleBoundary) {
+      this.pinsOut = this.composePinsOut(() => this.pins({ busak: true }));
       this.tstates += 1;
       return this.getPinsOut();
     }
@@ -220,15 +226,20 @@ export class Z80Cpu implements Z80Core {
 
     const step = this.queue[0];
     if (!step) {
-      this.pinsOut = this.composePinsOut(() => ({ ...Z80_IDLE_PINS_OUT }), sampledInput);
+      this.pinsOut = this.composePinsOut(() => ({ ...Z80_IDLE_PINS_OUT }));
       this.tstates += 1;
       return this.getPinsOut();
     }
 
+    this.atCycleBoundary = false;
     const waitActive = Boolean(step.waitable) && sampledInput.wait;
-    this.pinsOut = this.composePinsOut(step.pins, sampledInput);
+    this.pinsOut = this.composePinsOut(step.pins);
     if (!waitActive) {
+      this.executingStep = step;
       step.action?.(sampledInput);
+      this.executingStep = undefined;
+      // An action may extend its own cycle or append the next machine cycle.
+      this.atCycleBoundary = Boolean(step.cycleEnd);
       this.queue.shift();
     }
 
@@ -258,6 +269,8 @@ export class Z80Cpu implements Z80Core {
 
   loadState(state: CpuState): void {
     this.queue.length = 0;
+    this.atCycleBoundary = true;
+    this.executingStep = undefined;
     this.regs.a = state.registers.a & 0xff;
     this.regs.f = state.registers.f & 0xff;
     this.regs.b = state.registers.b & 0xff;
@@ -294,7 +307,7 @@ export class Z80Cpu implements Z80Core {
     this.activeTiming = getTimingDefinition('base', 0x00);
   }
 
-  private composePinsOut(producer: PinsProducer, input: Z80PinsIn): Z80PinsOut {
+  private composePinsOut(producer: PinsProducer): Z80PinsOut {
     const raw = typeof producer === 'function' ? producer() : producer;
     const addr = clamp16(raw.addr);
     const dataOut = raw.dataOut === null ? null : clamp8(raw.dataOut ?? 0);
@@ -308,7 +321,7 @@ export class Z80Cpu implements Z80Core {
       wr: Boolean(raw.wr),
       rfsh: Boolean(raw.rfsh),
       halt: this.halted,
-      busak: Boolean(input.busrq)
+      busak: Boolean(raw.busak)
     };
   }
 
@@ -327,16 +340,35 @@ export class Z80Cpu implements Z80Core {
     this.queue.push({ pins, action, waitable });
   }
 
-  private enqueueInternal(action?: () => void): void {
-    this.enqueueStep(() => this.pins({}), () => {
-      action?.();
-    });
+  // Register updates do not create T-states. Attach them to the last scheduled
+  // phase; decoder callbacks may also append an effect to the phase executing now.
+  private enqueueEffect(action: () => void): void {
+    const tail = this.queue[this.queue.length - 1];
+    if (!tail || tail === this.executingStep) {
+      action();
+      return;
+    }
+    const previous = tail.action;
+    tail.action = (input) => {
+      previous?.(input);
+      action();
+    };
   }
 
-  private enqueueIdle(count: number): void {
+  private endCycle(): void {
+    const tail = this.queue[this.queue.length - 1];
+    if (tail) tail.cycleEnd = true;
+  }
+
+  // Extend a bus cycle unless the instruction specifies a separate internal cycle.
+  private enqueueIdle(count: number, extendPrevious = true): void {
+    if (count === 0) return;
+    const tail = this.queue[this.queue.length - 1];
+    if (extendPrevious && tail) tail.cycleEnd = false;
     for (let i = 0; i < count; i += 1) {
       this.enqueueStep(() => this.pins({}));
     }
+    this.endCycle();
   }
 
   private enqueueReadPc(target: (value: number) => void): void {
@@ -358,6 +390,7 @@ export class Z80Cpu implements Z80Core {
       target(clamp8(input.data));
     });
     this.enqueueIdle(cycle.idleTailTStates);
+    this.endCycle();
   }
 
   private enqueueWriteMem(addr: () => number, value: () => number): void {
@@ -370,32 +403,28 @@ export class Z80Cpu implements Z80Core {
     );
     this.enqueueStep(() => this.pins({ addr: clamp16(addr()), mreq: true, wr: true, dataOut: clamp8(value()) }));
     this.enqueueIdle(cycle.idleTailTStates);
+    this.endCycle();
   }
 
   private enqueueReadIo(port: () => number, target: (value: number) => void): void {
     const cycle = this.getCycleTiming('ioRead');
-    this.enqueueStep(() => this.pins({ addr: clamp16(port()), iorq: true, rd: true }));
-    this.enqueueStep(
-      () => this.pins({ addr: clamp16(port()), iorq: true, rd: true }),
-      undefined,
-      cycle.waitSamplePhases.includes(2)
-    );
-    this.enqueueStep(() => this.pins({ addr: clamp16(port()), iorq: true, rd: true }), (input) => {
-      target(clamp8(input.data));
-    });
-    this.enqueueIdle(cycle.idleTailTStates);
+    const pins = () => this.pins({ addr: clamp16(port()), iorq: true, rd: true });
+    this.enqueueStep(pins);
+    this.enqueueStep(pins);
+    // The mandatory Tw sits between T2 and T3; external WAIT is sampled here.
+    this.enqueueStep(pins, undefined, cycle.waitSamplePhases.includes(3));
+    this.enqueueStep(pins, (input) => { target(clamp8(input.data)); });
+    this.endCycle();
   }
 
   private enqueueWriteIo(port: () => number, value: () => number): void {
     const cycle = this.getCycleTiming('ioWrite');
+    const pins = () => this.pins({ addr: clamp16(port()), iorq: true, wr: true, dataOut: clamp8(value()) });
     this.enqueueStep(() => this.pins({ addr: clamp16(port()), iorq: true, dataOut: clamp8(value()) }));
-    this.enqueueStep(
-      () => this.pins({ addr: clamp16(port()), iorq: true, wr: true, dataOut: clamp8(value()) }),
-      undefined,
-      cycle.waitSamplePhases.includes(2)
-    );
-    this.enqueueStep(() => this.pins({ addr: clamp16(port()), iorq: true, wr: true, dataOut: clamp8(value()) }));
-    this.enqueueIdle(cycle.idleTailTStates);
+    this.enqueueStep(pins);
+    this.enqueueStep(pins, undefined, cycle.waitSamplePhases.includes(3));
+    this.enqueueStep(pins);
+    this.endCycle();
   }
 
   private enqueueFetchOpcode(target: (opcode: number) => void): void {
@@ -421,55 +450,50 @@ export class Z80Cpu implements Z80Core {
         rfsh: true
       })
     );
-    this.enqueueStep(() => this.pins({}));
     this.enqueueIdle(cycle.idleTailTStates);
+    this.endCycle();
   }
 
   private enqueueIntAckFetch(target: (value: number) => void): void {
-    const cycle = this.getCycleTiming('intAck');
-    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true, rd: true }));
-    this.enqueueStep(
-      () => this.pins({ addr: this.regs.pc, m1: true, iorq: true, rd: true }),
-      undefined,
-      cycle.waitSamplePhases.includes(2)
-    );
-    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true, rd: true }), (input) => {
+    // Six T-states replace the normal four-state M1: two automatic wait states.
+    // RD is not asserted during interrupt acknowledge (M1 + IORQ).
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true }));
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true }));
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true }));
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true }), undefined,
+      this.getCycleTiming('intAck').waitSamplePhases.includes(4));
+    this.enqueueStep(() => this.pins({ addr: this.regs.pc, m1: true, iorq: true }), (input) => {
+      this.bumpR();
       target(clamp8(input.data));
     });
-    this.enqueueIdle(cycle.idleTailTStates);
+    this.enqueueStep(() => this.pins({ addr: (this.regs.i << 8) | this.regs.r, mreq: true, rfsh: true }));
+    this.endCycle();
   }
 
-  private enqueuePushWord(value: () => number): void {
+  private enqueuePushWord(value: () => number, extraState = true): void {
     let word = 0;
-    this.enqueueInternal(() => {
+    let address = 0;
+    if (extraState) this.enqueueIdle(1);
+    this.enqueueEffect(() => {
       word = clamp16(value());
+      address = clamp16(this.regs.sp - 1);
     });
-
-    this.enqueueInternal(() => {
-      this.regs.sp = clamp16(this.regs.sp - 1);
+    this.enqueueWriteMem(() => address, () => (word >>> 8) & 0xff);
+    this.enqueueEffect(() => {
+      this.regs.sp = address;
+      address = clamp16(address - 1);
     });
-    this.enqueueWriteMem(() => this.regs.sp, () => (word >>> 8) & 0xff);
-
-    this.enqueueInternal(() => {
-      this.regs.sp = clamp16(this.regs.sp - 1);
-    });
-    this.enqueueWriteMem(() => this.regs.sp, () => word & 0xff);
+    this.enqueueWriteMem(() => address, () => word & 0xff);
+    this.enqueueEffect(() => { this.regs.sp = address; });
   }
 
   private enqueuePopWord(target: (word: number) => void): void {
     let low = 0;
-    let high = 0;
     this.enqueueReadMem(() => this.regs.sp, (value) => {
       low = value;
-    });
-    this.enqueueInternal(() => {
       this.regs.sp = clamp16(this.regs.sp + 1);
     });
-
-    this.enqueueReadMem(() => this.regs.sp, (value) => {
-      high = value;
-    });
-    this.enqueueInternal(() => {
+    this.enqueueReadMem(() => this.regs.sp, (high) => {
       this.regs.sp = clamp16(this.regs.sp + 1);
       target((high << 8) | low);
     });
@@ -503,12 +527,6 @@ export class Z80Cpu implements Z80Core {
   }
 
   private scheduleHaltCycle(): void {
-    const intPending = this.pendingNmi || (this.pendingInt && this.iff1);
-    if (intPending) {
-      this.halted = false;
-      this.scheduleNextInstruction();
-      return;
-    }
     this.enqueueHaltBusCycle();
   }
 
@@ -535,66 +553,47 @@ export class Z80Cpu implements Z80Core {
         rfsh: true
       })
     );
-    this.enqueueStep(() => this.pins({}));
     this.enqueueIdle(cycle.idleTailTStates);
+    this.endCycle();
   }
 
   private scheduleNmi(): void {
     this.pendingNmi = false;
     this.halted = false;
-    this.enqueueIdle(5);
-    this.enqueuePushWord(() => this.regs.pc);
-    this.enqueueInternal(() => {
-      this.iff2 = this.iff1;
-      this.iff1 = false;
-      this.regs.pc = 0x0066;
-    });
+    this.iff1 = false; // IFF2 is preserved, including during nested NMI.
+    this.enqueueHaltBusCycle(); // Discard fetched data; PC does not advance.
+    this.enqueueIdle(1);
+    this.enqueuePushWord(() => this.regs.pc, false);
+    this.enqueueEffect(() => { this.regs.pc = 0x0066; });
   }
 
   private scheduleMaskableInterrupt(): void {
-    let dataBus = this.pendingIntDataBus ?? 0xff;
     this.pendingInt = false;
     this.pendingIntDataBus = undefined;
     this.halted = false;
     this.iff1 = false;
     this.iff2 = false;
 
-    this.enqueueIntAckFetch((sampled) => {
-      dataBus = sampled;
-    });
-
     if (this.im === 0) {
-      // IM0 は ACK 時に供給された opcode をそのまま実行する。
-      this.enqueueInternal(() => {
-        this.decodeByTimingDefinition('base', dataBus, 'HL');
+      this.enqueueIntAckFetch((opcode) => {
+        this.decodeByTimingDefinition('base', opcode, 'HL');
       });
       return;
     }
 
-    this.enqueuePushWord(() => this.regs.pc);
-
+    let dataBus = 0xff;
+    this.enqueueIntAckFetch((sampled) => { dataBus = sampled; });
+    this.enqueueIdle(1); // IM1/IM2 acknowledge takes seven T-states.
+    this.enqueuePushWord(() => this.regs.pc, false);
     if (this.im === 2) {
       let low = 0;
-      let high = 0;
-      this.enqueueReadMem(() => ((this.regs.i << 8) | dataBus) & 0xfffe, (value) => {
-        low = value;
+      this.enqueueReadMem(() => ((this.regs.i << 8) | dataBus) & 0xfffe, (value) => { low = value; });
+      this.enqueueReadMem(() => ((((this.regs.i << 8) | dataBus) & 0xfffe) + 1) & 0xffff, (high) => {
+        this.regs.pc = (high << 8) | low;
       });
-      this.enqueueReadMem(() => ((((this.regs.i << 8) | dataBus) & 0xfffe) + 1) & 0xffff, (value) => {
-        high = value;
-      });
-      this.enqueueInternal(() => {
-        this.regs.pc = ((high << 8) | low) & 0xffff;
-      });
-      return;
+    } else {
+      this.enqueueEffect(() => { this.regs.pc = 0x0038; });
     }
-
-    this.enqueueInternal(() => {
-      if (this.im === 0) {
-        this.regs.pc = dataBus & 0x38;
-        return;
-      }
-      this.regs.pc = 0x0038;
-    });
   }
 
   private getCycleTiming(kind: BusCycleKind) {
@@ -619,7 +618,7 @@ export class Z80Cpu implements Z80Core {
     const rstVector = RST_VECTOR_BY_OPCODE.get(opcode);
     if (rstVector !== undefined) {
       this.enqueuePushWord(() => this.regs.pc);
-      this.enqueueInternal(() => {
+      this.enqueueEffect(() => {
         this.regs.pc = rstVector;
       });
       return;
@@ -665,7 +664,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0x76:
         // HALT: 割り込みが入るまで命令フェッチを停止する。
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           this.halted = true;
         });
         return;
@@ -711,7 +710,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0x07:
         // RLCA
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           const carry = (this.regs.a >>> 7) & 1;
           this.regs.a = clamp8((this.regs.a << 1) | carry);
           this.regs.f = (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV)) | (this.regs.a & (FLAG_X | FLAG_Y)) | (carry ? FLAG_C : 0);
@@ -719,7 +718,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0x08:
         // EX AF,AF'
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           const a = this.regs.a;
           const f = this.regs.f;
           this.regs.a = this.shadowRegs.a;
@@ -744,7 +743,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0x0f:
         // RRCA
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           const carry = this.regs.a & 1;
           this.regs.a = clamp8((this.regs.a >>> 1) | (carry << 7));
           this.regs.f = (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV)) | (this.regs.a & (FLAG_X | FLAG_Y)) | (carry ? FLAG_C : 0);
@@ -768,7 +767,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0x17:
         // RLA
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           const carryIn = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
           const carryOut = (this.regs.a >>> 7) & 1;
           this.regs.a = clamp8((this.regs.a << 1) | carryIn);
@@ -791,7 +790,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0x1f:
         // RRA
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           const carryIn = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
           const carryOut = this.regs.a & 1;
           this.regs.a = clamp8((this.regs.a >>> 1) | (carryIn << 7));
@@ -812,7 +811,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0x27:
         // DAA
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           this.regs.a = this.applyDaa(this.regs.a);
         });
         return;
@@ -826,7 +825,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0x2f:
         // CPL
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           this.regs.a = clamp8(~this.regs.a);
           this.regs.f = (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV | FLAG_C)) | FLAG_H | FLAG_N | (this.regs.a & (FLAG_X | FLAG_Y));
         });
@@ -837,7 +836,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0x37:
         // SCF
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           this.regs.f = (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV)) | (this.regs.a & (FLAG_X | FLAG_Y)) | FLAG_C;
         });
         return;
@@ -851,7 +850,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0x3f:
         // CCF
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           const carry = (this.regs.f & FLAG_C) !== 0;
           this.regs.f =
             (this.regs.f & (FLAG_S | FLAG_Z | FLAG_PV)) |
@@ -862,14 +861,16 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0x23:
         // INC HL / INC IX / INC IY: 16bit レジスタ対を 1 増やす。
-        this.enqueueInternal(() => {
+        this.enqueueIdle(2);
+        this.enqueueEffect(() => {
           const value = clamp16(this.getPair(indexMode === 'HL' ? 'HL' : indexMode) + 1);
           this.setPair(indexMode === 'HL' ? 'HL' : indexMode, value);
         });
         return;
       case 0x2b:
         // DEC HL / DEC IX / DEC IY: 16bit レジスタ対を 1 減らす。
-        this.enqueueInternal(() => {
+        this.enqueueIdle(2);
+        this.enqueueEffect(() => {
           const value = clamp16(this.getPair(indexMode === 'HL' ? 'HL' : indexMode) - 1);
           this.setPair(indexMode === 'HL' ? 'HL' : indexMode, value);
         });
@@ -902,14 +903,14 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0xaf:
         // XOR A: A と A の排他的論理和を取り、結果 0 を A に入れて対応フラグを更新する。
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           this.regs.a = 0;
           this.regs.f = FLAG_Z | FLAG_PV;
         });
         return;
       case 0xb7:
         // OR A: A と A の論理和を評価し、A の値は保ったまま状態フラグを再計算する。
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           const value = this.regs.a;
           this.regs.f = this.getSzxyParityFlags(value);
         });
@@ -1080,7 +1081,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0xd9:
         // EXX
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           const b = this.regs.b;
           const c = this.regs.c;
           const d = this.regs.d;
@@ -1151,14 +1152,14 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0xf3:
         // DI: マスク可能割り込みの受理を無効化する。
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           this.iff1 = false;
           this.iff2 = false;
         });
         return;
       case 0xfb:
         // EI: マスク可能割り込みの受理を有効化し、直後 1 命令分だけ受理を遅延する。
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           this.iff1 = true;
           this.iff2 = true;
           this.deferInterruptAcceptance = true;
@@ -1166,7 +1167,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0xeb:
         // EX DE,HL / EX DE,IX / EX DE,IY: DE と対象 16bit レジスタ対の値を交換する。
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           const de = this.getPair('DE');
           const hl = this.getPair(indexMode === 'HL' ? 'HL' : indexMode);
           this.setPair('DE', hl);
@@ -1181,7 +1182,7 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0xe9:
         // JP (HL) / JP (IX) / JP (IY)
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           this.regs.pc = this.getPair(indexMode === 'HL' ? 'HL' : indexMode);
         });
         return;
@@ -1199,13 +1200,14 @@ export class Z80Cpu implements Z80Core {
         return;
       case 0xf9:
         // LD SP,HL / LD SP,IX / LD SP,IY
-        this.enqueueInternal(() => {
+        this.enqueueIdle(2);
+        this.enqueueEffect(() => {
           this.regs.sp = this.getPair(indexMode === 'HL' ? 'HL' : indexMode);
         });
         return;
       default:
-        // 未定義/予約 opcode は NOP 相当として扱う。
-        this.enqueueInternal();
+        // 未定義/予約 opcode はフェッチだけで完了する。
+        return;
     }
   }
 
@@ -1232,6 +1234,7 @@ export class Z80Cpu implements Z80Core {
       this.enqueueReadPc((value) => {
         displacement = signExtend8(value);
       });
+      this.enqueueIdle(5, false);
     }
 
     const ptrAddr = () => {
@@ -1258,7 +1261,7 @@ export class Z80Cpu implements Z80Core {
       return;
     }
 
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       this.setRegByCode(dstCode, this.getRegByCode(srcCode, indexMode), indexMode);
     });
   }
@@ -1281,31 +1284,36 @@ export class Z80Cpu implements Z80Core {
       this.enqueueReadPc((value) => {
         displacement = signExtend8(value);
       });
+      this.enqueueIdle(5, false);
       this.enqueueReadMem(() => clamp16(this.getPair(indexMode) + displacement), (value) => {
         this.applyAlu8ToA(op, value);
       });
       return;
     }
 
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       this.applyAlu8ToA(op, this.getRegByCode(srcCode, indexMode));
     });
   }
 
   private decodeIncPair(pair: 'BC' | 'DE' | 'HL' | 'IX' | 'IY' | 'SP'): void {
-    this.enqueueInternal(() => {
+    this.enqueueIdle(2);
+    this.enqueueEffect(() => {
       this.setPair(pair, clamp16(this.getPair(pair) + 1));
     });
   }
 
   private decodeDecPair(pair: 'BC' | 'DE' | 'HL' | 'IX' | 'IY' | 'SP'): void {
-    this.enqueueInternal(() => {
+    this.enqueueIdle(2);
+    this.enqueueEffect(() => {
       this.setPair(pair, clamp16(this.getPair(pair) - 1));
     });
   }
 
   private decodeAddHlPair(indexMode: IndexMode, rhs: 'BC' | 'DE' | 'HL' | 'IX' | 'IY' | 'SP'): void {
-    this.enqueueInternal(() => {
+    this.enqueueIdle(4, false);
+    this.enqueueIdle(3, false);
+    this.enqueueEffect(() => {
       const lhsName = indexMode === 'HL' ? 'HL' : indexMode;
       const lhs = this.getPair(lhsName);
       const right = this.getPair(rhs);
@@ -1350,7 +1358,7 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadMem(() => clamp16(((highAddr << 8) | lowAddr) + 1), (value) => {
       high = value;
     });
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       this.setPair(target, (high << 8) | low);
     });
   }
@@ -1365,22 +1373,25 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadMem(() => clamp16(this.regs.sp + 1), (value) => {
       high = value;
     });
-    this.enqueueInternal(() => {
+    this.enqueueIdle(1);
+    this.enqueueEffect(() => {
       current = this.getPair(target);
       this.setPair(target, (high << 8) | low);
     });
-    this.enqueueWriteMem(() => this.regs.sp, () => current & 0xff);
     this.enqueueWriteMem(() => clamp16(this.regs.sp + 1), () => (current >>> 8) & 0xff);
+    this.enqueueWriteMem(() => this.regs.sp, () => current & 0xff);
+    this.enqueueIdle(2);
   }
 
   private decodeDjnz(): void {
+    this.enqueueIdle(1);
     this.enqueueReadPc((rawOffset) => {
       this.regs.b = clamp8(this.regs.b - 1);
       if (this.regs.b === 0) {
         return;
       }
-      this.enqueueIdle(5);
-      this.enqueueInternal(() => {
+      this.enqueueIdle(5, false);
+      this.enqueueEffect(() => {
         this.regs.pc = clamp16(this.regs.pc + signExtend8(rawOffset));
       });
     });
@@ -1394,7 +1405,7 @@ export class Z80Cpu implements Z80Core {
       return;
     }
 
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       const before = this.getRegByCode(regCode, indexMode);
       const after = clamp8(before + 1);
       this.setRegByCode(regCode, after, indexMode);
@@ -1410,7 +1421,7 @@ export class Z80Cpu implements Z80Core {
       return;
     }
 
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       const before = this.getRegByCode(regCode, indexMode);
       const after = clamp8(before - 1);
       this.setRegByCode(regCode, after, indexMode);
@@ -1428,7 +1439,7 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadPc((value) => {
       high = value;
     });
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       this.setPair(target, (high << 8) | low);
     });
   }
@@ -1474,6 +1485,7 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadPc((value) => {
       displacement = signExtend8(value);
     });
+    this.enqueueIdle(5, false);
     this.enqueueReadMem(() => clamp16(this.getPair(indexMode) + displacement), (value) => {
       this.regs.a = value;
     });
@@ -1490,6 +1502,7 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadPc((value) => {
       displacement = signExtend8(value);
     });
+    this.enqueueIdle(5, false);
     this.enqueueWriteMem(() => clamp16(this.getPair(indexMode) + displacement), () => this.regs.a);
   }
 
@@ -1508,6 +1521,7 @@ export class Z80Cpu implements Z80Core {
       immediate = value;
     });
 
+    if (indexMode !== 'HL') this.enqueueIdle(2);
     this.enqueueWriteMem(
       () => {
         if (indexMode === 'HL') {
@@ -1528,6 +1542,7 @@ export class Z80Cpu implements Z80Core {
       this.enqueueReadPc((v) => {
         displacement = signExtend8(v);
       });
+      this.enqueueIdle(5, false);
     }
 
     const addr = () => {
@@ -1541,7 +1556,8 @@ export class Z80Cpu implements Z80Core {
       value = v;
     });
 
-    this.enqueueInternal(() => {
+    this.enqueueIdle(1);
+    this.enqueueEffect(() => {
       const before = value;
       value = clamp8(value + 1);
       this.updateFlagsForIncDec(before, value, false);
@@ -1559,6 +1575,7 @@ export class Z80Cpu implements Z80Core {
       this.enqueueReadPc((v) => {
         displacement = signExtend8(v);
       });
+      this.enqueueIdle(5, false);
     }
 
     const addr = () => {
@@ -1572,7 +1589,8 @@ export class Z80Cpu implements Z80Core {
       value = v;
     });
 
-    this.enqueueInternal(() => {
+    this.enqueueIdle(1);
+    this.enqueueEffect(() => {
       const before = value;
       value = clamp8(value - 1);
       this.updateFlagsForIncDec(before, value, true);
@@ -1587,8 +1605,8 @@ export class Z80Cpu implements Z80Core {
       if (!takeBranch) {
         return;
       }
-      this.enqueueIdle(5);
-      this.enqueueInternal(() => {
+      this.enqueueIdle(5, false);
+      this.enqueueEffect(() => {
         this.regs.pc = clamp16(this.regs.pc + signExtend8(rawOffset));
       });
     });
@@ -1607,7 +1625,7 @@ export class Z80Cpu implements Z80Core {
     if (!takeBranch) {
       return;
     }
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       this.regs.pc = (high << 8) | low;
     });
   }
@@ -1626,15 +1644,15 @@ export class Z80Cpu implements Z80Core {
       return;
     }
     this.enqueuePushWord(() => this.regs.pc);
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       this.regs.pc = (high << 8) | low;
     });
   }
 
   private decodeRet(takeBranch: boolean): void {
-    // 「条件付き/無条件のサブルーチン復帰命令」の処理。
+    // Conditional RET has a five-state M1 whether or not it is taken.
+    this.enqueueIdle(1);
     if (!takeBranch) {
-      this.enqueueInternal();
       return;
     }
     this.enqueuePopWord((word) => {
@@ -1652,7 +1670,7 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadIo(() => (this.regs.a << 8) | port, (v) => {
       value = v;
     });
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       this.regs.a = value;
     });
   }
@@ -1672,7 +1690,8 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadPc((value) => {
       displacement = signExtend8(value);
     });
-    this.enqueueFetchOpcode((opcode) => {
+    this.enqueueReadPc((opcode) => {
+      this.enqueueIdle(2);
       this.decodeByTimingDefinition(indexMode === 'IX' ? 'ddcb' : 'fdcb', opcode, indexMode, displacement);
     });
   }
@@ -1687,9 +1706,10 @@ export class Z80Cpu implements Z80Core {
       if (regCode === 6) {
         const addr = this.getCbAddress(indexMode, displacement);
         this.enqueueReadMem(() => addr, target);
+        this.enqueueIdle(1);
         return;
       }
-      this.enqueueInternal(() => {
+      this.enqueueEffect(() => {
         target(this.getRegByCode(regCode, indexMode));
       });
     };
@@ -1700,7 +1720,7 @@ export class Z80Cpu implements Z80Core {
         this.enqueueWriteMem(() => addr, value);
         return;
       }
-      this.enqueueInternal(() => {
+      this.enqueueEffect(() => {
         this.setRegByCode(regCode, value(), indexMode);
       });
     };
@@ -1773,8 +1793,6 @@ export class Z80Cpu implements Z80Core {
       return;
     }
 
-    // CB 空間は全デコード済みの想定だが、保険として NOP 相当で継続。
-    this.enqueueInternal();
   }
 
   private decodeRotateTarget(
@@ -1789,7 +1807,7 @@ export class Z80Cpu implements Z80Core {
       readValue = value;
     });
 
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       result = this.rotate8(readValue, op);
     });
 
@@ -1799,7 +1817,7 @@ export class Z80Cpu implements Z80Core {
   private decodeED(opcode: number): void {
     const isNegAlias = opcode === 0x44 || opcode === 0x4c || opcode === 0x54 || opcode === 0x5c || opcode === 0x64 || opcode === 0x6c || opcode === 0x74 || opcode === 0x7c;
     if (isNegAlias) {
-      this.enqueueInternal(() => {
+      this.enqueueEffect(() => {
         const value = this.regs.a;
         const result = clamp8(0 - value);
         this.regs.a = result;
@@ -1809,7 +1827,7 @@ export class Z80Cpu implements Z80Core {
           (result === 0 ? FLAG_Z : 0) |
           (value !== 0 ? FLAG_C : 0) |
           (value === 0x80 ? FLAG_PV : 0) |
-          (value !== 0 ? FLAG_H : 0);
+          ((value & 0x0f) !== 0 ? FLAG_H : 0);
       });
       return;
     }
@@ -1860,7 +1878,8 @@ export class Z80Cpu implements Z80Core {
         });
         return;
       case 0x57:
-        this.enqueueInternal(() => {
+        this.enqueueIdle(1);
+        this.enqueueEffect(() => {
           this.regs.a = this.regs.i;
           this.regs.f =
             (this.regs.f & FLAG_C) |
@@ -1869,7 +1888,8 @@ export class Z80Cpu implements Z80Core {
         });
         return;
       case 0x5f:
-        this.enqueueInternal(() => {
+        this.enqueueIdle(1);
+        this.enqueueEffect(() => {
           this.regs.a = this.regs.r;
           this.regs.f =
             (this.regs.f & FLAG_C) |
@@ -1878,12 +1898,14 @@ export class Z80Cpu implements Z80Core {
         });
         return;
       case 0x47:
-        this.enqueueInternal(() => {
+        this.enqueueIdle(1);
+        this.enqueueEffect(() => {
           this.regs.i = this.regs.a;
         });
         return;
       case 0x4f:
-        this.enqueueInternal(() => {
+        this.enqueueIdle(1);
+        this.enqueueEffect(() => {
           this.regs.r = this.regs.a;
         });
         return;
@@ -1891,19 +1913,19 @@ export class Z80Cpu implements Z80Core {
       case 0x4e:
       case 0x66:
       case 0x6e:
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           this.im = 0;
         });
         return;
       case 0x56:
       case 0x76:
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           this.im = 1;
         });
         return;
       case 0x5e:
       case 0x7e:
-        this.enqueueInternal(() => {
+        this.enqueueEffect(() => {
           this.im = 2;
         });
         return;
@@ -1962,8 +1984,8 @@ export class Z80Cpu implements Z80Core {
         this.decodeBlockOut(true, true);
         return;
       default:
-        // ED の未定義/予約 opcode は NOP 相当として扱う。
-        this.enqueueInternal();
+        // ED の未定義/予約 opcode はフェッチだけで完了する。
+        return;
     }
   }
 
@@ -1973,7 +1995,7 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadIo(() => this.getPair('BC'), (v) => {
       value = v;
     });
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       if (regCode !== 6) {
         this.setRegByCode(regCode, value, 'HL');
       }
@@ -1992,7 +2014,9 @@ export class Z80Cpu implements Z80Core {
   }
 
   private decodeEdSbcHlPair(opcode: number): void {
-    this.enqueueInternal(() => {
+    this.enqueueIdle(4, false);
+    this.enqueueIdle(3, false);
+    this.enqueueEffect(() => {
       const left = this.getPair('HL');
       const right = this.getPair(this.getPairByEdOpcode(opcode));
       const carry = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
@@ -2010,7 +2034,9 @@ export class Z80Cpu implements Z80Core {
   }
 
   private decodeEdAdcHlPair(opcode: number): void {
-    this.enqueueInternal(() => {
+    this.enqueueIdle(4, false);
+    this.enqueueIdle(3, false);
+    this.enqueueEffect(() => {
       const left = this.getPair('HL');
       const right = this.getPair(this.getPairByEdOpcode(opcode));
       const carry = (this.regs.f & FLAG_C) !== 0 ? 1 : 0;
@@ -2040,7 +2066,8 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadMem(() => this.getPair('HL'), (value) => {
       mem = value;
     });
-    this.enqueueInternal(() => {
+    this.enqueueIdle(4, false);
+    this.enqueueEffect(() => {
       const aLow = this.regs.a & 0x0f;
       this.regs.a = (this.regs.a & 0xf0) | (mem & 0x0f);
       mem = ((aLow << 4) | (mem >>> 4)) & 0xff;
@@ -2054,7 +2081,8 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadMem(() => this.getPair('HL'), (value) => {
       mem = value;
     });
-    this.enqueueInternal(() => {
+    this.enqueueIdle(4, false);
+    this.enqueueEffect(() => {
       const aLow = this.regs.a & 0x0f;
       this.regs.a = (this.regs.a & 0xf0) | (mem >>> 4);
       mem = ((mem << 4) | aLow) & 0xff;
@@ -2069,16 +2097,17 @@ export class Z80Cpu implements Z80Core {
       value = v;
     });
     this.enqueueWriteMem(() => this.getPair('DE'), () => value);
-    this.enqueueInternal(() => {
+    this.enqueueIdle(2, true);
+    this.enqueueEffect(() => {
       const step = decrement ? -1 : 1;
       this.setPair('HL', clamp16(this.getPair('HL') + step));
       this.setPair('DE', clamp16(this.getPair('DE') + step));
       const bc = clamp16(this.getPair('BC') - 1);
       this.setPair('BC', bc);
-      this.regs.f = (this.regs.f & FLAG_C) | (bc !== 0 ? FLAG_PV : 0);
+      this.regs.f = (this.regs.f & (FLAG_S | FLAG_Z | FLAG_C)) | (bc !== 0 ? FLAG_PV : 0);
       if (repeat && bc !== 0) {
-        this.enqueueIdle(5);
-        this.enqueueInternal(() => {
+        this.enqueueIdle(5, false);
+        this.enqueueEffect(() => {
           this.regs.pc = clamp16(this.regs.pc - 2);
         });
       }
@@ -2090,7 +2119,8 @@ export class Z80Cpu implements Z80Core {
     this.enqueueReadMem(() => this.getPair('HL'), (v) => {
       value = v;
     });
-    this.enqueueInternal(() => {
+    this.enqueueIdle(5, false);
+    this.enqueueEffect(() => {
       const result = clamp8(this.regs.a - value);
       const step = decrement ? -1 : 1;
       this.setPair('HL', clamp16(this.getPair('HL') + step));
@@ -2105,8 +2135,8 @@ export class Z80Cpu implements Z80Core {
         (bc !== 0 ? FLAG_PV : 0) |
         (result & (FLAG_X | FLAG_Y));
       if (repeat && bc !== 0 && result !== 0) {
-        this.enqueueIdle(5);
-        this.enqueueInternal(() => {
+        this.enqueueIdle(5, false);
+        this.enqueueEffect(() => {
           this.regs.pc = clamp16(this.regs.pc - 2);
         });
       }
@@ -2114,19 +2144,20 @@ export class Z80Cpu implements Z80Core {
   }
 
   private decodeBlockIn(repeat: boolean, decrement: boolean): void {
+    this.enqueueIdle(1);
     let value = 0;
     this.enqueueReadIo(() => this.getPair('BC'), (v) => {
       value = v;
     });
     this.enqueueWriteMem(() => this.getPair('HL'), () => value);
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       const step = decrement ? -1 : 1;
       this.setPair('HL', clamp16(this.getPair('HL') + step));
       this.regs.b = clamp8(this.regs.b - 1);
       this.regs.f = (this.regs.b === 0 ? FLAG_Z : 0) | FLAG_N;
       if (repeat && this.regs.b !== 0) {
-        this.enqueueIdle(5);
-        this.enqueueInternal(() => {
+        this.enqueueIdle(5, false);
+        this.enqueueEffect(() => {
           this.regs.pc = clamp16(this.regs.pc - 2);
         });
       }
@@ -2134,6 +2165,7 @@ export class Z80Cpu implements Z80Core {
   }
 
   private decodeBlockOut(repeat: boolean, decrement: boolean): void {
+    this.enqueueIdle(1);
     let value = 0;
     this.enqueueReadMem(() => this.getPair('HL'), (v) => {
       value = v;
@@ -2141,13 +2173,13 @@ export class Z80Cpu implements Z80Core {
       this.regs.b = clamp8(this.regs.b - 1);
     });
     this.enqueueWriteIo(() => this.getPair('BC'), () => value);
-    this.enqueueInternal(() => {
+    this.enqueueEffect(() => {
       const step = decrement ? -1 : 1;
       this.setPair('HL', clamp16(this.getPair('HL') + step));
       this.regs.f = (this.regs.b === 0 ? FLAG_Z : 0) | FLAG_N;
       if (repeat && this.regs.b !== 0) {
-        this.enqueueIdle(5);
-        this.enqueueInternal(() => {
+        this.enqueueIdle(5, false);
+        this.enqueueEffect(() => {
           this.regs.pc = clamp16(this.regs.pc - 2);
         });
       }
@@ -2298,7 +2330,7 @@ export class Z80Cpu implements Z80Core {
           (result & (FLAG_S | FLAG_X | FLAG_Y)) |
           (result === 0 ? FLAG_Z : 0) |
           (halfCarryAdd8(left, right, carry) ? FLAG_H : 0) |
-          (overflowAdd8(left, right + carry, result) ? FLAG_PV : 0) |
+          (overflowAdd8(left, right, result) ? FLAG_PV : 0) |
           (((left + right + carry) & 0x100) !== 0 ? FLAG_C : 0);
         return;
       }
@@ -2312,7 +2344,7 @@ export class Z80Cpu implements Z80Core {
           (result & (FLAG_S | FLAG_X | FLAG_Y)) |
           (result === 0 ? FLAG_Z : 0) |
           (halfCarrySub8(left, right, carry) ? FLAG_H : 0) |
-          (overflowSub8(left, right + carry, result) ? FLAG_PV : 0) |
+          (overflowSub8(left, right, result) ? FLAG_PV : 0) |
           (left < (right + carry) ? FLAG_C : 0);
         return;
       }
@@ -2507,6 +2539,5 @@ export class Z80Cpu implements Z80Core {
       throw new Error(`Unsupported opcode ${prefix ? `${prefix} ` : ''}${opcode.toString(16).padStart(2, '0')} at 0x${currentPc.toString(16).padStart(4, '0')}`);
     }
 
-    this.enqueueInternal();
   }
 }

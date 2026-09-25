@@ -28,31 +28,31 @@ const WRITE_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
 });
 
 const IO_READ_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
-  tStates: 3,
-  waitSamplePhases: Object.freeze([2]),
-  idleTailTStates: 1
-});
-
-const IO_WRITE_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
-  tStates: 3,
-  waitSamplePhases: Object.freeze([2]),
-  idleTailTStates: 1
-});
-
-const FETCH_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
-  tStates: 5,
-  waitSamplePhases: Object.freeze([2]),
+  tStates: 4,
+  waitSamplePhases: Object.freeze([3]),
   idleTailTStates: 0
 });
 
-const INT_ACK_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
+const IO_WRITE_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
+  tStates: 4,
+  waitSamplePhases: Object.freeze([3]),
+  idleTailTStates: 0
+});
+
+const FETCH_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
   tStates: 4,
   waitSamplePhases: Object.freeze([2]),
   idleTailTStates: 0
 });
 
+const INT_ACK_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
+  tStates: 6,
+  waitSamplePhases: Object.freeze([4]),
+  idleTailTStates: 0
+});
+
 const HALT_FETCH_CYCLE_TEMPLATE: BusCycleTimingTemplate = Object.freeze({
-  tStates: 5,
+  tStates: 4,
   waitSamplePhases: Object.freeze([2]),
   idleTailTStates: 0
 });

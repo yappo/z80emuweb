@@ -56,7 +56,7 @@ class PinHarness {
   }
 
   private readData(pins: Z80PinsOut): number {
-    if (pins.m1 && pins.iorq && pins.rd) {
+    if (pins.m1 && pins.iorq) {
       return this.intDataBus;
     }
     if (pins.mreq && pins.rd) {

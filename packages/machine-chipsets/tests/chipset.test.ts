@@ -161,6 +161,30 @@ describe('BasicChipset', () => {
     expect(chipset.getCpuState().halted).toBe(true);
   });
 
+  it('supplies an IM2 vector on M1/IORQ acknowledge with RD inactive', () => {
+    const memory = new Memory();
+    const io = new Io();
+    memory.bytes[0x4010] = 0x00;
+    memory.bytes[0x4011] = 0x20;
+    memory.bytes[0x2000] = 0x76;
+    const cpu = new Z80Cpu();
+    const initial = cpu.getState();
+    cpu.loadState({ ...initial, iff1: true, iff2: true, im: 2,
+      registers: { ...initial.registers, i: 0x40 } });
+    const ack: Z80PinsOut[] = [];
+    const chipset = new BasicChipset({ memory, io,
+      getSignals: () => ({ int: true, intDataBus: 0x10 }),
+      onCycleTrace: (entry) => { if (entry.readSource === 'int-ack') ack.push(entry.pinsOut); }
+    });
+    chipset.attachCpu(cpu);
+    chipset.tick(24);
+    expect(cpu.getState().registers.pc).toBe(0x2001);
+    expect(cpu.getState().halted).toBe(true);
+    expect(ack.length).toBeGreaterThan(0);
+    expect(ack.every((pins) => pins.m1 && pins.iorq && !pins.rd)).toBe(true);
+    expect(io.inCount).toBe(0);
+  });
+
   it('keeps no-op 11pin device side-effect free', () => {
     const memory = new Memory();
     const io = new Io();

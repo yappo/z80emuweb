@@ -10,7 +10,8 @@
 ## 1. CPU コア概要
 
 `Z80Cpu` は **pin 入出力 + T-state 単位のマイクロオペレーションキュー**で命令を進行させます。  
-加えて現在は、opcode 空間ごとの timing 定義テーブルを参照してバスサイクルを組み立てます。
+共通のバスサイクル定義とデコーダ内の内部動作時間を組み合わせて命令を構成します。
+レジスタ更新だけで余分な T-state を追加することはありません。
 
 - `tick(input)`
   - `queue` が空なら `scheduleNextInstruction()` で次命令をデコード
@@ -18,13 +19,15 @@
   - その T-state の pin 出力（`addr/mreq/rd/wr/iorq/m1/rfsh`）を返す
 - timing 定義テーブル
   - 空間: `base / cb / ed / dd / fd / ddcb / fdcb`
-  - 各空間は `0x00-0xFF` の全 opcode について timing 定義を保持
+  - 各空間は `0x00-0xFF` の全 opcode に共通バステンプレートを保持。命令固有の時間表ではない
   - bus cycle 種別（`fetchOpcode/intAck/memRead/memWrite/ioRead/ioWrite/haltFetch`）ごとに
     `tStates`, `waitSamplePhases`, `idleTailTStates` を持つ
 - 命令フェッチ
   - `M1` サイクルで `m1+mreq+rd` を出力し、`input.data` を opcode として取り込む
   - フェッチ境界で `R` レジスタ下位 7bit をインクリメント
+  - 通常のフェッチは4 T-state、命令により内部動作で延長する
   - フェッチ終端で `rfsh` を出力する
+  - DD/FD CB の最終 opcode は通常読み取りであり、M1/R の増加は prefix の2回だけ
 - 予約/未定義 opcode
   - 現在は各 opcode 空間で例外なくデコードされる
   - 予約/未定義のものは NOP 相当として継続
@@ -68,21 +71,23 @@
 ### 3.2 アドレス幅
 
 - メモリアドレス: 16bit（`0x0000-0xFFFF`）
-- I/O ポート: 8bit（`0x00-0xFF`）
+- CPU の I/O アドレス出力: 16bit（`0x0000-0xFFFF`）。接続先のデバイスが何ビットをデコードするかとは区別する
 
 ### 3.3 入出力命令
 
 - `IN A,(n)`
-  - 即値 `n` で指定したポートから 1 バイト読んで `A` に格納
+  - アドレスは変更前の `(A << 8) | n`。1 バイト読んで `A` に格納
 - `OUT (n),A`
-  - `A` の 1 バイトを即値 `n` のポートへ出力
+  - アドレスは `(A << 8) | n`。`A` の1 バイトを出力
 
 ## 4. 割り込み仕様
 
 ### 4.1 外部割り込み入力
 
 - `tick()` の入力 pin (`nmi`, `int`) から受理する
-- INT ACK サイクル時のベクタ値は `input.data` を使用する
+- INT はレベル入力。禁止中に解除されたパルスは後から受理しない
+- NMI は立ち上がりで記録し、受理時には IFF1 のみクリアして IFF2 を保持する
+- INT ACK は `m1 && iorq` で識別し、RD は不活性。ベクタ値は `input.data` を使用する
 
 ### 4.2 優先順位と受理条件
 
@@ -99,6 +104,8 @@
 - `EI`: `IFF1=1`, `IFF2=1`, ただし **次の 1 命令完了まで INT 受理を遅延**
 
 ### 4.4 割り込みモード `IM`
+
+初期状態/RESET 後は IM0、IFF1=IFF2=0。
 
 - `IM 0`: INT ACK 時に受け取った `dataBus` を opcode として実行
 - `IM 1`: `PC = 0x0038`
@@ -273,9 +280,15 @@
 - 命令フェッチ（M1）で `m1+mreq+rd`、直後に `rfsh` が出力される
 - `IN/OUT` は `iorq/rd/wr` pin と `addr` で表現される
 - INT ACK 時の `input.data` は IM0/IM2 で利用される
-- `BUSRQ` が active の間は CPU はマイクロステップ進行を停止し、`BUSAK` を立ててバス制御線を不活性化する
+- `BUSRQ` は現在のマシンサイクル終了後に受理する。WAIT と内部延長が残る間はバスを渡さない
+- `BUSAK` 中はマイクロステップを停止しバス制御線を不活性化する。解除後は同じキューの続きから再開する
 
 ## 9. 検証カバレッジ（最新版）
+
+定義の存在や例外が出ないことだけで、全命令の実機互換性を保証するものではない。
+追加した独立検証は `packages/core-z80/tests/cpu-audit-regression.test.ts` を参照する。
+基本・prefix 命令時間、8ビット加減算・比較の458,752入力、NEG の全256入力、
+ブロック転送のフラグ、割り込みと WAIT/BUSRQ 境界を確認している。
 
 - opcode 空間網羅:
   - `strictUnsupportedOpcodes=true` で全空間（base/CB/ED/DD/FD/DDCB/FDCB）を走査し、Unsupported 例外なし

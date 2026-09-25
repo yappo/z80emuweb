@@ -61,7 +61,7 @@ class TraceHarness {
   }
 
   private readData(pins: Z80PinsOut): number {
-    if (pins.m1 && pins.iorq && pins.rd) {
+    if (pins.m1 && pins.iorq) {
       return this.intDataBus;
     }
     if (pins.mreq && pins.rd) {
@@ -286,7 +286,7 @@ describe('Z80 cycle accuracy', () => {
     expect(im1.state.registers.pc).toBeGreaterThanOrEqual(0x0038);
     expect(im2.state.registers.pc).toBeGreaterThanOrEqual(0x2222);
 
-    const hasIntAck = (trace: Z80PinsOut[]): boolean => trace.some((x) => x.m1 && x.iorq && x.rd);
+    const hasIntAck = (trace: Z80PinsOut[]): boolean => trace.some((x) => x.m1 && x.iorq);
     expect(hasIntAck(im0.trace)).toBe(true);
     expect(hasIntAck(im1.trace)).toBe(true);
     expect(hasIntAck(im2.trace)).toBe(true);
@@ -300,7 +300,7 @@ describe('Z80 cycle accuracy', () => {
       0x76 // HALT
     ]);
 
-    harness.step(6);
+    harness.step(8); // request at an instruction / machine-cycle boundary
     const pcBeforeHold = harness.cpu.getState().registers.pc;
     harness.setBusrq(true);
     harness.step(20);
@@ -347,12 +347,12 @@ describe('Z80 cycle accuracy', () => {
     harness.setBusrq(true);
     harness.setInt(true, 0xff);
     harness.step(80);
-    const ackDuringHold = harness.trace.some((x) => x.busak && x.m1 && x.iorq && x.rd);
+    const ackDuringHold = harness.trace.some((x) => x.busak && x.m1 && x.iorq);
     expect(ackDuringHold).toBe(false);
 
     harness.setBusrq(false);
     harness.step(200);
-    const ackAfterRelease = harness.trace.some((x) => x.m1 && x.iorq && x.rd);
+    const ackAfterRelease = harness.trace.some((x) => x.m1 && x.iorq);
     expect(ackAfterRelease).toBe(true);
   });
 
@@ -391,12 +391,12 @@ describe('Z80 cycle accuracy', () => {
       {
         name: 'ddcb',
         buildProgram: (opcode) => [0xdd, 0xcb, 0x01, opcode, 0x00, 0x76],
-        minM1Fetch: 3
+        minM1Fetch: 2
       },
       {
         name: 'fdcb',
         buildProgram: (opcode) => [0xfd, 0xcb, 0x01, opcode, 0x00, 0x76],
-        minM1Fetch: 3
+        minM1Fetch: 2
       }
     ];
 
